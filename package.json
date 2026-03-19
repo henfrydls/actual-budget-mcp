@@ -1,0 +1,57 @@
+{
+  "name": "actual-budget-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Actual Budget - query and manage your personal finances through Claude",
+  "type": "module",
+  "bin": {
+    "actual-budget-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/henfrydls/actual-budget-mcp"
+  },
+  "homepage": "https://github.com/henfrydls/actual-budget-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/henfrydls/actual-budget-mcp/issues"
+  },
+  "author": "DLSLabs",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "test:connection": "node dist/test-connection.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "setup": "npm run build && echo 'Build complete. Fill in your .env file, then run: npm run test:connection'",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "actual-budget",
+    "finance",
+    "budgeting",
+    "claude"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@actual-app/api": "^26.2.0",
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "dotenv": "^17.3.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
