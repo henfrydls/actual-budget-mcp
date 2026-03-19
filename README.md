@@ -1,6 +1,6 @@
 # actual-budget-mcp
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![npm version](https://img.shields.io/npm/v/actual-budget-mcp)](https://www.npmjs.com/package/actual-budget-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js->=20-green.svg)](https://nodejs.org/)
 
@@ -15,6 +15,11 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 - **Natural dates in English and Spanish** - "last month", "este mes", "hace 3 meses", "yesterday"
 - **Clean formatted output** - Aligned tables and clear summaries, not raw JSON
 - **Clear error messages** - If something's wrong, you'll know exactly what to fix
+
+## Prerequisites
+
+- [Actual Budget](https://actualbudget.org/) server running (local or remote)
+- [Node.js](https://nodejs.org/) 20 or higher
 
 ## Quick Start
 
@@ -55,7 +60,49 @@ Add this to your `claude_desktop_config.json`:
 }
 ```
 
-### Option 3: From source (for contributors)
+### Option 3: Cursor
+
+Go to **Cursor Settings > MCP > Add new MCP server** and add:
+
+```json
+{
+  "mcpServers": {
+    "actual-budget-mcp": {
+      "command": "npx",
+      "args": ["-y", "actual-budget-mcp"],
+      "env": {
+        "ACTUAL_SERVER_URL": "http://localhost:5006",
+        "ACTUAL_PASSWORD": "your-password",
+        "ACTUAL_BUDGET_ID": "your-budget-sync-id"
+      }
+    }
+  }
+}
+```
+
+### Option 4: VS Code (GitHub Copilot)
+
+Add this to your VS Code `settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "actual-budget-mcp": {
+        "command": "npx",
+        "args": ["-y", "actual-budget-mcp"],
+        "env": {
+          "ACTUAL_SERVER_URL": "http://localhost:5006",
+          "ACTUAL_PASSWORD": "your-password",
+          "ACTUAL_BUDGET_ID": "your-budget-sync-id"
+        }
+      }
+    }
+  }
+}
+```
+
+### Option 5: From source (for contributors)
 
 ```bash
 git clone https://github.com/henfrydls/actual-budget-mcp.git
@@ -65,6 +112,16 @@ cp .env.example .env   # Edit with your credentials
 npm run build
 npm run test:connection # Verify it works
 ```
+
+### Verify your setup
+
+After installing, you can verify the connection works:
+
+```bash
+npx -y actual-budget-mcp --verify
+```
+
+This will connect to your Actual Budget server and confirm everything is configured correctly.
 
 ## Configuration
 
@@ -83,9 +140,9 @@ npm run test:connection # Verify it works
 3. Click **Show advanced settings**
 4. Copy the **Sync ID**
 
-## Tools (15)
+## Tools (18)
 
-### Read
+### Read (7)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -94,16 +151,45 @@ npm run test:connection # Verify it works
 | `get_transactions` | Transactions with filters | "Show me transactions from last week over 5000" |
 | `get_category_balance` | Category history across months | "How has my food spending changed?" |
 | `get_budget_summary` | Executive budget overview | "Give me a budget summary for February" |
+| `get_categories` | All category groups and categories | "What categories do I have?" |
+| `get_payees` | All payees in the budget | "List all my payees" |
 
-### Analysis
+<details>
+<summary>Parameters</summary>
+
+**get_budget_month** - `month` (optional): YYYY-MM or natural language ("this month", "last month", "enero 2025")
+
+**get_transactions** - `account` (optional): account name | `start_date` / `end_date` (optional): YYYY-MM-DD or natural language | `category` (optional): category name | `payee` (optional): payee name | `min_amount` / `max_amount` (optional): filter by amount | `limit` (optional, default 50)
+
+**get_category_balance** - `category` (required): category name or ID | `months` (optional, default 3): months to look back
+
+**get_budget_summary** - `month` (optional): YYYY-MM or natural language
+
+</details>
+
+### Analysis (4)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
 | `budget_vs_actual` | Budgeted vs spent per category | "Am I over budget on anything this month?" |
 | `spending_projection` | End-of-month spending forecast | "Will I stay within budget this month?" |
 | `category_trends` | Spending trends over time | "What are my spending trends for the last 6 months?" |
+| `spending_by_category` | Spending breakdown by category | "Show me spending by category for February" |
 
-### Write
+<details>
+<summary>Parameters</summary>
+
+**budget_vs_actual** - `month` (optional): YYYY-MM or natural language | `group` (optional): filter by category group
+
+**spending_projection** - `month` (optional): YYYY-MM or natural language
+
+**category_trends** - `category` (optional): specific category or top spending if omitted | `months` (optional, default 6)
+
+**spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20)
+
+</details>
+
+### Write (7)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -114,6 +200,25 @@ npm run test:connection # Verify it works
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
 | `run_bank_sync` | Sync with linked banks | "Sync my bank transactions" |
+
+<details>
+<summary>Parameters</summary>
+
+**create_transaction** - `account` (required): account name | `amount` (required): negative for expenses, positive for income | `payee` (optional) | `category` (optional) | `date` (optional) | `notes` (optional) | `cleared` (optional)
+
+**update_transaction** - `transaction_id` (required) | `amount`, `payee`, `category`, `date`, `notes`, `cleared` (all optional)
+
+**delete_transaction** - `transaction_id` (required)
+
+**update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional)
+
+**recategorize_transaction** - `transaction_id` (required) | `category` (required)
+
+**create_transfer** - `from_account` (required) | `to_account` (required) | `amount` (required) | `date` (optional) | `notes` (optional)
+
+**run_bank_sync** - `account` (optional): sync specific account or all if omitted
+
+</details>
 
 ## Usage Examples
 
@@ -151,11 +256,20 @@ Compared to other Actual Budget MCP servers:
 | Bilingual dates | English + Spanish | English only |
 | API version | @actual-app/api 26.x (current) | Often outdated |
 
+## Security
+
+- This server connects to your Actual Budget instance using the credentials you provide
+- Credentials are passed as environment variables and never stored by the MCP server
+- All communication with your Actual Budget server happens locally (or to your self-hosted server)
+- The server only accesses budget data through the official `@actual-app/api` library
+- No data is sent to third parties
+
 ## Troubleshooting
 
 **"Could not connect to Actual Budget server"**
 - Make sure Actual Budget is running (open the app or start the server)
 - Check that `ACTUAL_SERVER_URL` is correct
+- Run `npx -y actual-budget-mcp --verify` to test your connection
 
 **"Authentication failed"**
 - Your server requires a password. Set `ACTUAL_PASSWORD` in your config
