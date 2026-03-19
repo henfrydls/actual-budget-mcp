@@ -20,7 +20,7 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 
 The fastest way to get started - copy this into Claude Code or Claude Desktop:
 
-> Install the MCP server actual-budget-mcp from npm. My Actual Budget server is at http://localhost:5006, my password is YOUR_PASSWORD and my budget ID is YOUR_BUDGET_ID
+> Install the MCP server actual-budget-mcp from https://github.com/henfrydls/actual-budget-mcp. My Actual Budget server is at http://localhost:5006, my password is YOUR_PASSWORD and my budget ID is YOUR_BUDGET_ID
 
 Claude will configure everything for you.
 
