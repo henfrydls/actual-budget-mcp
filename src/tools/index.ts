@@ -6,11 +6,14 @@ import { registerGetBudgetMonth } from './read/get-budget-month.js';
 import { registerGetTransactions } from './read/get-transactions.js';
 import { registerGetCategoryBalance } from './read/get-category-balance.js';
 import { registerGetBudgetSummary } from './read/get-budget-summary.js';
+import { registerGetCategories } from './read/get-categories.js';
+import { registerGetPayees } from './read/get-payees.js';
 
 // Analysis tools
 import { registerBudgetVsActual } from './analysis/budget-vs-actual.js';
 import { registerSpendingProjection } from './analysis/spending-projection.js';
 import { registerCategoryTrends } from './analysis/category-trends.js';
+import { registerSpendingByCategory } from './analysis/spending-by-category.js';
 
 // Write tools
 import { registerCreateTransaction } from './write/create-transaction.js';
@@ -28,11 +31,14 @@ export function registerAllTools(server: McpServer): void {
   registerGetTransactions(server);
   registerGetCategoryBalance(server);
   registerGetBudgetSummary(server);
+  registerGetCategories(server);
+  registerGetPayees(server);
 
   // Analysis
   registerBudgetVsActual(server);
   registerSpendingProjection(server);
   registerCategoryTrends(server);
+  registerSpendingByCategory(server);
 
   // Write
   registerCreateTransaction(server);
