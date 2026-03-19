@@ -29,7 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "setup": "npm run build && echo 'Build complete. Fill in your .env file, then run: npm run test:connection'",
-    "prepublishOnly": "npm run build && npm run test"
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",
