@@ -7,8 +7,22 @@ import { registerAllTools } from './tools/index.js';
 import { ensureConnection, shutdown } from './connection.js';
 import * as api from '@actual-app/api';
 
-// --verify flag: test connection and exit
+// Redirect console.log/warn/info to stderr so they don't contaminate
+// the MCP JSON-RPC protocol on stdout. Libraries like @actual-app/api
+// print debug messages (e.g., [Breadcrumb], "Syncing...") to stdout
+// via console.log, which breaks MCP clients like Claude Desktop.
+const originalLog = console.log;
+const originalInfo = console.info;
+const originalWarn = console.warn;
+console.log = (...args: unknown[]) => console.error(...args);
+console.info = (...args: unknown[]) => console.error(...args);
+console.warn = (...args: unknown[]) => console.error(...args);
+
+// --verify flag: test connection and exit (restore stdout for user output)
 if (process.argv.includes('--verify')) {
+  console.log = originalLog;
+  console.info = originalInfo;
+  console.warn = originalWarn;
   try {
     console.log('Verifying connection to Actual Budget...\n');
     await ensureConnection();
