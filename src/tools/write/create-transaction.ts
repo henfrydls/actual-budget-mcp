@@ -59,7 +59,7 @@ export function registerCreateTransaction(server: McpServer): void {
         }
 
         await api.addTransactions(accountId, [transaction as any], {
-          learnCategories: true,
+          learnCategories: false,
           runTransfers: false,
         });
 
