@@ -44,7 +44,7 @@ if (process.argv.includes('--verify')) {
 
 const server = new McpServer({
   name: 'actual-budget-mcp',
-  version: '0.2.1',
+  version: '0.2.2',
 });
 
 registerAllTools(server);
