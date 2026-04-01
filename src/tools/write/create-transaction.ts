@@ -50,18 +50,24 @@ export function registerCreateTransaction(server: McpServer): void {
           transaction.payee_name = payee;
         }
 
-        if (category) {
-          transaction.category = await resolveCategoryId(category);
+        const categoryId = category ? await resolveCategoryId(category) : undefined;
+        if (categoryId) {
+          transaction.category = categoryId;
         }
 
         if (notes) {
           transaction.notes = notes;
         }
 
-        await api.addTransactions(accountId, [transaction as any], {
+        const result = await api.addTransactions(accountId, [transaction as any], {
           learnCategories: false,
           runTransfers: false,
         });
+
+        // Force category after creation — the API may override it with payee's learned category
+        if (categoryId && result && Array.isArray(result) && result.length > 0) {
+          await api.updateTransaction(result[0], { category: categoryId });
+        }
 
         await api.sync();
 
