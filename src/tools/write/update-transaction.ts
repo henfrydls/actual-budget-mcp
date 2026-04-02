@@ -25,6 +25,7 @@ export function registerUpdateTransaction(server: McpServer): void {
       notes: z.string().optional().describe('New notes'),
       cleared: z.boolean().optional().describe('Whether the transaction is cleared'),
     },
+    { readOnlyHint: false, idempotentHint: true },
     async ({ transaction_id, amount, payee, category, date, notes, cleared }) => {
       try {
         await ensureConnection();

@@ -23,6 +23,7 @@ export function registerCategoryTrends(server: McpServer): void {
         .default(6)
         .describe('Number of months to analyze (default 6)'),
     },
+    { readOnlyHint: true },
     async ({ category, months: monthCount }) => {
       try {
         await ensureConnection();

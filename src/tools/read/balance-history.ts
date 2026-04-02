@@ -22,6 +22,7 @@ export function registerBalanceHistory(server: McpServer): void {
         .optional()
         .describe('End date (YYYY-MM-DD or natural language). Defaults to today.'),
     },
+    { readOnlyHint: true },
     async ({ account, start_date, end_date }) => {
       try {
         await ensureConnection();

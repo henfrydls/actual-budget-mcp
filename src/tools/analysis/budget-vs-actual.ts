@@ -21,6 +21,7 @@ export function registerBudgetVsActual(server: McpServer): void {
         .optional()
         .describe('Filter to a specific category group name'),
     },
+    { readOnlyHint: true },
     async ({ month: monthInput, group: groupFilter }) => {
       try {
         await ensureConnection();

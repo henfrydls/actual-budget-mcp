@@ -22,6 +22,7 @@ export function registerCreateTransfer(server: McpServer): void {
         .describe('Date (YYYY-MM-DD or natural language). Defaults to today.'),
       notes: z.string().optional().describe('Transfer notes'),
     },
+    { readOnlyHint: false },
     async ({ from_account, to_account, amount, date, notes }) => {
       try {
         await ensureConnection();

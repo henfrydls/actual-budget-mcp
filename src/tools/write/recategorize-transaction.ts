@@ -13,6 +13,7 @@ export function registerRecategorizeTransaction(server: McpServer): void {
       transaction_id: z.string().describe('Transaction ID'),
       category: z.string().describe('New category name or ID'),
     },
+    { readOnlyHint: false, idempotentHint: true },
     async ({ transaction_id, category }) => {
       try {
         await ensureConnection();

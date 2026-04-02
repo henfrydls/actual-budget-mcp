@@ -48,6 +48,7 @@ export function registerGetTransactions(server: McpServer): void {
         .default(50)
         .describe('Maximum number of transactions to return (default 50)'),
     },
+    { readOnlyHint: true },
     async ({ account, start_date, end_date, category, payee, min_amount, max_amount, limit }) => {
       try {
         await ensureConnection();

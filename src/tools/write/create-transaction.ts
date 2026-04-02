@@ -32,6 +32,7 @@ export function registerCreateTransaction(server: McpServer): void {
         .default(false)
         .describe('Whether the transaction is cleared'),
     },
+    { readOnlyHint: false },
     async ({ account, amount, payee, category, date, notes, cleared }) => {
       try {
         await ensureConnection();

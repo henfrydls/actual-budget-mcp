@@ -18,6 +18,7 @@ export function registerMonthlySummary(server: McpServer): void {
         .default(3)
         .describe('Number of months to show (default 3)'),
     },
+    { readOnlyHint: true },
     async ({ months: monthCount }) => {
       try {
         await ensureConnection();

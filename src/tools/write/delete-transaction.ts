@@ -11,6 +11,7 @@ export function registerDeleteTransaction(server: McpServer): void {
     {
       transaction_id: z.string().describe('Transaction ID to delete'),
     },
+    { destructiveHint: true },
     async ({ transaction_id }) => {
       try {
         await ensureConnection();

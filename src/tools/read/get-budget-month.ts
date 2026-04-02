@@ -19,6 +19,7 @@ export function registerGetBudgetMonth(server: McpServer): void {
           'Month in YYYY-MM format, or natural language like "this month", "last month", "January 2025". Defaults to current month.',
         ),
     },
+    { readOnlyHint: true },
     async ({ month: monthInput }) => {
       try {
         await ensureConnection();
