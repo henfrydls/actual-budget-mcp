@@ -11,6 +11,7 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 - **Ask about your budget in plain language** - "How much did I spend on food this month?" or "Am I over budget on anything?"
 - **Create and manage transactions** - Add expenses, transfers, and edits without opening the app
 - **Get spending insights** - Projections, trends, and budget vs actual comparisons
+- **Manage categories, payees, and rules** - Full CRUD without opening the app
 - **Use names, not IDs** - Say "Cartera" instead of `a1b2c3d4-...`, with helpful suggestions if ambiguous
 - **Natural dates in English and Spanish** - "last month", "este mes", "hace 3 meses", "yesterday"
 - **Clean formatted output** - Aligned tables and clear summaries, not raw JSON
@@ -146,9 +147,9 @@ This will connect to your Actual Budget server and confirm everything is configu
 3. Click **Show advanced settings**
 4. Copy the **Sync ID**
 
-## Tools (18)
+## Tools (32)
 
-### Read (7)
+### Read (9)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -159,6 +160,8 @@ This will connect to your Actual Budget server and confirm everything is configu
 | `get_budget_summary` | Executive budget overview | "Give me a budget summary for February" |
 | `get_categories` | All category groups and categories | "What categories do I have?" |
 | `get_payees` | All payees in the budget | "List all my payees" |
+| `get_rules` | All transaction rules | "Show me my rules" |
+| `balance_history` | Account balance over time | "Show balance history for my checking account" |
 
 <details>
 <summary>Parameters</summary>
@@ -171,9 +174,11 @@ This will connect to your Actual Budget server and confirm everything is configu
 
 **get_budget_summary** - `month` (optional): YYYY-MM or natural language
 
+**balance_history** - `account` (required): account name or ID | `start_date` (optional, default 3 months ago) | `end_date` (optional, default today)
+
 </details>
 
-### Analysis (4)
+### Analysis (5)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -181,6 +186,7 @@ This will connect to your Actual Budget server and confirm everything is configu
 | `spending_projection` | End-of-month spending forecast | "Will I stay within budget this month?" |
 | `category_trends` | Spending trends over time | "What are my spending trends for the last 6 months?" |
 | `spending_by_category` | Spending breakdown by category | "Show me spending by category for February" |
+| `monthly_summary` | Income vs expenses vs savings | "How have my finances been the last 3 months?" |
 
 <details>
 <summary>Parameters</summary>
@@ -193,9 +199,11 @@ This will connect to your Actual Budget server and confirm everything is configu
 
 **spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20)
 
+**monthly_summary** - `months` (optional, default 3): number of months to show
+
 </details>
 
-### Write (7)
+### Write — Transactions (7)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -226,6 +234,81 @@ This will connect to your Actual Budget server and confirm everything is configu
 
 </details>
 
+### Write — Categories (6)
+
+| Tool | Description | Example prompt |
+|------|-------------|----------------|
+| `create_category` | Create a new category | "Create a category called Gym in Gastos Variables" |
+| `update_category` | Rename or hide a category | "Rename Gym to Fitness" |
+| `delete_category` | Delete a category | "Delete the Fitness category" |
+| `create_category_group` | Create a new group | "Create a category group called Health" |
+| `update_category_group` | Rename or hide a group | "Rename the Health group to Wellness" |
+| `delete_category_group` | Delete a group | "Delete the Wellness group" |
+
+<details>
+<summary>Parameters</summary>
+
+**create_category** - `name` (required) | `group` (required): group name or ID
+
+**update_category** - `category` (required): name or ID | `name` (optional): new name | `hidden` (optional): true/false
+
+**delete_category** - `category` (required) | `transfer_to` (optional): category to move transactions to
+
+**create_category_group** - `name` (required)
+
+**update_category_group** - `group` (required): name or ID | `name` (optional): new name | `hidden` (optional): true/false
+
+**delete_category_group** - `group` (required) | `transfer_to` (required): category for orphaned transactions
+
+</details>
+
+### Write — Payees & Rules (5)
+
+| Tool | Description | Example prompt |
+|------|-------------|----------------|
+| `create_payee` | Create a new payee | "Create a payee called Netflix" |
+| `update_payee` | Rename a payee | "Rename Netflix to Netflix Premium" |
+| `delete_payee` | Delete a payee | "Delete the Netflix Premium payee" |
+| `create_rule` | Create a transaction rule | "Create a rule: when payee contains Amazon, set category to Shopping" |
+| `delete_rule` | Delete a rule | "Delete that rule" |
+
+<details>
+<summary>Parameters</summary>
+
+**create_payee** - `name` (required)
+
+**update_payee** - `payee` (required): name or ID | `name` (required): new name
+
+**delete_payee** - `payee` (required): name or ID
+
+**create_rule** - `condition_field` (required): payee, category, amount, notes | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required) | `action_field` (required): category, payee, notes | `action_value` (required) | `stage` (optional)
+
+**delete_rule** - `rule_id` (required)
+
+</details>
+
+## Prompts
+
+Built-in prompt templates that guide Claude through multi-step financial analysis:
+
+| Prompt | Description |
+|--------|-------------|
+| `monthly-review` | Complete budget review for any month — spending vs budget, overspending, suggestions |
+| `spending-check` | Quick check: are you on track this month? |
+| `spending-patterns` | Deep analysis of spending trends and patterns over multiple months |
+
+Use them in Claude Desktop by clicking the prompt icon, or in Claude Code by asking Claude to use them.
+
+## Resources
+
+Pre-loaded data that Claude can reference without calling tools:
+
+| Resource | URI | Description |
+|----------|-----|-------------|
+| Accounts | `actual://accounts` | All accounts with balances |
+| Categories | `actual://categories` | Category groups and categories with IDs |
+| Payees | `actual://payees` | All payees sorted alphabetically |
+
 ## Usage Examples
 
 Here are real prompts you can use:
@@ -246,6 +329,14 @@ Here are real prompts you can use:
 "Transfer 5,000 from Checking to Savings"
 
 "What are my spending trends for food over the last 6 months?"
+
+"Create a category called Gym in Gastos Variables"
+
+"Rename the Gym category to Fitness"
+
+"Create a rule: when payee is Netflix, set category to Suscripciones"
+
+"How have my finances been the last 3 months?"
 ```
 
 ## How is this different?
@@ -259,6 +350,8 @@ Compared to other Actual Budget MCP servers:
 | Output format | Aligned tables, readable text | Raw JSON |
 | Error messages | Clear instructions on how to fix | Generic errors |
 | Analysis tools | Budget vs actual, projections, trends | Not available |
+| MCP Prompts | 3 guided analysis workflows | Limited or none |
+| MCP Resources | Accounts, categories, payees pre-loaded | Not available |
 | Bilingual dates | English + Spanish | English only |
 | API version | @actual-app/api 26.x (current) | Often outdated |
 
@@ -299,7 +392,8 @@ git clone https://github.com/henfrydls/actual-budget-mcp.git
 cd actual-budget-mcp
 npm install
 npm run build
-npm run test:connection  # Needs .env configured
+npm test               # Run unit tests
+npm run test:connection # Needs .env configured
 ```
 
 ## License
