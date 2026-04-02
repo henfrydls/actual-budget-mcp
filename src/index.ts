@@ -4,6 +4,8 @@ import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerAllTools } from './tools/index.js';
+import { registerAllPrompts } from './prompts.js';
+import { registerAllResources } from './resources.js';
 import { ensureConnection, shutdown } from './connection.js';
 import * as api from '@actual-app/api';
 
@@ -48,6 +50,8 @@ const server = new McpServer({
 });
 
 registerAllTools(server);
+registerAllPrompts(server);
+registerAllResources(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

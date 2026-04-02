@@ -14,6 +14,10 @@ import { registerBudgetVsActual } from './analysis/budget-vs-actual.js';
 import { registerSpendingProjection } from './analysis/spending-projection.js';
 import { registerCategoryTrends } from './analysis/category-trends.js';
 import { registerSpendingByCategory } from './analysis/spending-by-category.js';
+import { registerMonthlySummary } from './analysis/monthly-summary.js';
+
+// Read tools (continued)
+import { registerBalanceHistory } from './read/balance-history.js';
 
 // Write tools
 import { registerCreateTransaction } from './write/create-transaction.js';
@@ -39,6 +43,8 @@ export function registerAllTools(server: McpServer): void {
   registerSpendingProjection(server);
   registerCategoryTrends(server);
   registerSpendingByCategory(server);
+  registerMonthlySummary(server);
+  registerBalanceHistory(server);
 
   // Write
   registerCreateTransaction(server);
