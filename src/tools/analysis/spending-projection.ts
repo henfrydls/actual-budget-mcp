@@ -17,6 +17,7 @@ export function registerSpendingProjection(server: McpServer): void {
         .optional()
         .describe('Month to project (YYYY-MM or natural language). Defaults to current month.'),
     },
+    { readOnlyHint: true },
     async ({ month: monthInput }) => {
       try {
         await ensureConnection();

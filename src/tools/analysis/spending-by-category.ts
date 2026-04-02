@@ -30,6 +30,7 @@ export function registerSpendingByCategory(server: McpServer): void {
         .default(20)
         .describe('Maximum number of categories to show (default 20)'),
     },
+    { readOnlyHint: true },
     async ({ start_date, end_date, include_income, limit }) => {
       try {
         await ensureConnection();

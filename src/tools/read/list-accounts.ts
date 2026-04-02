@@ -9,6 +9,7 @@ export function registerListAccounts(server: McpServer): void {
     'list_accounts',
     'List all budget accounts with their current balances, type (on-budget/off-budget), and status.',
     {},
+    { readOnlyHint: true },
     async () => {
       try {
         await ensureConnection();

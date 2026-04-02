@@ -20,6 +20,7 @@ export function registerGetCategoryBalance(server: McpServer): void {
         .default(3)
         .describe('Number of months to look back (default 3)'),
     },
+    { readOnlyHint: true },
     async ({ category, months: monthCount }) => {
       try {
         await ensureConnection();
