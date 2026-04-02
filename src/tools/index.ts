@@ -27,6 +27,18 @@ import { registerCreateTransfer } from './write/create-transfer.js';
 import { registerUpdateTransaction } from './write/update-transaction.js';
 import { registerDeleteTransaction } from './write/delete-transaction.js';
 import { registerRunBankSync } from './write/run-bank-sync.js';
+import { registerCreateCategory } from './write/create-category.js';
+import { registerUpdateCategory } from './write/update-category.js';
+import { registerDeleteCategory } from './write/delete-category.js';
+import { registerCreateCategoryGroup } from './write/create-category-group.js';
+import { registerUpdateCategoryGroup } from './write/update-category-group.js';
+import { registerDeleteCategoryGroup } from './write/delete-category-group.js';
+import { registerCreatePayee } from './write/create-payee.js';
+import { registerUpdatePayee } from './write/update-payee.js';
+import { registerDeletePayee } from './write/delete-payee.js';
+import { registerGetRules } from './read/get-rules.js';
+import { registerCreateRule } from './write/create-rule.js';
+import { registerDeleteRule } from './write/delete-rule.js';
 
 export function registerAllTools(server: McpServer): void {
   // Read
@@ -54,4 +66,22 @@ export function registerAllTools(server: McpServer): void {
   registerUpdateTransaction(server);
   registerDeleteTransaction(server);
   registerRunBankSync(server);
+
+  // Category CRUD
+  registerCreateCategory(server);
+  registerUpdateCategory(server);
+  registerDeleteCategory(server);
+  registerCreateCategoryGroup(server);
+  registerUpdateCategoryGroup(server);
+  registerDeleteCategoryGroup(server);
+
+  // Payee CRUD
+  registerCreatePayee(server);
+  registerUpdatePayee(server);
+  registerDeletePayee(server);
+
+  // Rule CRUD
+  registerGetRules(server);
+  registerCreateRule(server);
+  registerDeleteRule(server);
 }
