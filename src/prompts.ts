@@ -63,7 +63,7 @@ Keep it short — just the key numbers and warnings.`,
   );
 
   server.prompt(
-    'financial-insights',
+    'spending-patterns',
     'Deep analysis of spending patterns and trends over the last few months.',
     { months: z.string().optional().describe('Number of months to analyze (default 6)') },
     async ({ months }) => {
