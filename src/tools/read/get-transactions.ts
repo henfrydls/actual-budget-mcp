@@ -85,11 +85,31 @@ export function registerGetTransactions(server: McpServer): void {
           notes?: string;
           account: string;
           cleared?: boolean;
+          is_parent?: boolean;
+          parent_id?: string;
+          subtransactions?: any[];
         }> = [];
 
         for (const accId of accountIds) {
           const txns = await api.getTransactions(accId, startDate, endDate);
-          allTransactions.push(...txns);
+
+          for (const t of txns) {
+            if ((t as any).is_parent && (t as any).subtransactions?.length > 0) {
+              // Expand split transactions: show each sub-transaction with parent's date/payee
+              for (const sub of (t as any).subtransactions) {
+                allTransactions.push({
+                  ...sub,
+                  id: `${t.id} → ${sub.id}`,
+                  date: t.date,
+                  payee: sub.payee || t.payee,
+                  notes: sub.notes ? `[Split] ${sub.notes}` : `[Split]`,
+                });
+              }
+            } else if (!(t as any).is_child) {
+              // Regular transaction (not a child of a split)
+              allTransactions.push(t);
+            }
+          }
         }
 
         // Sort by date descending
