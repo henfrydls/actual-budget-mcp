@@ -57,6 +57,14 @@ export async function ensureConnection(): Promise<void> {
         );
       }
 
+      if (message.includes('invalid-password')) {
+        throw new Error(
+          'Authentication failed: wrong password. ' +
+          'Check ACTUAL_PASSWORD in your configuration. ' +
+          'You can reset your password in Actual Budget under Settings > Server.',
+        );
+      }
+
       throw error;
     }
 
