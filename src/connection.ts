@@ -4,7 +4,7 @@ import type { ConnectionConfig } from './types.js';
 let initialized = false;
 let initializing: Promise<void> | null = null;
 
-function getConfig(): ConnectionConfig {
+export function getConfig(): ConnectionConfig {
   const serverURL = process.env.ACTUAL_SERVER_URL;
   const password = process.env.ACTUAL_PASSWORD;
   const budgetId = process.env.ACTUAL_BUDGET_ID;

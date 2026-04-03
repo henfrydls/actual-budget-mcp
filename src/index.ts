@@ -56,6 +56,17 @@ registerAllResources(server);
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
+// Validate connection eagerly on startup so config errors surface immediately
+// instead of silently failing on the first tool call
+try {
+  await ensureConnection();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Startup validation failed: ${message}`);
+  // Don't exit — let the MCP server stay alive so the error reaches the client
+  // on the first tool call via ensureConnection's error propagation
+}
+
 process.on('SIGINT', async () => {
   await shutdown();
   process.exit(0);
