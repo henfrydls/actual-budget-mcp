@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/actual-budget-mcp)](https://www.npmjs.com/package/actual-budget-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js->=20-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js->=22-green.svg)](https://nodejs.org/)
 
 Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude, so you can ask questions, create transactions, and analyze spending in natural conversation.
 
@@ -20,7 +20,7 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
-- [Node.js](https://nodejs.org/) 20 or higher
+- [Node.js](https://nodejs.org/) 22 or higher (see [Node.js requirement](#nodejs-22-requirement))
 
 ## Quick Start
 
@@ -382,6 +382,60 @@ Compared to other Actual Budget MCP servers:
 
 **"Ambiguous name: matches X, Y"**
 - Be more specific. Instead of "BHD", try "BHD Nomina" or "BHD Mi Pais"
+
+### Node.js 22 Requirement
+
+**"ReferenceError: navigator is not defined"**
+- This is a known bug in `@actual-app/api` that affects Node.js < 22. The fix has been merged upstream ([actualbudget/actual#7202](https://github.com/actualbudget/actual/pull/7202)) but not yet published to npm.
+- **Solution:** Use Node.js 22 or higher. Once `@actual-app/api` publishes a fixed version, we will restore Node.js 20 support.
+
+### Node Version Managers (fnm, nvm, volta)
+
+**MCP server shows "Server disconnected" in Claude Desktop**
+- Claude Desktop doesn't source your shell profile (`.bashrc`, `.zshrc`), so version managers like fnm, nvm, and volta won't work with the default `npx` command.
+- **Solution:** Use the absolute path to node in your config. Find it with:
+
+```bash
+readlink -f $(which node)
+```
+
+Then update your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "actual-budget-mcp": {
+      "command": "/home/user/.local/share/fnm/node-versions/v22.22.1/installation/bin/node",
+      "args": ["/path/to/actual-budget-mcp/dist/index.js"],
+      "env": {
+        "ACTUAL_SERVER_URL": "http://localhost:5006",
+        "ACTUAL_PASSWORD": "your-password",
+        "ACTUAL_BUDGET_ID": "your-budget-sync-id"
+      }
+    }
+  }
+}
+```
+
+Alternatively, create a wrapper script `mcp-wrapper.sh`:
+
+```bash
+#!/bin/bash
+export PATH="$HOME/.local/share/fnm/node-versions/v22.22.1/installation/bin:$PATH"
+exec npx -y actual-budget-mcp "$@"
+```
+
+Then use it in your config:
+
+```json
+{
+  "mcpServers": {
+    "actual-budget-mcp": {
+      "command": "/path/to/mcp-wrapper.sh"
+    }
+  }
+}
+```
 
 ## Contributing
 
