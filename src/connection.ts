@@ -4,7 +4,7 @@ import type { ConnectionConfig } from './types.js';
 let initialized = false;
 let initializing: Promise<void> | null = null;
 
-function getConfig(): ConnectionConfig {
+export function getConfig(): ConnectionConfig {
   const serverURL = process.env.ACTUAL_SERVER_URL;
   const password = process.env.ACTUAL_PASSWORD;
   const budgetId = process.env.ACTUAL_BUDGET_ID;
@@ -54,6 +54,14 @@ export async function ensureConnection(): Promise<void> {
           'Make sure the Actual Budget app is running and the URL is correct. ' +
           'If you use Actual Budget as a desktop app, open it first. ' +
           'If you use a remote server, check that ACTUAL_SERVER_URL is correct in your .env file.',
+        );
+      }
+
+      if (message.includes('invalid-password')) {
+        throw new Error(
+          'Authentication failed: wrong password. ' +
+          'Check ACTUAL_PASSWORD in your configuration. ' +
+          'You can reset your password in Actual Budget under Settings > Server.',
         );
       }
 
