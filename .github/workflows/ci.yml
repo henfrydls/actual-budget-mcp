@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [master]
 
+# Least privilege: CI only needs to read the repository.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -38,4 +47,13 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-      - run: npm audit --audit-level=high
+
+      # Blocking gate: production dependencies are what users install, so a
+      # high+ advisory there must fail the build.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      # Informational: the full tree (incl. dev tooling that never ships) is
+      # surfaced for visibility but does not block a release.
+      - name: Audit all dependencies (informational)
+        run: npm audit --audit-level=high || true

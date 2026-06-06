@@ -45,6 +45,23 @@ describe('resolveAccountId', () => {
     await expect(resolveAccountId('BHD Mi Pais')).rejects.toThrow('Ambiguous account name');
   });
 
+  // #27: exact name match must win over substring matches
+  it('prefers exact name over substring when name is a prefix of another', async () => {
+    vi.mocked(api.getAccounts).mockResolvedValue([
+      { id: 'sav-1', name: 'Savings', closed: false, offbudget: false },
+      { id: 'sav-2', name: 'Savings - Emergency Fund', closed: false, offbudget: false },
+    ] as any);
+    expect(await resolveAccountId('Savings')).toBe('sav-1');
+  });
+
+  it('exact name match is case-insensitive', async () => {
+    vi.mocked(api.getAccounts).mockResolvedValue([
+      { id: 'sav-1', name: 'Savings', closed: false, offbudget: false },
+      { id: 'sav-2', name: 'Savings - Emergency Fund', closed: false, offbudget: false },
+    ] as any);
+    expect(await resolveAccountId('savings')).toBe('sav-1');
+  });
+
   it('excludes closed accounts from name matching', async () => {
     await expect(resolveAccountId('Closed')).rejects.toThrow('No account found');
   });
@@ -76,8 +93,18 @@ describe('resolveCategoryId', () => {
     expect(await resolveCategoryId('Alimentación')).toBe('cat-1');
   });
 
-  it('throws on ambiguous match', async () => {
-    await expect(resolveCategoryId('Combustible')).rejects.toThrow('Ambiguous category name');
+  // #22: exact name match must win over substring matches.
+  it('prefers exact name over substring', async () => {
+    expect(await resolveCategoryId('Combustible')).toBe('cat-2');
+  });
+
+  it('still throws ambiguous when no exact match exists but several substrings do', async () => {
+    await expect(resolveCategoryId('ombustible')).rejects.toThrow('Ambiguous category name');
+  });
+
+  // #23: a valid category UUID must resolve to itself (id match before name match)
+  it('resolves a category passed as UUID', async () => {
+    expect(await resolveCategoryId('cat-3')).toBe('cat-3');
   });
 
   it('excludes hidden categories', async () => {
@@ -112,6 +139,15 @@ describe('resolveCategoryGroupId', () => {
 
   it('throws on no match', async () => {
     await expect(resolveCategoryGroupId('nonexistent')).rejects.toThrow('No category group found');
+  });
+
+  // #27/#22 same defect: exact group name must win over substring
+  it('prefers exact group name over substring', async () => {
+    vi.mocked(api.getCategoryGroups).mockResolvedValue([
+      { id: 'g-1', name: 'Gastos', is_income: false },
+      { id: 'g-2', name: 'Gastos Fijos', is_income: false },
+    ] as any);
+    expect(await resolveCategoryGroupId('Gastos')).toBe('g-1');
   });
 
   it('lists available groups in error', async () => {
@@ -154,6 +190,15 @@ describe('resolvePayeeId', () => {
 
   it('throws on no match', async () => {
     await expect(resolvePayeeId('nonexistent')).rejects.toThrow('No payee found');
+  });
+
+  // #27/#22 same defect: exact payee name must win over substring
+  it('prefers exact payee name over substring', async () => {
+    vi.mocked(api.getPayees).mockResolvedValue([
+      { id: 'u-1', name: 'Uber' },
+      { id: 'u-2', name: 'Uber Eats' },
+    ] as any);
+    expect(await resolvePayeeId('Uber')).toBe('u-1');
   });
 
   it('lists available payees in error', async () => {

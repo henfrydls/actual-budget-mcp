@@ -1,6 +1,19 @@
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../connection.js';
 
+/**
+ * Match candidates by name, preferring an exact (case-insensitive) match.
+ * Substring matching only runs as a fallback when no exact match exists.
+ * This prevents "ambiguous" errors when a name is a prefix/substring of
+ * another (e.g. "Savings" vs "Savings - Emergency Fund"). See #22/#27.
+ */
+function matchByName<T>(items: T[], nameOrId: string, getName: (item: T) => string): T[] {
+  const lower = nameOrId.toLowerCase();
+  const exact = items.filter((item) => getName(item).toLowerCase() === lower);
+  if (exact.length > 0) return exact;
+  return items.filter((item) => getName(item).toLowerCase().includes(lower));
+}
+
 export async function resolveAccountId(nameOrId: string): Promise<string> {
   await ensureConnection();
   const accounts = await api.getAccounts();
@@ -9,11 +22,9 @@ export async function resolveAccountId(nameOrId: string): Promise<string> {
   const byId = accounts.find((a) => a.id === nameOrId);
   if (byId) return byId.id;
 
-  // Case-insensitive name match
-  const lower = nameOrId.toLowerCase();
-  const matches = accounts.filter(
-    (a) => !a.closed && a.name.toLowerCase().includes(lower),
-  );
+  // Case-insensitive name match (exact wins over substring)
+  const candidates = accounts.filter((a) => !a.closed);
+  const matches = matchByName(candidates, nameOrId, (a) => a.name);
 
   if (matches.length === 0) {
     const names = accounts
@@ -42,11 +53,10 @@ export async function resolveCategoryId(nameOrId: string): Promise<string> {
   const byId = categories.find((c) => c.id === nameOrId);
   if (byId) return byId.id;
 
-  // Case-insensitive name match (filter only actual categories, not groups)
-  const lower = nameOrId.toLowerCase();
-  const cats = categories.filter(
-    (c) => 'group_id' in c && !c.hidden && c.name.toLowerCase().includes(lower),
-  );
+  // Case-insensitive name match (filter only actual categories, not groups;
+  // exact wins over substring)
+  const candidates = categories.filter((c) => 'group_id' in c && !c.hidden);
+  const cats = matchByName(candidates, nameOrId, (c) => c.name);
 
   if (cats.length === 0) {
     const names = categories
@@ -83,11 +93,8 @@ export async function resolveCategoryGroupId(nameOrId: string): Promise<string> 
   const byId = groups.find((g) => g.id === nameOrId);
   if (byId) return byId.id;
 
-  // Case-insensitive name match
-  const lower = nameOrId.toLowerCase();
-  const matches = groups.filter(
-    (g) => g.name.toLowerCase().includes(lower),
-  );
+  // Case-insensitive name match (exact wins over substring)
+  const matches = matchByName(groups, nameOrId, (g) => g.name);
 
   if (matches.length === 0) {
     const names = groups.map((g) => g.name).join(', ');
@@ -113,11 +120,11 @@ export async function resolvePayeeId(nameOrId: string): Promise<string> {
   const byId = payees.find((p) => p.id === nameOrId);
   if (byId) return byId.id;
 
-  // Case-insensitive name match (exclude transfer payees)
-  const lower = nameOrId.toLowerCase();
-  const matches = payees.filter(
-    (p) => !p.name.startsWith('Transfer:') && p.name !== '' && p.name.toLowerCase().includes(lower),
+  // Case-insensitive name match (exclude transfer payees; exact wins over substring)
+  const candidates = payees.filter(
+    (p) => !p.name.startsWith('Transfer:') && p.name !== '',
   );
+  const matches = matchByName(candidates, nameOrId, (p) => p.name);
 
   if (matches.length === 0) {
     const names = payees
