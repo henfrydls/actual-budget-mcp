@@ -1,16 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock @actual-app/api before importing the module
+// Mock the external Actual API. addTransactions returns the literal 'ok'
+// (matching the real SDK: api/transactions-add -> Promise<'ok'>), NOT an array
+// of ids. This is the crux of #26: any logic that expects ids back is dead code.
 vi.mock('@actual-app/api', () => ({
   default: {},
   getAccounts: vi.fn().mockResolvedValue([
-    { id: 'acc-1', name: 'Cartera (Efectivo)', closed: false, offbudget: false },
+    { id: 'acc-1', name: 'Checking', closed: false, offbudget: false },
   ]),
   getCategories: vi.fn().mockResolvedValue([
     { id: 'cat-1', name: 'Alimentación', group_id: 'grp-1', hidden: false },
     { id: 'cat-2', name: 'Cashback', group_id: 'grp-2', hidden: false },
   ]),
-  addTransactions: vi.fn().mockResolvedValue(['txn-new-1']),
+  getTransactions: vi.fn(),
+  addTransactions: vi.fn().mockResolvedValue('ok'),
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
   utils: {
@@ -19,68 +22,72 @@ vi.mock('@actual-app/api', () => ({
   },
 }));
 
-// Mock connection
 vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
 import * as api from '@actual-app/api';
+import { createTransaction } from '../write/create-transaction.js';
 
-describe('create-transaction category fix', () => {
-  it('calls updateTransaction after addTransactions to force category', async () => {
-    const addTxn = vi.mocked(api.addTransactions);
-    const updateTxn = vi.mocked(api.updateTransaction);
-
-    addTxn.mockClear();
-    updateTxn.mockClear();
-    addTxn.mockResolvedValue(['txn-123']);
-
-    // Simulate what create_transaction does internally
-    const categoryId = 'cat-1'; // Alimentación
-    const transaction = {
-      date: '2026-04-01',
-      amount: -10000,
-      cleared: false,
-      payee_name: 'Sirena',
-      category: categoryId,
-    };
-
-    const result = await api.addTransactions('acc-1', [transaction as any], {
-      learnCategories: false,
-      runTransfers: false,
-    });
-
-    // The fix: force category update after creation
-    if (categoryId && result && Array.isArray(result) && result.length > 0) {
-      await api.updateTransaction(result[0], { category: categoryId });
-    }
-
-    expect(addTxn).toHaveBeenCalledOnce();
-    expect(addTxn).toHaveBeenCalledWith('acc-1', [transaction], {
-      learnCategories: false,
-      runTransfers: false,
-    });
-
-    // Verify updateTransaction was called to force category
-    expect(updateTxn).toHaveBeenCalledOnce();
-    expect(updateTxn).toHaveBeenCalledWith('txn-123', { category: 'cat-1' });
+describe('createTransaction (#26 explicit category must win)', () => {
+  beforeEach(() => {
+    vi.mocked(api.addTransactions).mockClear().mockResolvedValue('ok' as any);
+    vi.mocked(api.updateTransaction).mockClear().mockResolvedValue({} as any);
+    vi.mocked(api.getTransactions).mockReset();
   });
 
-  it('does not call updateTransaction when no category provided', async () => {
-    const updateTxn = vi.mocked(api.updateTransaction);
-    updateTxn.mockClear();
+  it('forces the explicit category when the SDK overrides it with a learned one', async () => {
+    // before snapshot: empty; after: the new txn came back with the WRONG (learned) category
+    vi.mocked(api.getTransactions)
+      .mockResolvedValueOnce([] as any) // before add
+      .mockResolvedValueOnce([
+        { id: 'txn-new', account: 'acc-1', date: '2026-06-05', amount: -10000, category: 'cat-2' },
+      ] as any); // after add — SDK applied a learned category instead of the requested one
 
-    const categoryId = undefined;
+    await createTransaction({ account: 'Checking', amount: -100, payee: 'Vendor', category: 'Alimentación', date: '2026-06-05' });
 
-    await api.addTransactions('acc-1', [{ date: '2026-04-01', amount: -5000 } as any], {
+    expect(api.addTransactions).toHaveBeenCalledWith('acc-1', expect.any(Array), {
       learnCategories: false,
       runTransfers: false,
     });
+    // The fix: re-find the created txn and force the caller's category
+    expect(api.updateTransaction).toHaveBeenCalledOnce();
+    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1' });
+  });
 
-    if (categoryId) {
-      await api.updateTransaction('txn-123', { category: categoryId });
-    }
+  it('does not call updateTransaction when the stored category already matches', async () => {
+    vi.mocked(api.getTransactions)
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        { id: 'txn-new', account: 'acc-1', date: '2026-06-05', amount: -10000, category: 'cat-1' },
+      ] as any); // already correct
 
-    expect(updateTxn).not.toHaveBeenCalled();
+    await createTransaction({ account: 'Checking', amount: -100, category: 'Alimentación', date: '2026-06-05' });
+
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('does not snapshot or correct when no category is provided', async () => {
+    await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
+
+    expect(api.addTransactions).toHaveBeenCalledOnce();
+    expect(api.getTransactions).not.toHaveBeenCalled();
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('only corrects the newly created transaction, not pre-existing ones', async () => {
+    vi.mocked(api.getTransactions)
+      .mockResolvedValueOnce([
+        { id: 'old-1', account: 'acc-1', date: '2026-06-05', amount: -500, category: 'cat-2' },
+      ] as any) // before: an existing txn with a different category
+      .mockResolvedValueOnce([
+        { id: 'old-1', account: 'acc-1', date: '2026-06-05', amount: -500, category: 'cat-2' },
+        { id: 'txn-new', account: 'acc-1', date: '2026-06-05', amount: -10000, category: 'cat-2' },
+      ] as any);
+
+    await createTransaction({ account: 'Checking', amount: -100, category: 'Alimentación', date: '2026-06-05' });
+
+    expect(api.updateTransaction).toHaveBeenCalledOnce();
+    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1' });
   });
 });
