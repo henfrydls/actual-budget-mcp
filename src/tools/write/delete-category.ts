@@ -25,10 +25,7 @@ export function registerDeleteCategory(server: McpServer): void {
         const transferId = transfer_to ? await resolveCategoryId(transfer_to) : undefined;
         const transferCat = transferId ? categories.find((c) => c.id === transferId) : undefined;
 
-        const result = await api.deleteCategory(categoryId, transferId);
-        if (result && (result as any).error) {
-          throw new Error(`Delete failed: ${(result as any).error}`);
-        }
+        await api.deleteCategory(categoryId, transferId);
         await api.sync();
 
         const lines = [`Category "${catName}" deleted.`];

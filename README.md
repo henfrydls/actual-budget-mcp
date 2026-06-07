@@ -20,7 +20,7 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
-- [Node.js](https://nodejs.org/) 22 or higher (see [Node.js requirement](#nodejs-22-requirement))
+- [Node.js](https://nodejs.org/) 22 or higher (see [Node.js requirement](#nodejs-requirement))
 
 ## Quick Start
 
@@ -383,11 +383,12 @@ Compared to other Actual Budget MCP servers:
 **"Ambiguous name: matches X, Y"**
 - Be more specific. Instead of "BHD", try "BHD Nomina" or "BHD Mi Pais"
 
-### Node.js 22 Requirement
+### Node.js Requirement
 
 **"ReferenceError: navigator is not defined"**
-- This is a known bug in `@actual-app/api` that affects Node.js < 22. The fix has been merged upstream ([actualbudget/actual#7202](https://github.com/actualbudget/actual/pull/7202)) but not yet published to npm.
-- **Solution:** Use Node.js 22 or higher. Once `@actual-app/api` publishes a fixed version, we will restore Node.js 20 support.
+- `@actual-app/api` (including 26.6) references the `navigator` global, which is
+  only available on Node.js 21+. On Node.js 20 or earlier it throws at import.
+- **Solution:** Use Node.js 22 or higher.
 
 ### Node Version Managers (fnm, nvm, volta)
 

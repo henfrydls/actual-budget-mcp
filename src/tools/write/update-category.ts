@@ -39,10 +39,7 @@ export function registerUpdateCategory(server: McpServer): void {
           return { content: [{ type: 'text', text: 'No fields to update.' }], isError: true };
         }
 
-        const result = await api.updateCategory(categoryId, updates as any);
-        if (result && (result as any).error) {
-          throw new Error(`Category update failed: ${JSON.stringify((result as any).error)}`);
-        }
+        await api.updateCategory(categoryId, updates as any);
         await api.sync();
 
         return {
