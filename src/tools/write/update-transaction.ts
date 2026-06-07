@@ -6,6 +6,86 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 
+export interface UpdateTransactionInput {
+  transaction_id: string;
+  amount?: number;
+  payee?: string;
+  category?: string;
+  date?: string;
+  notes?: string;
+  cleared?: boolean;
+}
+
+/**
+ * Update fields of an existing transaction. Only the provided fields change.
+ *
+ * #25: updating a split sub-transaction without an explicit `amount` makes the
+ * SDK reset that sub-transaction's amount to 0 (silent corruption of the split
+ * total). To prevent this, when no `amount` is provided we look up the target;
+ * if it is a sub-transaction (`is_child`), we re-send its current amount so it
+ * is preserved. The preserved amount is not reported as a change.
+ *
+ * Returns the human-readable confirmation lines.
+ */
+export async function updateTransactionFields(input: UpdateTransactionInput): Promise<string[]> {
+  await ensureConnection();
+
+  const updates: Record<string, unknown> = {};
+  const changes: string[] = [];
+
+  if (input.amount !== undefined) {
+    updates.amount = amountToCents(input.amount);
+    changes.push(`Amount → ${formatMoney(updates.amount as number)}`);
+  }
+
+  if (input.payee !== undefined) {
+    updates.payee_name = input.payee;
+    changes.push(`Payee → ${input.payee}`);
+  }
+
+  if (input.category !== undefined) {
+    updates.category = await resolveCategoryId(input.category);
+    const categories = await api.getCategories();
+    const cat = categories.find((c) => c.id === updates.category);
+    changes.push(`Category → ${cat?.name || input.category}`);
+  }
+
+  if (input.date !== undefined) {
+    updates.date = resolveDate(input.date);
+    changes.push(`Date → ${updates.date}`);
+  }
+
+  if (input.notes !== undefined) {
+    updates.notes = input.notes;
+    changes.push(`Notes → ${input.notes}`);
+  }
+
+  if (input.cleared !== undefined) {
+    updates.cleared = input.cleared;
+    changes.push(`Cleared → ${input.cleared}`);
+  }
+
+  if (changes.length === 0) {
+    throw new Error('No fields to update. Provide at least one field to change.');
+  }
+
+  // #25: preserve a sub-transaction's amount when the caller did not change it.
+  if (updates.amount === undefined) {
+    const result = await api.runQuery(
+      api.q('transactions').filter({ id: input.transaction_id }).select(['id', 'amount', 'is_child']),
+    );
+    const txn = (result as any)?.data?.[0];
+    if (txn?.is_child) {
+      updates.amount = txn.amount;
+    }
+  }
+
+  await api.updateTransaction(input.transaction_id, updates as any);
+  await api.sync();
+
+  return [`Transaction ${input.transaction_id} updated:`, ...changes.map((c) => `  ${c}`)];
+}
+
 export function registerUpdateTransaction(server: McpServer): void {
   server.tool(
     'update_transaction',
@@ -26,60 +106,9 @@ export function registerUpdateTransaction(server: McpServer): void {
       cleared: z.boolean().optional().describe('Whether the transaction is cleared'),
     },
     { readOnlyHint: false, idempotentHint: true },
-    async ({ transaction_id, amount, payee, category, date, notes, cleared }) => {
+    async (input) => {
       try {
-        await ensureConnection();
-
-        const updates: Record<string, unknown> = {};
-        const changes: string[] = [];
-
-        if (amount !== undefined) {
-          updates.amount = amountToCents(amount);
-          changes.push(`Amount → ${formatMoney(updates.amount as number)}`);
-        }
-
-        if (payee !== undefined) {
-          updates.payee_name = payee;
-          changes.push(`Payee → ${payee}`);
-        }
-
-        if (category !== undefined) {
-          updates.category = await resolveCategoryId(category);
-          const categories = await api.getCategories();
-          const cat = categories.find((c) => c.id === updates.category);
-          changes.push(`Category → ${cat?.name || category}`);
-        }
-
-        if (date !== undefined) {
-          updates.date = resolveDate(date);
-          changes.push(`Date → ${updates.date}`);
-        }
-
-        if (notes !== undefined) {
-          updates.notes = notes;
-          changes.push(`Notes → ${notes}`);
-        }
-
-        if (cleared !== undefined) {
-          updates.cleared = cleared;
-          changes.push(`Cleared → ${cleared}`);
-        }
-
-        if (changes.length === 0) {
-          return {
-            content: [{ type: 'text', text: 'No fields to update. Provide at least one field to change.' }],
-            isError: true,
-          };
-        }
-
-        await api.updateTransaction(transaction_id, updates as any);
-        await api.sync();
-
-        const lines = [
-          `Transaction ${transaction_id} updated:`,
-          ...changes.map((c) => `  ${c}`),
-        ];
-
+        const lines = await updateTransactionFields(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
