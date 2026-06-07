@@ -38,14 +38,45 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   const accountId = await resolveAccountId(input.account);
   const txnDate = resolveDate(input.date);
   const amountCents = amountToCents(input.amount);
-  const categoryId = input.category ? await resolveCategoryId(input.category) : undefined;
+  const accounts = await api.getAccounts();
+
+  // A payee that names another on-budget account is a transfer: route it through
+  // that account's transfer payee with runTransfers so both sides are linked (#24).
+  let transferPayeeId: string | undefined;
+  let transferTargetName: string | undefined;
+  if (input.payee) {
+    const lower = input.payee.toLowerCase();
+    const target = accounts.find(
+      (a) => !a.closed && (a.id === input.payee || a.name.toLowerCase() === lower),
+    );
+    if (target) {
+      if (target.id === accountId) {
+        throw new Error('Cannot transfer to the same account.');
+      }
+      const payees = await api.getPayees();
+      const transferPayee = payees.find((p) => p.transfer_acct === target.id);
+      if (!transferPayee) {
+        throw new Error(`No transfer payee found for account "${target.name}".`);
+      }
+      transferPayeeId = transferPayee.id;
+      transferTargetName = target.name;
+    }
+  }
+
+  // A transfer carries no ordinary category; only resolve one for plain payees.
+  const categoryId =
+    !transferPayeeId && input.category ? await resolveCategoryId(input.category) : undefined;
 
   const transaction: Record<string, unknown> = {
     date: txnDate,
     amount: amountCents,
     cleared: input.cleared ?? false,
   };
-  if (input.payee) transaction.payee_name = input.payee;
+  if (transferPayeeId) {
+    transaction.payee = transferPayeeId;
+  } else if (input.payee) {
+    transaction.payee_name = input.payee;
+  }
   if (categoryId) transaction.category = categoryId;
   if (input.notes) transaction.notes = input.notes;
 
@@ -59,7 +90,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   await api.addTransactions(accountId, [transaction as any], {
     learnCategories: false,
-    runTransfers: false,
+    runTransfers: !!transferPayeeId,
   });
 
   // Force the explicit category on the newly created transaction(s) if the SDK
@@ -84,17 +115,20 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   await api.sync();
 
-  const accounts = await api.getAccounts();
   const acct = accounts.find((a) => a.id === accountId);
 
   const lines = [
-    'Transaction created:',
+    transferPayeeId ? 'Transfer created:' : 'Transaction created:',
     `  Account:  ${acct?.name || accountId}`,
     `  Date:     ${txnDate}`,
     `  Amount:   ${formatMoney(amountCents)}`,
   ];
-  if (input.payee) lines.push(`  Payee:    ${input.payee}`);
-  if (input.category) lines.push(`  Category: ${input.category}`);
+  if (transferPayeeId) {
+    lines.push(`  Transfer to: ${transferTargetName}`);
+  } else if (input.payee) {
+    lines.push(`  Payee:    ${input.payee}`);
+  }
+  if (!transferPayeeId && input.category) lines.push(`  Category: ${input.category}`);
   if (input.notes) lines.push(`  Notes:    ${input.notes}`);
 
   return lines;

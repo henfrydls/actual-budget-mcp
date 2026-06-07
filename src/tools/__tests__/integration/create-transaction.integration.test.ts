@@ -33,7 +33,7 @@ describe.skipIf(skip)('create_transaction integration (#26)', () => {
     let catYId = '';
 
     // Seed a budget where payee "Vendor" has been learned as "CatX".
-    await createFreshBudget(async () => {
+    const budgetId = await createFreshBudget(async () => {
       acctId = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
       const groupId = await api.createCategoryGroup({ name: 'Grp' } as any);
       catXId = await api.createCategory({ name: 'CatX', group_id: groupId } as any);
@@ -58,6 +58,9 @@ describe.skipIf(skip)('create_transaction integration (#26)', () => {
       date: '2026-06-05',
     });
 
+    // Reload before reading: in tests api.sync() is mocked, so the cached view
+    // is refreshed via reload (in production the real sync() flushes it).
+    await api.loadBudget(budgetId);
     const txns = await api.getTransactions(acctId, '2026-06-05', '2026-06-05');
     const created = txns.find((t) => t.amount === -999);
     expect(created, 'created transaction should exist').toBeTruthy();
