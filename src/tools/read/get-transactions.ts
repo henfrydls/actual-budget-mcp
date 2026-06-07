@@ -62,14 +62,14 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   let allTransactions: Array<{
     id: string;
     date: string;
-    payee?: string;
-    category?: string;
+    payee?: string | null;
+    category?: string | null;
     amount: number;
-    notes?: string;
+    notes?: string | null;
     account: string;
     cleared?: boolean;
     is_parent?: boolean;
-    parent_id?: string;
+    parent_id?: string | null;
     subtransactions?: any[];
   }> = [];
 
