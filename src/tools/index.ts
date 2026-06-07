@@ -21,6 +21,8 @@ import { registerBalanceHistory } from './read/balance-history.js';
 
 // Write tools
 import { registerCreateTransaction } from './write/create-transaction.js';
+import { registerCreateSplitTransaction } from './write/create-split-transaction.js';
+import { registerReconcileCurrencyResidual } from './write/reconcile-currency-residual.js';
 import { registerUpdateBudgetAmount } from './write/update-budget-amount.js';
 import { registerRecategorizeTransaction } from './write/recategorize-transaction.js';
 import { registerCreateTransfer } from './write/create-transfer.js';
@@ -60,6 +62,8 @@ export function registerAllTools(server: McpServer): void {
 
   // Write
   registerCreateTransaction(server);
+  registerCreateSplitTransaction(server);
+  registerReconcileCurrencyResidual(server);
   registerUpdateBudgetAmount(server);
   registerRecategorizeTransaction(server);
   registerCreateTransfer(server);
