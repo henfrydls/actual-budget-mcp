@@ -6,3 +6,6 @@ dist/
 *.tgz
 actual-data/
 backlog.md
+
+# Local-only notes (never commit)
+*.local.md

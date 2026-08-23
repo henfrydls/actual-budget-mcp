@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerGetCategories(server: McpServer): void {
   server.tool(
@@ -52,7 +53,7 @@ export function registerGetCategories(server: McpServer): void {
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

@@ -3,6 +3,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { formatMoney } from '../../utils/money.js';
 import { sectionHeader } from '../../utils/formatters.js';
+import { describeError } from '../../utils/errors.js';
 
 // api.getAccountBalance sums only transactions dated on or before the cutoff,
 // defaulting to "today" when no cutoff is given — which silently drops
@@ -62,7 +63,7 @@ export function registerListAccounts(server: McpServer): void {
         const text = await getAccountsReport();
         return { content: [{ type: 'text', text }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

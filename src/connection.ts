@@ -4,6 +4,23 @@ import type { ConnectionConfig } from './types.js';
 let initialized = false;
 let initializing: Promise<void> | null = null;
 
+/**
+ * The context `api.init()` returns. Its `send` reaches Actual's internal
+ * handlers, which is the only way to run maintenance operations the public API
+ * does not wrap — notably `sync-repair` (#41).
+ */
+type ActualInternal = Awaited<ReturnType<typeof api.init>>;
+let internal: ActualInternal | null = null;
+
+export function getInternal(): ActualInternal {
+  if (!internal) {
+    throw new Error(
+      'Not connected to Actual Budget yet. This operation needs an active connection.',
+    );
+  }
+  return internal;
+}
+
 export function getConfig(): ConnectionConfig {
   const serverURL = process.env.ACTUAL_SERVER_URL;
   const password = process.env.ACTUAL_PASSWORD;
@@ -39,7 +56,7 @@ export async function ensureConnection(): Promise<void> {
     const config = getConfig();
 
     try {
-      await api.init({
+      internal = await api.init({
         dataDir: config.dataDir || '/tmp/actual-budget-mcp-data',
         serverURL: config.serverURL,
         password: config.password,
@@ -130,6 +147,7 @@ export async function shutdown(): Promise<void> {
   await api.shutdown();
   initialized = false;
   initializing = null;
+  internal = null;
 }
 
 export { api };

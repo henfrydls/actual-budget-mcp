@@ -7,6 +7,8 @@ import { registerAllTools } from './tools/index.js';
 import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
 import { ensureConnection, shutdown } from './connection.js';
+import { installProcessGuards } from './utils/process-guards.js';
+import { describeError } from './utils/errors.js';
 import * as api from '@actual-app/api';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +30,13 @@ console.log = (...args: unknown[]) => console.error(...args);
 console.info = (...args: unknown[]) => console.error(...args);
 console.warn = (...args: unknown[]) => console.error(...args);
 
+// #39: keep a rejection from inside @actual-app/api (e.g. a failed budget
+// download) from killing the process under Node's default
+// --unhandled-rejections=throw (the default since Node 15). Installed before
+// anything that can reject — including --verify, which awaits the very call
+// whose stray rejections motivated this.
+installProcessGuards();
+
 // --verify flag: test connection and exit (restore stdout for user output)
 if (process.argv.includes('--verify')) {
   console.log = originalLog;
@@ -46,8 +55,7 @@ if (process.argv.includes('--verify')) {
     await shutdown();
     process.exit(0);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Connection failed: ${message}`);
+    console.error(`Connection failed: ${describeError(error)}`);
     process.exit(1);
   }
 }
@@ -69,8 +77,7 @@ await server.connect(transport);
 try {
   await ensureConnection();
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Startup validation failed: ${message}`);
+  console.error(`Startup validation failed: ${describeError(error)}`);
   // Don't exit — let the MCP server stay alive so the error reaches the client
   // on the first tool call via ensureConnection's error propagation
 }

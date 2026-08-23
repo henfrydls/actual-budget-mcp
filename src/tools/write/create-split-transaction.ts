@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export interface SplitInput {
   category: string;
@@ -145,7 +146,7 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         const lines = await createSplitTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

@@ -6,6 +6,7 @@ import { formatMoney } from '../../utils/money.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { resolveDate } from '../../utils/dates.js';
 import { sectionHeader, formatTable } from '../../utils/formatters.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerBalanceHistory(server: McpServer): void {
   server.tool(
@@ -108,7 +109,7 @@ export function registerBalanceHistory(server: McpServer): void {
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

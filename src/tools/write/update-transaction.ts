@@ -4,7 +4,8 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
-import { resolveCategoryId } from '../../utils/resolvers.js';
+import { resolveCategoryId, resolvePayeeName } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export interface UpdateTransactionInput {
   transaction_id: string;
@@ -39,8 +40,23 @@ export async function updateTransactionFields(input: UpdateTransactionInput): Pr
   }
 
   if (input.payee !== undefined) {
-    updates.payee_name = input.payee;
-    changes.push(`Payee → ${input.payee}`);
+    // #37: updateTransaction only accepts a payee *id*. `payee_name` is an
+    // import-only convenience field, and passing it here makes the SDK throw
+    // ("Field payee_name does not exist on table transactions") outside our
+    // try/catch, which used to take the whole server process down.
+    if (input.payee.trim() === '') {
+      throw new Error(
+        'Payee cannot be blank. Actual has no "no payee" value to set here; ' +
+          'pass a payee name, or leave the payee out to keep the current one.',
+      );
+    }
+    // An id may come straight from get_transactions output; treating it as a
+    // name would create a junk payee named with the UUID.
+    const payees = await api.getPayees();
+    const byId = payees.find((p) => p.id === input.payee);
+    const existing = byId?.id ?? (await resolvePayeeName(input.payee));
+    updates.payee = existing ?? (await api.createPayee({ name: input.payee }));
+    changes.push(`Payee → ${byId?.name || input.payee}`);
   }
 
   if (input.category !== undefined) {
@@ -111,7 +127,7 @@ export function registerUpdateTransaction(server: McpServer): void {
         const lines = await updateTransactionFields(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

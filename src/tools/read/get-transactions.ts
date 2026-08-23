@@ -6,6 +6,7 @@ import { formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { sectionHeader, formatTable } from '../../utils/formatters.js';
+import { describeError } from '../../utils/errors.js';
 
 export interface GetTransactionsInput {
   account?: string;
@@ -221,7 +222,7 @@ export function registerGetTransactions(server: McpServer): void {
         const text = await getTransactionsReport(input);
         return { content: [{ type: 'text', text }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { formatMoney } from '../../utils/money.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerRecategorizeTransaction(server: McpServer): void {
   server.tool(
@@ -37,7 +38,7 @@ export function registerRecategorizeTransaction(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

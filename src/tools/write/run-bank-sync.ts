@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerRunBankSync(server: McpServer): void {
   server.tool(
@@ -52,7 +53,7 @@ export function registerRunBankSync(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
 
         if (message.includes('not linked') || message.includes('no bank')) {
           return {

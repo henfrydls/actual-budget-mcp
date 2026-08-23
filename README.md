@@ -147,7 +147,7 @@ This will connect to your Actual Budget server and confirm everything is configu
 3. Click **Show advanced settings**
 4. Copy the **Sync ID**
 
-## Tools (32)
+## Tools (37)
 
 ### Read (9)
 
@@ -203,16 +203,18 @@ This will connect to your Actual Budget server and confirm everything is configu
 
 </details>
 
-### Write — Transactions (7)
+### Write — Transactions (9)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
 | `create_transaction` | Add a new transaction | "I spent 500 on groceries from Cartera today" |
+| `create_split_transaction` | One charge across several categories | "Split that 3,000 charge: 2,000 groceries, 1,000 household" |
 | `update_transaction` | Edit an existing transaction | "Change the amount on that transaction to 600" |
 | `delete_transaction` | Remove a transaction | "Delete that test transaction" |
 | `update_budget_amount` | Change a budget amount | "Set my food budget to 15,000 for this month" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
+| `reconcile_currency_residual` | Clear accumulated FX-rate residual | "Reconcile my USD card to 213.82 USD" |
 | `run_bank_sync` | Sync with linked banks | "Sync my bank transactions" |
 
 <details>
@@ -229,6 +231,10 @@ This will connect to your Actual Budget server and confirm everything is configu
 **recategorize_transaction** - `transaction_id` (required) | `category` (required)
 
 **create_transfer** - `from_account` (required) | `to_account` (required) | `amount` (required) | `date` (optional) | `notes` (optional)
+
+**create_split_transaction** - `account` (required) | `amount` (required): total, must equal the sum of the splits | `splits` (required): two or more `{category, amount, notes}` | `payee`, `date`, `notes`, `cleared` (all optional)
+
+**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `date`, `notes` (all optional)
 
 **run_bank_sync** - `account` (optional): sync specific account or all if omitted
 
@@ -284,6 +290,48 @@ This will connect to your Actual Budget server and confirm everything is configu
 **create_rule** - `condition_field` (required): payee, category, amount, notes | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required) | `action_field` (required): category, payee, notes | `action_value` (required) | `stage` (optional)
 
 **delete_rule** - `rule_id` (required)
+
+</details>
+
+### Write — Accounts (2)
+
+| Tool | Description | Example prompt |
+|------|-------------|----------------|
+| `create_account` | Create an on- or off-budget account | "Create an off-budget account called Family Investment with 10,000" |
+| `delete_account` | Delete an account and its history | "Delete the ZZ Test account" |
+
+> **`delete_account` needs two keys.** It destroys the account's entire transaction
+> history, so a single call never deletes. The first call only *previews* what
+> would be lost (name, balance, transaction count) and suggests closing the
+> account instead — closing retires it while keeping its history. To actually
+> delete, call again with `confirm: true` **and** `confirm_name` set to the
+> account's exact name. While it declines, the tool reports `isError: true`, so a
+> confirmation prompt is never mistaken for a completed deletion.
+
+<details>
+<summary>Parameters</summary>
+
+**create_account** - `name` (required) | `offBudget` (optional, default false) | `initialBalance` (optional): human amount, creates the "Starting Balance" transaction. (Actual models accounts as on/off-budget only, so there is no account `type`.)
+
+**delete_account** - `account` (required): name or ID | `confirm` (required to delete): must be `true` | `confirm_name` (required to delete): the account's exact name
+
+</details>
+
+### Maintenance (1)
+
+| Tool | Description | Example prompt |
+|------|-------------|----------------|
+| `repair_sync` | Repair an out-of-sync budget | "Repair the sync, everything is failing" |
+
+> If tools start failing with a sync error, the budget's sync state is
+> inconsistent with the server. `repair_sync` rebuilds that state without
+> touching budget data. Note that deleting the local `ACTUAL_DATA_DIR` does
+> *not* fix this — the inconsistency is in the sync state, not the cache.
+
+<details>
+<summary>Parameters</summary>
+
+**repair_sync** - no parameters
 
 </details>
 

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerCreateCategoryGroup(server: McpServer): void {
   server.tool(
@@ -24,7 +25,7 @@ export function registerCreateCategoryGroup(server: McpServer): void {
           }],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
       }
     },

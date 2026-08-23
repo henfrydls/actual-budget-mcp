@@ -17,7 +17,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { resolveAccountId, resolveCategoryId, resolveCategoryGroupId, resolvePayeeId } from '../resolvers.js';
+import { resolveAccountId, resolveCategoryId, resolveCategoryGroupId, resolvePayeeId, resolvePayeeName } from '../resolvers.js';
 
 describe('resolveAccountId', () => {
   beforeEach(() => {
@@ -209,5 +209,37 @@ describe('resolvePayeeId', () => {
       expect(e.message).toContain('DGII');
       expect(e.message).not.toContain('Transfer');
     }
+  });
+});
+
+describe('resolvePayeeName', () => {
+  beforeEach(() => {
+    vi.mocked(api.getPayees).mockResolvedValue([
+      { id: 'pay-1', name: 'Sirena' },
+      // Actual stores an account's transfer payee with an empty name.
+      { id: 'transfer-1', name: '', transfer_acct: 'acct-1' },
+    ] as any);
+  });
+
+  it('matches a payee by name, case-insensitively', async () => {
+    expect(await resolvePayeeName('sirena')).toBe('pay-1');
+  });
+
+  it('returns undefined for an unknown name', async () => {
+    expect(await resolvePayeeName('Nobody')).toBeUndefined();
+  });
+
+  it('never resolves a blank name to a transfer payee', async () => {
+    // A blank name matching a transfer payee would silently turn a plain
+    // transaction into a one-sided transfer.
+    expect(await resolvePayeeName('')).toBeUndefined();
+  });
+
+  it('ignores transfer payees when matching', async () => {
+    vi.mocked(api.getPayees).mockResolvedValue([
+      { id: 'transfer-2', name: 'Savings', transfer_acct: 'acct-2' },
+    ] as any);
+
+    expect(await resolvePayeeName('Savings')).toBeUndefined();
   });
 });

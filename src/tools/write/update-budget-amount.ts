@@ -6,6 +6,7 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveMonth } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerUpdateBudgetAmount(server: McpServer): void {
   server.tool(
@@ -62,7 +63,7 @@ export function registerUpdateBudgetAmount(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

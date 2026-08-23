@@ -15,7 +15,19 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { getAccountsReport } from '../read/list-accounts.js';
+import { getAccountsReport, registerListAccounts } from '../read/list-accounts.js';
+
+/** Capture the handler a tool registers so the catch block can be exercised. */
+function captureHandler(register: (server: any) => void): (args: any) => Promise<any> {
+  let handler: ((args: any) => Promise<any>) | undefined;
+  register({
+    tool: (...args: unknown[]) => {
+      handler = args[args.length - 1] as (args: any) => Promise<any>;
+    },
+  });
+  if (!handler) throw new Error('tool did not register a handler');
+  return handler;
+}
 
 describe('getAccountsReport (#21 full balance, not as-of-today)', () => {
   beforeEach(() => {
@@ -50,5 +62,27 @@ describe('getAccountsReport (#21 full balance, not as-of-today)', () => {
     const text = await getAccountsReport();
     expect(text).toContain('Open');
     expect(text).not.toContain('Gone');
+  });
+});
+
+describe('list_accounts error reporting (#40)', () => {
+  it('does not report a bare "Error:" when the API throws an empty error', async () => {
+    vi.mocked(api.getAccounts).mockRejectedValue(new Error(''));
+    const handler = captureHandler(registerListAccounts);
+
+    const result = await handler({});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text.trim()).not.toBe('Error:');
+    expect(result.content[0].text).toMatch(/log|stderr/i);
+  });
+
+  it('explains how to recover when the budget is out-of-sync', async () => {
+    vi.mocked(api.getAccounts).mockRejectedValue(new Error('SyncError: out-of-sync'));
+    const handler = captureHandler(registerListAccounts);
+
+    const result = await handler({});
+
+    expect(result.content[0].text).toMatch(/repair/i);
   });
 });
