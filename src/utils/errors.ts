@@ -32,10 +32,35 @@ const VERSION_MISMATCH_HELP =
   '@actual-app/api dependency to matching versions. Repairing the sync state will ' +
   'not fix a version mismatch.';
 
+/**
+ * Best-effort readable text for anything that can be thrown.
+ *
+ * `String(value)` on a plain object yields "[object Object]", which hides the
+ * failure as effectively as an empty message — and Actual does throw plain
+ * objects. So prefer an explicit `message`, then fall back to serialising the
+ * object.
+ */
+function readable(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error === null || error === undefined) return '';
+  if (typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim() !== '') return message;
+    try {
+      const json = JSON.stringify(error);
+      // JSON.stringify returns undefined for e.g. a lone function.
+      if (json && json !== '{}') return json;
+    } catch {
+      /* circular or otherwise unserialisable — fall through */
+    }
+    return '';
+  }
+  return String(error);
+}
+
 function haystack(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error ?? '');
   const reason = (error as { reason?: unknown } | null)?.reason;
-  return `${message} ${String(reason ?? '')}`;
+  return `${readable(error)} ${String(reason ?? '')}`;
 }
 
 /**
@@ -50,6 +75,6 @@ export function describeError(error: unknown): string {
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
   if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP;
 
-  const message = error instanceof Error ? error.message : String(error ?? '');
+  const message = readable(error);
   return message.trim() === '' ? EMPTY_ERROR_HINT : message;
 }

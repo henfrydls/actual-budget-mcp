@@ -52,4 +52,21 @@ describe('describeError (#40 never surface an empty error)', () => {
   it('names the repair tool when out-of-sync is reported explicitly', () => {
     expect(describeError(new Error('SyncError: out-of-sync'))).toMatch(/repair_sync/);
   });
+
+  // String(someObject) is "[object Object]", which hides the failure just as
+  // effectively as an empty message. Actual throws plain objects in places.
+  it('never returns [object Object] for a thrown plain object', () => {
+    const described = describeError({ code: 'EPERM', detail: 'nope' });
+
+    expect(described).not.toContain('[object Object]');
+    expect(described).toContain('EPERM');
+  });
+
+  it('prefers a message property when the thrown value is not an Error', () => {
+    expect(describeError({ message: 'budget is locked' })).toContain('budget is locked');
+  });
+
+  it('still detects out-of-sync inside a thrown plain object', () => {
+    expect(describeError({ reason: 'out-of-sync' })).toMatch(/repair_sync/);
+  });
 });
