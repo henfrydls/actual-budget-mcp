@@ -56,6 +56,9 @@
     "vitest": "^3.0.0"
   },
   "overrides": {
-    "fast-uri": "^3.1.2"
+    "adm-zip": "^0.6.0",
+    "hono": "^4.13.3",
+    "ip-address": "^10.5.0",
+    "fast-uri": "^3.1.5"
   }
 }

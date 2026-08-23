@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export interface CreateTransactionInput {
   account: string;
@@ -166,7 +167,7 @@ export function registerCreateTransaction(server: McpServer): void {
         const lines = await createTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

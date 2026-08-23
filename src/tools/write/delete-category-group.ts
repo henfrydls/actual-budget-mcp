@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveCategoryGroupId, resolveCategoryId } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerDeleteCategoryGroup(server: McpServer): void {
   server.tool(
@@ -36,7 +37,7 @@ export function registerDeleteCategoryGroup(server: McpServer): void {
           }],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
       }
     },

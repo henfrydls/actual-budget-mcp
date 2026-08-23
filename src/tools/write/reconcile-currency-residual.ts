@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { amountToCents, centsToAmount, formatMoney } from '../../utils/money.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { createTransaction } from './create-transaction.js';
+import { describeError } from '../../utils/errors.js';
 
 export interface ReconcileResidualInput {
   account: string;
@@ -88,7 +89,7 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         const lines = await reconcileCurrencyResidual(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

@@ -29,6 +29,9 @@ import { registerCreateTransfer } from './write/create-transfer.js';
 import { registerUpdateTransaction } from './write/update-transaction.js';
 import { registerDeleteTransaction } from './write/delete-transaction.js';
 import { registerRunBankSync } from './write/run-bank-sync.js';
+import { registerRepairSync } from './write/repair-sync.js';
+import { registerCreateAccount } from './write/create-account.js';
+import { registerDeleteAccount } from './write/delete-account.js';
 import { registerCreateCategory } from './write/create-category.js';
 import { registerUpdateCategory } from './write/update-category.js';
 import { registerDeleteCategory } from './write/delete-category.js';
@@ -70,6 +73,9 @@ export function registerAllTools(server: McpServer): void {
   registerUpdateTransaction(server);
   registerDeleteTransaction(server);
   registerRunBankSync(server);
+  registerRepairSync(server);
+  registerCreateAccount(server);
+  registerDeleteAccount(server);
 
   // Category CRUD
   registerCreateCategory(server);

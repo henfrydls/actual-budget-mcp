@@ -77,11 +77,22 @@ export async function resolveCategoryId(nameOrId: string): Promise<string> {
   return cats[0].id;
 }
 
+/**
+ * Find a payee id by exact name, or undefined when there is no such payee.
+ *
+ * Transfer payees are excluded: Actual stores them with an empty name and a
+ * `transfer_acct`, so a blank (or account-named) lookup would otherwise return
+ * one and silently turn a plain transaction into a one-sided transfer.
+ */
 export async function resolvePayeeName(name: string): Promise<string | undefined> {
+  const lower = name.trim().toLowerCase();
+  if (lower === '') return undefined;
+
   await ensureConnection();
   const payees = await api.getPayees();
-  const lower = name.toLowerCase();
-  const match = payees.find((p) => p.name.toLowerCase() === lower);
+  const match = payees.find(
+    (p) => !p.transfer_acct && p.name.toLowerCase() === lower,
+  );
   return match?.id;
 }
 

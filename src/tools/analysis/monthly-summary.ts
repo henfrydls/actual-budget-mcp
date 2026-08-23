@@ -6,6 +6,7 @@ import { formatMoney, centsToAmount } from '../../utils/money.js';
 import { resolveMonth, getMonthRange } from '../../utils/dates.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerMonthlySummary(server: McpServer): void {
   server.tool(
@@ -67,7 +68,7 @@ export function registerMonthlySummary(server: McpServer): void {
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

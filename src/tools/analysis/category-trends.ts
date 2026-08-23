@@ -7,6 +7,7 @@ import { resolveMonth, getMonthRange } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerCategoryTrends(server: McpServer): void {
   server.tool(
@@ -36,7 +37,7 @@ export function registerCategoryTrends(server: McpServer): void {
           return await topCategoryTrends(monthRange, monthCount);
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -81,7 +82,7 @@ export function registerCreateTransfer(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

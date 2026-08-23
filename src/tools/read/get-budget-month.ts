@@ -6,6 +6,7 @@ import { formatMoney } from '../../utils/money.js';
 import { resolveMonth } from '../../utils/dates.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerGetBudgetMonth(server: McpServer): void {
   server.tool(
@@ -68,7 +69,7 @@ export function registerGetBudgetMonth(server: McpServer): void {
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

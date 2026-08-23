@@ -3,6 +3,7 @@
 import 'dotenv/config';
 import * as api from '@actual-app/api';
 import { formatMoney } from './utils/money.js';
+import { describeError } from './utils/errors.js';
 
 async function testConnection() {
   const { ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_BUDGET_ID, ACTUAL_ENCRYPTION_PASSWORD, ACTUAL_DATA_DIR } = process.env;
@@ -95,8 +96,11 @@ async function testConnection() {
 
     await api.shutdown();
   } catch (error) {
+    // #40: keep the raw message for the classification below, but report the
+    // described one — this diagnostic is what a user runs when the server is
+    // broken, and the most common failure throws an empty Error.
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`\nError: ${message}`);
+    console.error(`\nError: ${describeError(error)}`);
 
     if (message.includes('fetch') || message.includes('ECONNREFUSED')) {
       console.error('\nCould not connect to the server. Check that:');

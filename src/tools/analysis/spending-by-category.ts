@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { formatMoney, centsToAmount } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
+import { describeError } from '../../utils/errors.js';
 
 export function registerSpendingByCategory(server: McpServer): void {
   server.tool(
@@ -109,7 +110,7 @@ export function registerSpendingByCategory(server: McpServer): void {
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,
