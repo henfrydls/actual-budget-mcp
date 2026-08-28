@@ -52,7 +52,8 @@ describe('createTransaction (#26 explicit category must win)', () => {
     });
     // The fix: re-find the created txn and force the caller's category
     expect(api.updateTransaction).toHaveBeenCalledOnce();
-    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1' });
+    // #44: the amount is re-sent so the update can never reset it to 0
+    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1', amount: -10000 });
   });
 
   it('does not call updateTransaction when the stored category already matches', async () => {
@@ -88,6 +89,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
     await createTransaction({ account: 'Checking', amount: -100, category: 'Alimentación', date: '2026-06-05' });
 
     expect(api.updateTransaction).toHaveBeenCalledOnce();
-    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1' });
+    // #44: the amount is re-sent so the update can never reset it to 0
+    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1', amount: -10000 });
   });
 });

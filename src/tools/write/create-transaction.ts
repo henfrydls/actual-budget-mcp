@@ -6,6 +6,7 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { updatePreservingChildAmount } from '../../utils/transactions.js';
 
 export interface CreateTransactionInput {
   account: string;
@@ -101,7 +102,9 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     const created = after.filter((t) => !beforeIds!.has(t.id));
     for (const t of created) {
       if (t.category !== categoryId) {
-        await api.updateTransaction(t.id, { category: categoryId });
+        // #44: pass the amount we already have, so the update can never reset
+        // it (no extra lookup needed — these rows come from getTransactions).
+        await updatePreservingChildAmount(t.id, { category: categoryId, amount: t.amount });
       }
     }
     if (created.length === 0) {
