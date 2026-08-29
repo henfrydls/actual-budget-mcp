@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveCategoryId, resolvePayeeName } from '../../utils/resolvers.js';
+import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { describeError } from '../../utils/errors.js';
 
 export interface UpdateTransactionInput {
@@ -85,18 +86,9 @@ export async function updateTransactionFields(input: UpdateTransactionInput): Pr
     throw new Error('No fields to update. Provide at least one field to change.');
   }
 
-  // #25: preserve a sub-transaction's amount when the caller did not change it.
-  if (updates.amount === undefined) {
-    const result = await api.runQuery(
-      api.q('transactions').filter({ id: input.transaction_id }).select(['id', 'amount', 'is_child']),
-    );
-    const txn = (result as any)?.data?.[0];
-    if (txn?.is_child) {
-      updates.amount = txn.amount;
-    }
-  }
-
-  await api.updateTransaction(input.transaction_id, updates as any);
+  // #25/#44: the guard that preserves a sub-transaction's amount lives in
+  // updatePreservingChildAmount so every write path shares it.
+  await updatePreservingChildAmount(input.transaction_id, updates);
   await api.sync();
 
   return [`Transaction ${input.transaction_id} updated:`, ...changes.map((c) => `  ${c}`)];
