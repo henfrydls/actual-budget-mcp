@@ -4,6 +4,7 @@ import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerAllTools } from './tools/index.js';
+import { isReadOnly } from './utils/mode.js';
 import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
 import { ensureConnection, shutdown } from './connection.js';
@@ -68,6 +69,14 @@ const server = new McpServer({
 registerAllTools(server);
 registerAllPrompts(server);
 registerAllResources(server);
+
+if (isReadOnly()) {
+  // stderr, never stdout: stdout carries JSON-RPC.
+  console.error(
+    '[actual-budget-mcp] read-only mode: write tools are hidden from discovery. ' +
+      'Unset ACTUAL_READ_ONLY to enable them.',
+  );
+}
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

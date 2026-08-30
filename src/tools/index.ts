@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { isReadOnly } from '../utils/mode.js';
 
 // Read tools
 import { registerListAccounts } from './read/list-accounts.js';
@@ -63,6 +64,19 @@ export function registerAllTools(server: McpServer): void {
   registerMonthlySummary(server);
   registerBalanceHistory(server);
 
+  // Reads that live next to their write siblings below, registered here so
+  // read-only mode keeps them.
+  registerGetRules(server);
+
+  // repair_sync stays available even read-only: it repairs sync state rather
+  // than budget data, and hiding it would leave a desynced budget with no way
+  // out — the situation that motivated #41.
+  registerRepairSync(server);
+
+  // Everything past this point writes. Read-only mode does not register these
+  // at all, so they never reach tool discovery.
+  if (isReadOnly()) return;
+
   // Write
   registerCreateTransaction(server);
   registerCreateSplitTransaction(server);
@@ -73,7 +87,6 @@ export function registerAllTools(server: McpServer): void {
   registerUpdateTransaction(server);
   registerDeleteTransaction(server);
   registerRunBankSync(server);
-  registerRepairSync(server);
   registerCreateAccount(server);
   registerDeleteAccount(server);
 
@@ -91,7 +104,6 @@ export function registerAllTools(server: McpServer): void {
   registerDeletePayee(server);
 
   // Rule CRUD
-  registerGetRules(server);
   registerCreateRule(server);
   registerDeleteRule(server);
 }
