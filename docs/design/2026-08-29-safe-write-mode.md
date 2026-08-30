@@ -1,6 +1,6 @@
 # Safe write mode
 
-Status: approved, not yet implemented
+Status: implemented in 0.8.0
 Target release: 0.8.0 (breaking)
 
 ## Problem
@@ -63,7 +63,10 @@ Two deliberate exceptions:
 - **`run_bank_sync` is hidden.** It pulls new transactions in, which is a write.
 
 Concretely: 22 of the 23 write tools are hidden, leaving 15 tools exposed
-(9 read + 5 analysis + `repair_sync`) instead of 37.
+(the 9 read tools + 5 analysis tools + `repair_sync`) instead of 37. Note that
+two of those reads — `balance_history` and `get_rules` — are registered
+alongside their write siblings in the aggregator, so they have to be moved above
+the cutoff rather than left where they sit.
 
 On startup the server writes one line to **stderr** (never stdout, which carries
 JSON-RPC) naming the mode and how many write tools are hidden.
