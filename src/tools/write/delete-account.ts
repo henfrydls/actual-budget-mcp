@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
+import { requireConfirmation } from '../../utils/confirm.js';
 
 // Same trick as list-accounts: a far-future cutoff yields the full balance
 // instead of only transactions dated up to today (#21).
@@ -65,19 +66,12 @@ export async function deleteAccountGuarded(
   const transactions = await api.getTransactions(accountId, ALL_TIME_START, ALL_TIME_END);
   const count = transactions.length;
 
-  // Guardrail 2: the exact name must be echoed back.
-  if (input.confirm && input.confirm_name !== undefined && input.confirm_name !== account.name) {
-    throw new Error(
-      `confirm_name "${input.confirm_name}" does not match the account name "${account.name}". ` +
-        'Nothing was deleted.',
-    );
-  }
-
-  // Guardrail 1: preview until both confirmations are present.
-  if (!input.confirm || input.confirm_name === undefined) {
-    const lines = [
-      'Nothing was deleted. Review what this would destroy:',
-      `  Account:      ${account.name}`,
+  // Guardrails 1 and 2 (preview until confirmed, and the exact name echoed
+  // back) live in the shared helper so every destructive tool enforces them
+  // the same way.
+  const confirmation = requireConfirmation({
+    subject: `Account:      ${account.name}`,
+    losses: [
       `  Balance:      ${formatMoney(balance)}`,
       `  Transactions: ${count} (deleted along with the account)`,
       '',
@@ -85,15 +79,17 @@ export async function deleteAccountGuarded(
       '  - Any bank-sync link on this account is unlinked.',
       '  - Transfers pointing here lose their payee and transfer link in the',
       '    other account, leaving orphaned transactions there.',
-      '',
-      // Guardrail 3: offer the reversible option first.
-      'Consider closing the account instead — in Actual, closing retires an',
+    ],
+    // Guardrail 3: offer the reversible option first.
+    alternative:
+      'Consider closing the account instead — in Actual, closing retires an\n' +
       'account while keeping its history, and it can be reopened later.',
-      '',
-      'To really delete it, call again with:',
-      `  confirm: true, confirm_name: "${account.name}"`,
-    ];
-    return { deleted: false, lines };
+    confirmName: account.name,
+    input,
+  });
+
+  if (!confirmation.confirmed) {
+    return { deleted: false, lines: confirmation.lines };
   }
 
   await api.deleteAccount(accountId);
