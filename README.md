@@ -139,6 +139,7 @@ This will connect to your Actual Budget server and confirm everything is configu
 | `ACTUAL_BUDGET_ID` | Yes | Budget Sync ID (found in Settings > Show advanced settings) |
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
 | `ACTUAL_DATA_DIR` | No | Cache directory (default: `/tmp/actual-budget-mcp-data`) |
+| `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
 
 ### Finding your Budget ID
 
@@ -146,6 +147,41 @@ This will connect to your Actual Budget server and confirm everything is configu
 2. Go to **Settings** (gear icon)
 3. Click **Show advanced settings**
 4. Copy the **Sync ID**
+
+## Safety
+
+Two things protect your budget from an agent acting on a vague instruction.
+
+### Deletes preview before they delete
+
+Every delete tool refuses to destroy anything on the first call. It reports what
+would be lost and stops there. Deleting takes a second, deliberate call:
+
+```
+delete_category(category: "Groceries")
+  → preview: transactions affected, budget and rollover warning. Nothing deleted.
+
+delete_category(category: "Groceries", confirm: true, confirm_name: "Groceries")
+  → deleted
+```
+
+Tools that find their target **by name** — `delete_account`, `delete_category`,
+`delete_category_group`, `delete_payee` — also require `confirm_name` with the
+exact name. That is where deleting the wrong thing actually happens: asking for
+"Adicionales" can resolve to "Ingresos Adicionales". Tools that take an exact id
+— `delete_transaction`, `delete_rule` — need only `confirm: true`.
+
+### Read-only mode
+
+Set `ACTUAL_READ_ONLY=1` and the server exposes only the 15 read, analysis and
+repair tools. The write tools are **not registered at all**, so they never
+appear in tool discovery — an agent cannot be talked into calling something it
+cannot see.
+
+`repair_sync` stays available on purpose: it repairs sync state rather than
+budget data, and hiding it would leave a desynced budget with no way to recover.
+
+Writes are enabled by default. Read-only is opt-in.
 
 ## Tools (37)
 
@@ -210,7 +246,7 @@ This will connect to your Actual Budget server and confirm everything is configu
 | `create_transaction` | Add a new transaction | "I spent 500 on groceries from Cartera today" |
 | `create_split_transaction` | One charge across several categories | "Split that 3,000 charge: 2,000 groceries, 1,000 household" |
 | `update_transaction` | Edit an existing transaction | "Change the amount on that transaction to 600" |
-| `delete_transaction` | Remove a transaction | "Delete that test transaction" |
+| `delete_transaction` | Remove a transaction (previews first, see [Safety](#safety)) | "Delete that test transaction" |
 | `update_budget_amount` | Change a budget amount | "Set my food budget to 15,000 for this month" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
@@ -246,10 +282,10 @@ This will connect to your Actual Budget server and confirm everything is configu
 |------|-------------|----------------|
 | `create_category` | Create a new category | "Create a category called Gym in Gastos Variables" |
 | `update_category` | Rename or hide a category | "Rename Gym to Fitness" |
-| `delete_category` | Delete a category | "Delete the Fitness category" |
+| `delete_category` | Delete a category (previews first, see [Safety](#safety)) | "Delete the Fitness category" |
 | `create_category_group` | Create a new group | "Create a category group called Health" |
 | `update_category_group` | Rename or hide a group | "Rename the Health group to Wellness" |
-| `delete_category_group` | Delete a group | "Delete the Wellness group" |
+| `delete_category_group` | Delete a group (previews first, see [Safety](#safety)) | "Delete the Wellness group" |
 
 <details>
 <summary>Parameters</summary>
@@ -258,13 +294,13 @@ This will connect to your Actual Budget server and confirm everything is configu
 
 **update_category** - `category` (required): name or ID | `name` (optional): new name | `hidden` (optional): true/false
 
-**delete_category** - `category` (required) | `transfer_to` (optional): category to move transactions to
+**delete_category** - `category` (required) | `transfer_to` (optional): category to move transactions to | `confirm` + `confirm_name` (required to delete)
 
 **create_category_group** - `name` (required)
 
 **update_category_group** - `group` (required): name or ID | `name` (optional): new name | `hidden` (optional): true/false
 
-**delete_category_group** - `group` (required) | `transfer_to` (required): category for orphaned transactions
+**delete_category_group** - `group` (required) | `transfer_to` (required): category for orphaned transactions | `confirm` + `confirm_name` (required to delete)
 
 </details>
 
@@ -274,9 +310,9 @@ This will connect to your Actual Budget server and confirm everything is configu
 |------|-------------|----------------|
 | `create_payee` | Create a new payee | "Create a payee called Netflix" |
 | `update_payee` | Rename a payee | "Rename Netflix to Netflix Premium" |
-| `delete_payee` | Delete a payee | "Delete the Netflix Premium payee" |
+| `delete_payee` | Delete a payee (previews first, see [Safety](#safety)) | "Delete the Netflix Premium payee" |
 | `create_rule` | Create a transaction rule | "Create a rule: when payee contains Amazon, set category to Shopping" |
-| `delete_rule` | Delete a rule | "Delete that rule" |
+| `delete_rule` | Delete a rule (previews first, see [Safety](#safety)) | "Delete that rule" |
 
 <details>
 <summary>Parameters</summary>
@@ -285,11 +321,11 @@ This will connect to your Actual Budget server and confirm everything is configu
 
 **update_payee** - `payee` (required): name or ID | `name` (required): new name
 
-**delete_payee** - `payee` (required): name or ID
+**delete_payee** - `payee` (required): name or ID | `confirm` + `confirm_name` (required to delete)
 
 **create_rule** - `condition_field` (required): payee, category, amount, notes | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required) | `action_field` (required): category, payee, notes | `action_value` (required) | `stage` (optional)
 
-**delete_rule** - `rule_id` (required)
+**delete_rule** - `rule_id` (required) | `confirm` (required to delete)
 
 </details>
 
