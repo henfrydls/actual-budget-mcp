@@ -111,7 +111,44 @@ Add this to your VS Code `settings.json`:
 }
 ```
 
-### Option 5: From source (for contributors)
+### Option 5: Docker
+
+The image speaks stdio like every other option, so your client starts the
+container and owns its lifetime:
+
+```json
+{
+  "mcpServers": {
+    "actual-budget-mcp": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--add-host=host.docker.internal:host-gateway",
+        "-v", "actual-budget-mcp-data:/data",
+        "-e", "ACTUAL_SERVER_URL",
+        "-e", "ACTUAL_PASSWORD",
+        "-e", "ACTUAL_BUDGET_ID",
+        "ghcr.io/henfrydls/actual-budget-mcp:latest"
+      ],
+      "env": {
+        "ACTUAL_SERVER_URL": "http://host.docker.internal:5006",
+        "ACTUAL_PASSWORD": "your-password",
+        "ACTUAL_BUDGET_ID": "your-budget-sync-id"
+      }
+    }
+  }
+}
+```
+
+Two things that bite everyone once:
+
+- **Inside the container, `localhost` is the container.** Your Actual server is
+  not there. `host.docker.internal` (with the `--add-host` flag above, which is
+  what makes it resolve on Linux) reaches the host instead.
+- **Mount `/data`.** That is the budget cache. Without a volume, every start
+  re-downloads your entire budget from the server.
+
+### Option 6: From source (for contributors)
 
 ```bash
 git clone https://github.com/henfrydls/actual-budget-mcp.git

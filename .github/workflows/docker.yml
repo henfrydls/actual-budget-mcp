@@ -1,0 +1,86 @@
+name: Docker
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # pushing to GHCR on release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built and loaded locally first so the smoke test below runs against the
+      # exact image that would be published, before anything is published.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: actual-budget-mcp:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A container that builds but cannot answer `initialize` is useless, and
+      # nothing else in CI would catch it. Deliberately points at a server that
+      # does not exist: startup must survive a failed connection, which is the
+      # regression #39 introduced and process-guards.ts fixed.
+      - name: Smoke test the MCP handshake
+        run: |
+          request='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0"}}}'
+          response=$(printf '%s\n' "$request" | timeout 60 docker run -i --rm \
+            -e ACTUAL_SERVER_URL=http://127.0.0.1:1 \
+            -e ACTUAL_PASSWORD=ci \
+            -e ACTUAL_BUDGET_ID=ci \
+            actual-budget-mcp:ci 2>/dev/null || true)
+          echo "$response"
+          echo "$response" | grep -q '"serverInfo"' || {
+            echo "::error::the image did not answer the MCP initialize handshake"
+            exit 1
+          }
+
+      - name: Log in to GHCR
+        if: github.event_name == 'release'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags and labels
+        if: github.event_name == 'release'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Push to GHCR
+        if: github.event_name == 'release'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

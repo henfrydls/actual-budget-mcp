@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.github
+docs
+scripts
+coverage
+.env
+.mcp.json
+actual-data
+*.tgz
+*.local.md
+*.gif
