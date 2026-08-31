@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/actual-budget-mcp)](https://www.npmjs.com/package/actual-budget-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js->=22-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js->=20-green.svg)](https://nodejs.org/)
 
 Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude — ask where the money went, get real analysis back, and let it write without holding your breath.
 
@@ -24,7 +24,7 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
-- [Node.js](https://nodejs.org/) 22 or higher (see [Node.js requirement](#nodejs-requirement))
+- [Node.js](https://nodejs.org/) 20 or higher (see [Node.js requirement](#nodejs-requirement))
 
 ## Quick Start
 
@@ -511,9 +511,11 @@ Compared to other Actual Budget MCP servers:
 ### Node.js Requirement
 
 **"ReferenceError: navigator is not defined"**
-- `@actual-app/api` (including 26.6) references the `navigator` global, which is
-  only available on Node.js 21+. On Node.js 20 or earlier it throws at import.
-- **Solution:** Use Node.js 22 or higher.
+- `@actual-app/api` referenced the `navigator` global through 26.6. That global
+  only exists on Node.js 21+, so importing the library on Node.js 20 threw
+  before the server could start. 26.8 dropped the reference, and this server
+  has supported Node.js 20 since 0.8.1.
+- **Solution:** Upgrade to actual-budget-mcp 0.8.1 or later, or run Node.js 22.
 
 ### Node Version Managers (fnm, nvm, volta)
 
