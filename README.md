@@ -6,6 +6,8 @@
 
 Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude — ask where the money went, get real analysis back, and let it write without holding your breath.
 
+![Asking a budget where the money went, and a delete that stops to ask for confirmation](https://raw.githubusercontent.com/henfrydls/actual-budget-mcp/master/docs/demo.gif)
+
 ## Features
 
 - **Real analysis, not just lookups** - Projections, category trends, budget vs actual, and month summaries
