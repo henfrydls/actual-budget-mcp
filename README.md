@@ -4,13 +4,15 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js->=22-green.svg)](https://nodejs.org/)
 
-Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude, so you can ask questions, create transactions, and analyze spending in natural conversation.
+Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude — ask where the money went, get real analysis back, and let it write without holding your breath.
 
 ## Features
 
+- **Real analysis, not just lookups** - Projections, category trends, budget vs actual, and month summaries
+- **Writes you can trust** - Every delete previews what it will remove and waits for you to confirm; `ACTUAL_READ_ONLY=1` hides the write tools from the model entirely ([Safety](#safety))
+- **Multi-currency that survives reality** - Splits and residual reconciliation, not just a currency symbol
 - **Ask about your budget in plain language** - "How much did I spend on food this month?" or "Am I over budget on anything?"
 - **Create and manage transactions** - Add expenses, transfers, and edits without opening the app
-- **Get spending insights** - Projections, trends, and budget vs actual comparisons
 - **Manage categories, payees, and rules** - Full CRUD without opening the app
 - **Use names, not IDs** - Say "Cartera" instead of `a1b2c3d4-...`, with helpful suggestions if ambiguous
 - **Natural dates in English and Spanish** - "last month", "este mes", "hace 3 meses", "yesterday"
