@@ -3,6 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/actual-budget-mcp)](https://www.npmjs.com/package/actual-budget-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js->=20-green.svg)](https://nodejs.org/)
+[![Glama score](https://glama.ai/mcp/servers/henfrydls/actual-budget-mcp/badges/score.svg)](https://glama.ai/mcp/servers/henfrydls/actual-budget-mcp)
 
 Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude — ask where the money went, get real analysis back, and let it write without holding your breath.
 
