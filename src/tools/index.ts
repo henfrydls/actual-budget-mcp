@@ -44,6 +44,7 @@ import { registerUpdatePayee } from './write/update-payee.js';
 import { registerDeletePayee } from './write/delete-payee.js';
 import { registerGetRules } from './read/get-rules.js';
 import { registerCreateRule } from './write/create-rule.js';
+import { registerUpdateRule } from './write/update-rule.js';
 import { registerDeleteRule } from './write/delete-rule.js';
 
 export function registerAllTools(server: McpServer): void {
@@ -105,5 +106,6 @@ export function registerAllTools(server: McpServer): void {
 
   // Rule CRUD
   registerCreateRule(server);
+  registerUpdateRule(server);
   registerDeleteRule(server);
 }
