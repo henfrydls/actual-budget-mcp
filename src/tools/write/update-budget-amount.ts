@@ -11,7 +11,10 @@ import { describeError } from '../../utils/errors.js';
 export function registerUpdateBudgetAmount(server: McpServer): void {
   server.tool(
     'update_budget_amount',
-    'Set the budgeted amount for a category in a specific month.',
+    'Set how much is budgeted to a category for one month — the "assign" step of '
+      + 'zero-based budgeting. This changes the plan, never the transactions: spending is '
+      + 'unaffected, and the category balance becomes this amount minus what was spent. '
+      + 'Each month is budgeted separately, so setting one month leaves the others alone.',
     {
       category: z.string().describe('Category name or ID'),
       amount: z

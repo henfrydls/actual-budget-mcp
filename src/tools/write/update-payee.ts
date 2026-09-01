@@ -8,7 +8,9 @@ import { describeError } from '../../utils/errors.js';
 export function registerUpdatePayee(server: McpServer): void {
   server.tool(
     'update_payee',
-    'Rename a payee.',
+    'Rename a payee, on every transaction that uses it at once. Use this to fix a '
+      + 'messy imported name rather than editing transactions one by one. Renaming to a '
+      + 'name that already exists does not merge the two payees.',
     {
       payee: z.string().describe('Payee name or ID'),
       name: z.string().describe('New name for the payee'),

@@ -10,7 +10,10 @@ import { updatePreservingChildAmount } from '../../utils/transactions.js';
 export function registerRecategorizeTransaction(server: McpServer): void {
   server.tool(
     'recategorize_transaction',
-    'Change the category of an existing transaction.',
+    'Change which category a transaction counts against, leaving its amount, date and '
+      + 'payee untouched. This is the tool for fixing a miscategorised expense. It is '
+      + 'safe on a split child: the amount is preserved, so the split keeps adding up to '
+      + 'its parent. To change anything other than the category, use update_transaction.',
     {
       transaction_id: z.string().describe('Transaction ID'),
       category: z.string().describe('New category name or ID'),

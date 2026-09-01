@@ -8,7 +8,10 @@ import { describeError } from '../../utils/errors.js';
 export function registerUpdateCategoryGroup(server: McpServer): void {
   server.tool(
     'update_category_group',
-    'Rename or hide/unhide a category group.',
+    'Rename a category group, or hide it with hidden: true. Hiding retires the group '
+      + 'without destroying anything and can be undone, so prefer it to '
+      + 'delete_category_group, which also deletes every category inside it along with '
+      + 'their budget history.',
     {
       group: z.string().describe('Category group name or ID'),
       name: z.string().optional().describe('New name for the group'),

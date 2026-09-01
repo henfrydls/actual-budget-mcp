@@ -10,7 +10,11 @@ import { describeError } from '../../utils/errors.js';
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
     'create_transfer',
-    'Create a transfer between two accounts.',
+    'Move money between two of your own accounts, recording both sides as one linked '
+      + 'transfer. Use this instead of creating two opposite transactions by hand: only '
+      + 'a real transfer keeps the accounts reconciled and stays out of spending '
+      + 'reports, since money you move is not money you spent. A transfer takes no '
+      + 'category.',
     {
       from_account: z.string().describe('Source account name or ID'),
       to_account: z.string().describe('Destination account name or ID'),

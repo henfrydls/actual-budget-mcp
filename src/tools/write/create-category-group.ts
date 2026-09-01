@@ -7,7 +7,9 @@ import { describeError } from '../../utils/errors.js';
 export function registerCreateCategoryGroup(server: McpServer): void {
   server.tool(
     'create_category_group',
-    'Create a new category group for organizing budget categories.',
+    'Create a category group, the heading that categories are filed under (for example '
+      + '"Fixed Costs" or "Savings"). Groups hold no money themselves: they total up the '
+      + 'categories inside them. Create the group before the categories that belong to it.',
     {
       name: z.string().describe('Name for the new category group'),
     },

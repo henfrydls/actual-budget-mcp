@@ -7,7 +7,11 @@ import { describeError } from '../../utils/errors.js';
 export function registerGetRules(server: McpServer): void {
   server.tool(
     'get_rules',
-    'List all transaction rules showing their conditions and actions.',
+    'List the automation rules that Actual applies to transactions as they are '
+      + 'imported or created, with the conditions that trigger each one and the actions '
+      + 'it takes. Read this before creating a rule, to see whether one already covers '
+      + 'the case, and when a transaction gets a category nobody assigned by hand — a '
+      + 'rule is usually the reason.',
     {},
     { readOnlyHint: true },
     async () => {

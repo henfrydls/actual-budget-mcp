@@ -7,7 +7,11 @@ import { describeError } from '../../utils/errors.js';
 export function registerCreatePayee(server: McpServer): void {
   server.tool(
     'create_payee',
-    'Create a new payee.',
+    'Create a payee. Payees are usually created automatically when a transaction '
+      + 'names one, so reach for this only when you need the payee to exist up front — '
+      + 'for example before writing a rule that targets it. Actual does not merge by '
+      + 'name, so calling this with a name that already exists leaves you with two '
+      + 'payees; check get_payees first.',
     {
       name: z.string().describe('Name for the new payee'),
     },

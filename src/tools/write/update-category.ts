@@ -8,7 +8,10 @@ import { describeError } from '../../utils/errors.js';
 export function registerUpdateCategory(server: McpServer): void {
   server.tool(
     'update_category',
-    'Rename or hide/unhide a budget category.',
+    'Rename a category, or hide it with hidden: true. Hiding is the non-destructive '
+      + 'way to retire a category you no longer use: it disappears from the budget while '
+      + 'its history, budgeted amounts and rollover stay intact, and it can be unhidden '
+      + 'later. Prefer it to delete_category, which destroys that history for good.',
     {
       category: z.string().describe('Category name or ID'),
       name: z.string().optional().describe('New name for the category'),
