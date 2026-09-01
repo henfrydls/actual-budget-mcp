@@ -11,6 +11,26 @@
  * is in practice a sync/load failure, that is the case the fallback speaks to.
  */
 
+import { readDataDirLock, effectiveDataDir } from './data-dir-lock.js';
+
+/**
+ * #47: two servers sharing an ACTUAL_DATA_DIR drive the budget out-of-sync, but
+ * the failure says nothing about concurrency, so the natural suspects are the
+ * credentials, the server, or the budget itself. If another live process holds
+ * the directory, say so — that is the difference between an hour of guessing
+ * and one line the user can act on.
+ */
+function contentionNote(): string {
+  const holder = readDataDirLock(effectiveDataDir());
+  if (!holder || holder.pid === process.pid) return '';
+  return (
+    ` Another actual-budget-mcp server (pid ${holder.pid}, started ${holder.startedAt}) ` +
+    `is using the same ACTUAL_DATA_DIR (${effectiveDataDir()}). Two servers sharing it ` +
+    'is what puts the budget out of sync in the first place: give each client its own ' +
+    'ACTUAL_DATA_DIR, or close the other one, or the problem will come straight back.'
+  );
+}
+
 const REPAIR_HINT =
   'Run the `repair_sync` tool to rebuild the sync state (non-destructive), or ' +
   "repair it in the Actual app under Settings > Show advanced settings. Note that " +
@@ -73,8 +93,8 @@ export function describeError(error: unknown): string {
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
-  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP;
+  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + contentionNote();
 
   const message = readable(error);
-  return message.trim() === '' ? EMPTY_ERROR_HINT : message;
+  return message.trim() === '' ? EMPTY_ERROR_HINT + contentionNote() : message;
 }

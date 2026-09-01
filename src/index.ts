@@ -11,14 +11,8 @@ import { ensureConnection, shutdown } from './connection.js';
 import { installProcessGuards } from './utils/process-guards.js';
 import { describeError } from './utils/errors.js';
 import * as api from '@actual-app/api';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
-// Read the version from package.json at runtime so it never drifts from the
-// published version. Resolves to the package root in both dev and the npm build.
-const pkg = JSON.parse(
-  readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
-) as { version: string };
+import { packageVersion } from './utils/version.js';
 
 // Redirect console.log/warn/info to stderr so they don't contaminate
 // the MCP JSON-RPC protocol on stdout. Libraries like @actual-app/api
@@ -63,7 +57,7 @@ if (process.argv.includes('--verify')) {
 
 const server = new McpServer({
   name: 'actual-budget-mcp',
-  version: pkg.version,
+  version: packageVersion,
 });
 
 registerAllTools(server);

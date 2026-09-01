@@ -1,5 +1,11 @@
 import * as api from '@actual-app/api';
 import type { ConnectionConfig } from './types.js';
+import {
+  acquireDataDirLock,
+  releaseDataDirLock,
+  effectiveDataDir,
+} from './utils/data-dir-lock.js';
+import { packageVersion } from './utils/version.js';
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
@@ -54,10 +60,24 @@ export async function ensureConnection(): Promise<void> {
 
   initializing = (async () => {
     const config = getConfig();
+    const dataDir = effectiveDataDir();
+
+    // #47: advisory only — never refuse to start. Two servers on one data dir
+    // drive the budget out-of-sync, so warn early and let describeError name
+    // the other process if something does fail later.
+    const lock = acquireDataDirLock(dataDir, packageVersion);
+    if (!lock.acquired && lock.heldBy) {
+      // stderr: stdout carries JSON-RPC.
+      console.error(
+        `[actual-budget-mcp] warning: another server (pid ${lock.heldBy.pid}) is already ` +
+          `using ${dataDir}. Sharing a data dir puts the budget out of sync — ` +
+          'give each client its own ACTUAL_DATA_DIR.',
+      );
+    }
 
     try {
       internal = await api.init({
-        dataDir: config.dataDir || '/tmp/actual-budget-mcp-data',
+        dataDir,
         serverURL: config.serverURL,
         password: config.password,
       });
@@ -145,6 +165,7 @@ export async function ensureConnection(): Promise<void> {
 export async function shutdown(): Promise<void> {
   if (!initialized) return;
   await api.shutdown();
+  releaseDataDirLock(effectiveDataDir());
   initialized = false;
   initializing = null;
   internal = null;
