@@ -1,0 +1,89 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.henfrydls/actual-budget-mcp",
+  "title": "Actual Budget",
+  "description": "Spending analysis and safe writes for Actual Budget: every delete previews and asks first.",
+  "repository": {
+    "url": "https://github.com/henfrydls/actual-budget-mcp.git",
+    "source": "github",
+    "id": "henfrydls/actual-budget-mcp"
+  },
+  "version": "0.8.1",
+  "websiteUrl": "https://actual-mcp.henfrydls.com",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "actual-budget-mcp",
+      "version": "0.8.1",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ACTUAL_SERVER_URL",
+          "description": "URL of your Actual Budget server, for example http://localhost:5006",
+          "isRequired": true
+        },
+        {
+          "name": "ACTUAL_PASSWORD",
+          "description": "Password for your Actual Budget server",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_BUDGET_ID",
+          "description": "Your budget's Sync ID, found under Settings > Show advanced settings",
+          "isRequired": true
+        },
+        {
+          "name": "ACTUAL_ENCRYPTION_PASSWORD",
+          "description": "Only needed if your budget file is end-to-end encrypted",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_READ_ONLY",
+          "description": "Set to 1 to hide every write tool from the model, exposing only reads and analysis",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_DATA_DIR",
+          "description": "Directory for the local budget cache",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/henfrydls/actual-budget-mcp",
+      "version": "0.8.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ACTUAL_SERVER_URL",
+          "description": "URL of your Actual Budget server. Inside the container localhost is the container, so use host.docker.internal",
+          "isRequired": true
+        },
+        {
+          "name": "ACTUAL_PASSWORD",
+          "description": "Password for your Actual Budget server",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_BUDGET_ID",
+          "description": "Your budget's Sync ID, found under Settings > Show advanced settings",
+          "isRequired": true
+        },
+        {
+          "name": "ACTUAL_READ_ONLY",
+          "description": "Set to 1 to hide every write tool from the model, exposing only reads and analysis",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
