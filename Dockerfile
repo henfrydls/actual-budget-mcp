@@ -30,6 +30,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 
+# Proof of ownership for the MCP registry: it reads this label off the
+# published image and requires it to match the name in server.json.
+LABEL io.modelcontextprotocol.server.name="io.github.henfrydls/actual-budget-mcp"
+
 USER node
 VOLUME ["/data"]
 
