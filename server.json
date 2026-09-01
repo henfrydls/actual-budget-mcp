@@ -56,8 +56,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/henfrydls/actual-budget-mcp",
-      "version": "0.8.2",
+      "identifier": "ghcr.io/henfrydls/actual-budget-mcp:0.8.2",
       "transport": {
         "type": "stdio"
       },
