@@ -1,0 +1,21 @@
+name: I wish it could do this
+description: Ask for something the server cannot do yet
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the situation, not the feature. It often turns out there is already a way, or a better one.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you handle it today?
+      placeholder: I open Actual and do it by hand every month.
+  - type: textarea
+    id: idea
+    attributes:
+      label: What did you have in mind?
+      description: Optional. A rough idea is fine.

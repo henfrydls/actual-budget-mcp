@@ -1,0 +1,53 @@
+name: I cannot get it running
+description: Something goes wrong between installing and getting an answer
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most setup problems are the same three or four things, and every report
+        makes the next person's install easier. No logs or debugging required.
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where does it stop working?
+      options:
+        - Installing the package
+        - Adding it to my MCP client
+        - Finding my budget's Sync ID
+        - It connects but says the budget was not found
+        - It connects but a tool fails
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What were you trying to do, and what did you expect?
+      placeholder: I asked how much I spent on groceries last month and expected a list.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: Paste the error if there is one. Redact anything you would rather not share.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options: ["npx", "Docker image", "From source", "Not sure"]
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Which MCP client?
+      placeholder: Claude Desktop, Claude Code, Cursor, VS Code...
+  - type: input
+    id: versions
+    attributes:
+      label: Versions, if you know them
+      placeholder: actual-budget-mcp 0.8.2, Actual server 26.8, Node 22

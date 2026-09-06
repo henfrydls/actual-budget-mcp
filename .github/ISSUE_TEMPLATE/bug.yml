@@ -1,0 +1,35 @@
+name: Something behaves wrong
+description: A tool runs but does the wrong thing, or the server misbehaves
+labels: ["bug"]
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you ask for, and what did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: If a transaction or category ended up wrong, describe what it looked like before and after.
+    validations:
+      required: true
+  - type: input
+    id: tool
+    attributes:
+      label: Which tool was involved, if you know
+      placeholder: create_transaction, recategorize_transaction...
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: actual-budget-mcp 0.8.2, Actual server 26.8, Node 22
+    validations:
+      required: true
+  - type: checkboxes
+    id: data
+    attributes:
+      label: Did it touch your data?
+      options:
+        - label: Something in my budget changed and I had to fix it by hand

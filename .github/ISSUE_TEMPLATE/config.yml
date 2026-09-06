@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or an idea to talk through
+    url: https://github.com/henfrydls/actual-budget-mcp/discussions
+    about: Discussions is the place for anything that is not a bug or a request
+  - name: Actual Budget itself
+    url: https://actualbudget.org/docs/
+    about: For questions about Actual rather than this server
