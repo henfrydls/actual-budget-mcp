@@ -491,6 +491,9 @@ Compared to other Actual Budget MCP servers:
 
 ## Troubleshooting
 
+Stuck on something that is not listed here? [Tell me what tripped you up](https://github.com/henfrydls/actual-budget-mcp/discussions/50). A sentence is enough, and a failed setup looks identical to no setup at all from my side.
+
+
 **"Could not connect to Actual Budget server"**
 - Make sure Actual Budget is running (open the app or start the server)
 - Check that `ACTUAL_SERVER_URL` is correct
