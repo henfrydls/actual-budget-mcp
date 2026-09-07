@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 export const LOCK_FILE = '.actual-mcp-lock.json';
@@ -12,6 +12,28 @@ export const DEFAULT_DATA_DIR = '/tmp/actual-budget-mcp-data';
 
 export function effectiveDataDir(): string {
   return process.env.ACTUAL_DATA_DIR || DEFAULT_DATA_DIR;
+}
+
+/**
+ * Make sure the cache directory exists before Actual is told to use it.
+ *
+ * `api.init()` accepts a missing directory happily; `downloadBudget()` then
+ * fails with a bare `ENOENT ... scandir`. On a fresh machine the default lives
+ * under /tmp, which is empty after every boot, so the very first run of a new
+ * install failed every time — and the error names a file the user has never
+ * heard of, so there is no way to guess that the fix is a mkdir. Worse, it
+ * masks every other diagnostic: a wrong password and a wrong budget id both
+ * surface as the same ENOENT, so none of the specific messages ever fire.
+ *
+ * Failure to create it is swallowed: Actual will raise a better-placed error
+ * than anything we could invent here.
+ */
+export function ensureDataDirExists(dataDir: string): void {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+  } catch {
+    // Unwritable path, or a file where the directory should be.
+  }
 }
 
 export interface LockInfo {

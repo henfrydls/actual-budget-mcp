@@ -107,9 +107,9 @@ async function testConnection() {
       console.error(`  1. Actual Budget server is running at ${ACTUAL_SERVER_URL}`);
       console.error('  2. The URL is correct');
     } else if (message.includes('password') || message.includes('auth')) {
-      console.error('\nAuthentication failed. Check ACTUAL_PASSWORD in your .env');
+      console.error('\nAuthentication failed. Check ACTUAL_PASSWORD where you configured it.');
     } else if (message.includes('budget') || message.includes('sync')) {
-      console.error('\nCould not load budget. Check ACTUAL_BUDGET_ID in your .env');
+      console.error('\nCould not load budget. Check ACTUAL_BUDGET_ID where you configured it.');
       console.error('You can find your budget ID in the Actual Budget URL or settings');
     }
 
