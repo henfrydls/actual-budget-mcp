@@ -164,13 +164,24 @@ npm run test:connection # Verify it works
 
 ### Verify your setup
 
-After installing, you can verify the connection works:
+`--verify` reads the environment of the shell you run it in, and the install options above
+put your credentials in your MCP client's configuration instead. So set them for the
+command:
 
 ```bash
+ACTUAL_SERVER_URL=http://localhost:5006 \
+ACTUAL_PASSWORD=your-password \
+ACTUAL_BUDGET_ID=your-sync-id \
 npx -y actual-budget-mcp --verify
 ```
 
-This will connect to your Actual Budget server and confirm everything is configured correctly.
+It connects, downloads the budget and prints how many accounts and category groups it
+found. Running it without those variables reports them as missing, which is about the
+command, not about your install.
+
+**After changing your client's configuration, restart the client.** Claude Desktop, Claude
+Code and the rest read MCP configuration at startup and will not pick up an edit until
+they are restarted.
 
 ## Configuration
 
@@ -186,9 +197,18 @@ This will connect to your Actual Budget server and confirm everything is configu
 ### Finding your Budget ID
 
 1. Open Actual Budget
-2. Go to **Settings** (gear icon)
+2. Open **Settings**: click the arrow next to your budget name, or use the sidebar, **More**, then **Settings**
 3. Click **Show advanced settings**
 4. Copy the **Sync ID**
+
+**Take the Sync ID, not the Budget ID.** Actual shows both, one under the other, and they
+are both UUIDs. `ACTUAL_BUDGET_ID` wants the one labelled **Sync ID**, despite the name of
+the variable. Using the other one gives you `Budget "..." not found on the server`, which
+reads as though you mistyped it when the value was simply the wrong field.
+
+If **Sync ID** shows `(none)`, that budget has never been synced to a server. This server
+talks to Actual through its sync server, so a local-only budget cannot be used until you
+sync it.
 
 ## Safety
 
