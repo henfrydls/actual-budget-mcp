@@ -511,6 +511,9 @@ Compared to other Actual Budget MCP servers:
 | MCP Prompts | 3 guided analysis workflows | Limited or none |
 | MCP Resources | Accounts, categories, payees pre-loaded | Not available |
 | Bilingual dates | English + Spanish | English only |
+| Transfers | Two linked sides, matching `transfer_id`, no category, same as the app | Often one-sided or miscategorised |
+| Deletes | Preview, then an explicit confirmation | Run immediately |
+| Out-of-sync recovery | `repair_sync` rebuilds the local sync state | Reinstall and hope |
 | API version | @actual-app/api 26.x (current) | Often outdated |
 
 ## Security
