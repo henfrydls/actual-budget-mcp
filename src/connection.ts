@@ -4,6 +4,7 @@ import {
   acquireDataDirLock,
   releaseDataDirLock,
   effectiveDataDir,
+  ensureDataDirExists,
 } from './utils/data-dir-lock.js';
 import { packageVersion } from './utils/version.js';
 
@@ -61,6 +62,10 @@ export async function ensureConnection(): Promise<void> {
   initializing = (async () => {
     const config = getConfig();
     const dataDir = effectiveDataDir();
+    // Before anything else: api.init() tolerates a missing directory but
+    // downloadBudget() then dies with a bare ENOENT that masks every other
+    // diagnostic.
+    ensureDataDirExists(dataDir);
 
     // #47: advisory only — never refuse to start. Two servers on one data dir
     // drive the budget out-of-sync, so warn early and let describeError name
@@ -90,7 +95,8 @@ export async function ensureConnection(): Promise<void> {
           `Could not connect to Actual Budget server at ${config.serverURL}. ` +
           'Make sure the Actual Budget app is running and the URL is correct. ' +
           'If you use Actual Budget as a desktop app, open it first. ' +
-          'If you use a remote server, check that ACTUAL_SERVER_URL is correct in your .env file.',
+          'If you use a remote server, check ACTUAL_SERVER_URL where you configured this server \n' +
+          '(your MCP client config, or .env if you installed from source).',
         );
       }
 
@@ -112,6 +118,25 @@ export async function ensureConnection(): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const reason = (error as any)?.reason || '';
+      // Checked first: an unreachable server also throws an empty Error, and the
+      // auth heuristic below would then read "no message and no password" as a
+      // missing password. That sent people to check a password for an hour when
+      // nothing was listening on the URL.
+      const isNetworkError =
+        reason === 'network-failure' ||
+        message.includes('network-failure') ||
+        message.includes('ECONNREFUSED') ||
+        message.includes('fetch failed');
+
+      if (isNetworkError) {
+        throw new Error(
+          `Could not reach the Actual Budget server at ${config.serverURL}. ` +
+            'Nothing answered on that address, so this is not a password or budget problem. ' +
+            'Check that the server is running and that ACTUAL_SERVER_URL points at it ' +
+            '(if you run Actual as a desktop app, open it first).',
+        );
+      }
+
       const isAuthError =
         message.includes('Could not get remote files') ||
         message.includes('unauthorized') ||
@@ -123,7 +148,8 @@ export async function ensureConnection(): Promise<void> {
           throw new Error(
             'Could not authenticate with the Actual Budget server. ' +
             'Your server requires a password but ACTUAL_PASSWORD is not set. ' +
-            'Set ACTUAL_PASSWORD in your .env file or environment variables.',
+            'Set ACTUAL_PASSWORD where you configured this server: your MCP client config, or .env \n' +
+            'if you installed from source.',
           );
         }
         throw new Error(
@@ -136,7 +162,8 @@ export async function ensureConnection(): Promise<void> {
       if (message.includes('not found')) {
         throw new Error(
           `Budget "${config.budgetId}" not found on the server. ` +
-          'Check ACTUAL_BUDGET_ID in your .env file. ' +
+          'Check ACTUAL_BUDGET_ID where you configured this server (MCP client config, or .env \n' +
+          'if you installed from source). ' +
           'You can find your Sync ID in Actual Budget under Settings > Show advanced settings.',
         );
       }
@@ -144,7 +171,8 @@ export async function ensureConnection(): Promise<void> {
       if (message.includes('encrypted') || message.includes('File') && message.includes('password')) {
         throw new Error(
           'Your budget file is encrypted. ' +
-          'Set ACTUAL_ENCRYPTION_PASSWORD in your .env file with the encryption password.',
+          'Set ACTUAL_ENCRYPTION_PASSWORD where you configured this server (MCP client config, \n' +
+          'or .env if you installed from source).',
         );
       }
 

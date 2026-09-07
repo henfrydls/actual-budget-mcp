@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { acquireDataDirLock, releaseDataDirLock, readDataDirLock, LOCK_FILE } from '../data-dir-lock.js';
+import {
+  acquireDataDirLock,
+  releaseDataDirLock,
+  readDataDirLock,
+  ensureDataDirExists,
+  LOCK_FILE,
+} from '../data-dir-lock.js';
 
 describe('data dir lock', () => {
   let dir: string;
@@ -120,5 +126,49 @@ describe('data dir lock', () => {
     );
 
     expect(readDataDirLock(dir)).toBeNull();
+  });
+});
+
+describe('ensureDataDirExists', () => {
+  let base: string;
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'datadir-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('creates the directory when it is missing', () => {
+    const target = join(base, 'not-there');
+
+    ensureDataDirExists(target);
+
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it('creates missing parents too, so a nested default works on a fresh machine', () => {
+    const target = join(base, 'a', 'b', 'c');
+
+    ensureDataDirExists(target);
+
+    expect(existsSync(target)).toBe(true);
+  });
+
+  it('leaves an existing directory alone', () => {
+    writeFileSync(join(base, 'keep.txt'), 'x');
+
+    ensureDataDirExists(base);
+
+    expect(existsSync(join(base, 'keep.txt'))).toBe(true);
+  });
+
+  it('never throws when the directory cannot be created', () => {
+    // A path under a regular file can never be a directory.
+    const file = join(base, 'a-file');
+    writeFileSync(file, 'x');
+
+    expect(() => ensureDataDirExists(join(file, 'nested'))).not.toThrow();
   });
 });
