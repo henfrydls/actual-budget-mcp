@@ -14,6 +14,7 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 - **Real analysis, not just lookups** - Projections, category trends, budget vs actual, and month summaries
 - **Writes you can trust** - Every delete previews what it will remove and waits for you to confirm; `ACTUAL_READ_ONLY=1` hides the write tools from the model entirely ([Safety](#safety))
 - **Multi-currency that survives reality** - Splits and residual reconciliation, not just a currency symbol
+- **Recovers from an out-of-sync budget** - `repair_sync` rebuilds the local sync state when `@actual-app/api` and your server disagree, the failure that otherwise leaves every tool erroring
 - **Ask about your budget in plain language** - "How much did I spend on food this month?" or "Am I over budget on anything?"
 - **Create and manage transactions** - Add expenses, transfers, and edits without opening the app
 - **Manage categories, payees, and rules** - Full CRUD without opening the app
@@ -21,6 +22,17 @@ Talk to your budget. An MCP server that connects [Actual Budget](https://actualb
 - **Natural dates in English and Spanish** - "last month", "este mes", "hace 3 meses", "yesterday"
 - **Clean formatted output** - Aligned tables and clear summaries, not raw JSON
 - **Clear error messages** - If something's wrong, you'll know exactly what to fix
+
+## Does it work with local models?
+
+Yes. This is an MCP server, so it works with any client that speaks MCP, and the model
+behind that client is the client's business, not this server's. Claude Desktop, Claude
+Code, Cursor and VS Code are the ones documented below because they are the ones people
+ask about, but anything that can run an MCP client, including a local setup pointed at
+Ollama or LM Studio, talks to it the same way.
+
+Your budget data goes to whatever model your client uses. If that matters to you, and for
+a lot of people running Actual it does, a local model keeps it on your machine.
 
 ## Prerequisites
 
