@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import 'dotenv/config';
+import { effectiveDataDir, ensureDataDirExists } from './utils/data-dir-lock.js';
 import * as api from '@actual-app/api';
 import { formatMoney } from './utils/money.js';
 import { describeError } from './utils/errors.js';
@@ -30,11 +31,14 @@ async function testConnection() {
   console.log(`Encryption: ${ACTUAL_ENCRYPTION_PASSWORD ? 'Yes' : 'No'}`);
   console.log('');
 
+  const dataDir = effectiveDataDir();
+  ensureDataDirExists(dataDir);
+
   try {
     // Step 1: Init
     console.log('1. Connecting to server...');
     await api.init({
-      dataDir: ACTUAL_DATA_DIR || '/tmp/actual-budget-mcp-data',
+      dataDir: dataDir,
       serverURL: ACTUAL_SERVER_URL!,
       password: ACTUAL_PASSWORD || '',
     });
