@@ -206,8 +206,23 @@ they are restarted.
 | `ACTUAL_PASSWORD` | Yes | Server password (set in Actual Budget under Settings) |
 | `ACTUAL_BUDGET_ID` | Yes | Budget Sync ID (found in Settings > Show advanced settings) |
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
-| `ACTUAL_DATA_DIR` | No | Cache directory (default: `/tmp/actual-budget-mcp-data`) |
+| `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
+
+### Where the cache is kept
+
+Unless you set `ACTUAL_DATA_DIR`, the budget cache goes to the standard data
+directory for your system:
+
+| OS | Default location |
+|----|------------------|
+| Linux | `$XDG_DATA_HOME/actual-budget-mcp`, or `~/.local/share/actual-budget-mcp` |
+| macOS | `~/Library/Application Support/actual-budget-mcp` |
+| Windows | `%APPDATA%\actual-budget-mcp` |
+
+It is a cache, not your data: deleting it only forces a fresh download on the
+next run. It lives outside the temp directory on purpose, so a reboot does not
+throw it away and make the next startup re-download your whole budget.
 
 ### Finding your Budget ID
 

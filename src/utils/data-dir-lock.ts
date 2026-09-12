@@ -1,17 +1,38 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 export const LOCK_FILE = '.actual-mcp-lock.json';
 
-/**
- * Where the budget cache lives. Defined here rather than in connection.ts so
- * the lock and the error messages resolve the same directory the server
- * actually opens — a second copy of the default would drift.
- */
-export const DEFAULT_DATA_DIR = '/tmp/actual-budget-mcp-data';
+const APP_DIR = 'actual-budget-mcp';
 
+/**
+ * Where the budget cache lives when the user has not chosen a location.
+ *
+ * This used to be a hardcoded `/tmp/actual-budget-mcp-data`, which was wrong
+ * twice over. `/tmp` is not a path on Windows — it resolves to `C:\tmp`, off the
+ * current drive root, where writing may not even be permitted. And on Unix /tmp
+ * is cleared on reboot, so every restart threw away the cache and forced a full
+ * budget download; on a large budget that looks like a server that hangs on
+ * startup.
+ *
+ * The per-platform user data directory fixes both: it is writable, it is where
+ * each OS expects an application's cache to live, and it survives reboots.
+ */
+function platformDataDir(): string {
+  const home = homedir();
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), APP_DIR);
+  }
+  if (process.platform === 'darwin') {
+    return join(home, 'Library', 'Application Support', APP_DIR);
+  }
+  return join(process.env.XDG_DATA_HOME || join(home, '.local', 'share'), APP_DIR);
+}
+
+/** The directory the server will actually open. */
 export function effectiveDataDir(): string {
-  return process.env.ACTUAL_DATA_DIR || DEFAULT_DATA_DIR;
+  return process.env.ACTUAL_DATA_DIR || platformDataDir();
 }
 
 /**
