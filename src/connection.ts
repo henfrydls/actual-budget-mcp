@@ -31,6 +31,7 @@ export function getInternal(): ActualInternal {
 export function getConfig(): ConnectionConfig {
   const serverURL = process.env.ACTUAL_SERVER_URL;
   const password = process.env.ACTUAL_PASSWORD;
+  const sessionToken = process.env.ACTUAL_SESSION_TOKEN;
   const budgetId = process.env.ACTUAL_BUDGET_ID;
 
   if (!serverURL || !budgetId) {
@@ -45,6 +46,7 @@ export function getConfig(): ConnectionConfig {
   return {
     serverURL,
     password: password || '',
+    sessionToken: sessionToken || undefined,
     budgetId,
     encryptionPassword: process.env.ACTUAL_ENCRYPTION_PASSWORD,
     dataDir: process.env.ACTUAL_DATA_DIR,
@@ -81,14 +83,30 @@ export async function ensureConnection(): Promise<void> {
     }
 
     try {
+      // A server behind OIDC has no password to give: it issues a session token
+      // instead, and passing an empty password alongside would make the SDK try
+      // a password sign-in that cannot succeed. Exactly one credential goes in.
       internal = await api.init({
         dataDir,
         serverURL: config.serverURL,
-        password: config.password,
+        ...(config.sessionToken
+          ? { sessionToken: config.sessionToken }
+          : { password: config.password }),
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const reason = (error as any)?.reason || '';
+
+      // An expired token is not a wrong password: the fix is to issue a new
+      // token, and saying "check your password" sends the user somewhere that
+      // has no password to check.
+      if (reason === 'token-expired' || message.includes('expired session token')) {
+        throw new Error(
+          'Your Actual session token is invalid or has expired. ' +
+            'Generate a new one and update ACTUAL_SESSION_TOKEN where you configured this ' +
+            'server. This is not a password problem — a server behind OIDC has no password.',
+        );
+      }
 
       if (message.includes('network-failure') || reason === 'network-failure' || message.includes('ECONNREFUSED') || message.includes('fetch failed')) {
         throw new Error(

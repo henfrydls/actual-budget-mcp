@@ -203,7 +203,8 @@ they are restarted.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `ACTUAL_SERVER_URL` | Yes | Your Actual Budget server URL (e.g., `http://localhost:5006`) |
-| `ACTUAL_PASSWORD` | Yes | Server password (set in Actual Budget under Settings) |
+| `ACTUAL_PASSWORD` | Yes* | Server password (set in Actual Budget under Settings). *Not needed if you use `ACTUAL_SESSION_TOKEN` |
+| `ACTUAL_SESSION_TOKEN` | No | For servers behind **OIDC**, which have no password. Use this instead of `ACTUAL_PASSWORD`; if both are set, the token wins |
 | `ACTUAL_BUDGET_ID` | Yes | Budget Sync ID (found in Settings > Show advanced settings) |
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
