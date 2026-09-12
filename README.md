@@ -6,7 +6,9 @@
 [![Glama score](https://glama.ai/mcp/servers/henfrydls/actual-budget-mcp/badges/score.svg)](https://glama.ai/mcp/servers/henfrydls/actual-budget-mcp)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/henfrydls/actual-budget-mcp)
 
-Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude — ask where the money went, get real analysis back, and let it write without holding your breath.
+Talk to your budget. An MCP server that connects [Actual Budget](https://actualbudget.org/) to Claude. Ask where the money went, get real analysis back, and let it write without holding your breath.
+
+Listed in the [official Actual Budget community projects](https://actualbudget.org/docs/community-repos/).
 
 ![Asking a budget where the money went, and a delete that stops to ask for confirmation](https://raw.githubusercontent.com/henfrydls/actual-budget-mcp/master/docs/demo.gif)
 
