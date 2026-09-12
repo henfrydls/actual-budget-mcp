@@ -1,0 +1,40 @@
+{
+  "name": "actual-budget",
+  "version": "0.8.3",
+  "description": "Ask your Actual Budget where the money went, and let it write back safely: every delete previews first and asks before it destroys anything.",
+  "settings": [
+    {
+      "name": "Actual server URL",
+      "description": "Where your Actual Budget server is reachable, for example http://localhost:5006",
+      "envVar": "ACTUAL_SERVER_URL"
+    },
+    {
+      "name": "Server password",
+      "description": "The password for your Actual server. Leave empty if your server uses OIDC and you set a session token instead.",
+      "envVar": "ACTUAL_PASSWORD",
+      "sensitive": true
+    },
+    {
+      "name": "Budget Sync ID",
+      "description": "Actual shows this under Settings > Show advanced settings. It is the Sync ID, not the Budget ID shown above it — the two look alike and only the Sync ID works.",
+      "envVar": "ACTUAL_BUDGET_ID"
+    },
+    {
+      "name": "Session token (OIDC servers only)",
+      "description": "For servers behind OIDC, which have no password. Use this instead of the password; if both are set, the token wins.",
+      "envVar": "ACTUAL_SESSION_TOKEN",
+      "sensitive": true
+    },
+    {
+      "name": "Read-only mode",
+      "description": "Set to 1 to expose only the read and analysis tools. The write tools are not registered at all, so they never reach tool discovery.",
+      "envVar": "ACTUAL_READ_ONLY"
+    }
+  ],
+  "mcpServers": {
+    "actual": {
+      "command": "npx",
+      "args": ["-y", "actual-budget-mcp"]
+    }
+  }
+}
