@@ -1,6 +1,8 @@
 export interface ConnectionConfig {
   serverURL: string;
   password: string;
+  /** Session token, for servers behind OIDC where there is no password (#8721). */
+  sessionToken?: string;
   budgetId: string;
   encryptionPassword?: string;
   dataDir?: string;
