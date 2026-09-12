@@ -8,13 +8,13 @@
     "source": "github",
     "id": "henfrydls/actual-budget-mcp"
   },
-  "version": "0.8.3",
+  "version": "0.9.0",
   "websiteUrl": "https://actual-mcp.henfrydls.com",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "actual-budget-mcp",
-      "version": "0.8.3",
+      "version": "0.9.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

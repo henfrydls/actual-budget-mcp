@@ -1,6 +1,6 @@
 {
   "name": "actual-budget",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "description": "Ask your Actual Budget where the money went, and let it write back safely: every delete previews first and asks before it destroys anything.",
   "settings": [
     {
