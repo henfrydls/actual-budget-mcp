@@ -32,6 +32,15 @@ console.warn = (...args: unknown[]) => console.error(...args);
 // whose stray rejections motivated this.
 installProcessGuards();
 
+// --version / -v: answered before anything else, and before any config is
+// required. Typing it used to fall through to startup validation and print
+// "Missing required environment variables", which answers a question nobody
+// asked and hides the one they did.
+if (process.argv.includes('--version') || process.argv.includes('-v')) {
+  originalLog(packageVersion);
+  process.exit(0);
+}
+
 // --verify flag: test connection and exit (restore stdout for user output)
 if (process.argv.includes('--verify')) {
   console.log = originalLog;

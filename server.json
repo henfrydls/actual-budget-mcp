@@ -27,8 +27,14 @@
         },
         {
           "name": "ACTUAL_PASSWORD",
-          "description": "Password for your Actual Budget server",
-          "isRequired": true,
+          "description": "Password for your Actual Budget server. Not needed if you set ACTUAL_SESSION_TOKEN",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_SESSION_TOKEN",
+          "description": "Session token for servers behind OIDC, which have no password. Use instead of ACTUAL_PASSWORD; if both are set, the token wins",
+          "isRequired": false,
           "isSecret": true
         },
         {
@@ -68,8 +74,14 @@
         },
         {
           "name": "ACTUAL_PASSWORD",
-          "description": "Password for your Actual Budget server",
-          "isRequired": true,
+          "description": "Password for your Actual Budget server. Not needed if you set ACTUAL_SESSION_TOKEN",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_SESSION_TOKEN",
+          "description": "Session token for servers behind OIDC, which have no password. Use instead of ACTUAL_PASSWORD; if both are set, the token wins",
+          "isRequired": false,
           "isSecret": true
         },
         {
