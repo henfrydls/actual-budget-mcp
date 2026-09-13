@@ -210,6 +210,26 @@ they are restarted.
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
 
+### Using a session token (OIDC servers)
+
+If your Actual server signs you in through OIDC, there is no password to put in
+`ACTUAL_PASSWORD` — the server issues a session token instead. Set
+`ACTUAL_SESSION_TOKEN` to that token and leave the password unset.
+
+To find it, in the browser where you are signed in to Actual:
+
+1. Open your browser's developer tools
+2. Go to **Application** (Chrome/Edge) or **Storage** (Firefox)
+3. Expand **IndexedDB** → the **`actual`** database → the **`asyncStorage`** store
+4. Copy the value of the key **`user-token`**
+
+It is stored in IndexedDB, not Local Storage, so looking there is why people
+often cannot find it.
+
+Treat the token like a password: it grants the same access. It also expires — if
+it does, the server says so and tells you to issue a new one, rather than
+blaming a password you do not have.
+
 ### Where the cache is kept
 
 Unless you set `ACTUAL_DATA_DIR`, the budget cache goes to the standard data
