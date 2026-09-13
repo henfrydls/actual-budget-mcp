@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for npm provenance
+  id-token: write # npm provenance, and OIDC for the MCP registry
 
 jobs:
   publish:
@@ -32,3 +32,78 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Publishing to the MCP registry used to be a manual step done afterwards,
+      # and 0.8.3 shows what that costs: it never happened, so the registry
+      # advertised 0.8.2 for two weeks while npm served 0.8.3. A step that lives
+      # in someone's memory is a step that eventually does not run.
+      # Pinned on purpose. `releases/latest` would silently upgrade the tool
+      # under us, and a behaviour change would break a release at the worst
+      # possible moment: after npm has already published. This is the same drift
+      # that let us ship against an @actual-app/api version CI never tested.
+      # Bump deliberately, like any other dependency.
+      - name: Install mcp-publisher
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.1
+        run: |
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher --version || true
+
+      # No secret to manage and no token to rotate: the registry trusts the
+      # workflow's OIDC identity, which is why `id-token: write` is above.
+      - name: Authenticate to the MCP registry
+        run: ./mcp-publisher login github-oidc
+
+      # package.json is the single source of the version; every other copy is
+      # kept in step by hand and can fall behind (0.8.3 did). Deriving it here
+      # means a stale server.json in the repo cannot make the registry advertise
+      # the wrong version or point at an image that is not this release.
+      - name: Align server.json with the version being published
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          jq --arg v "$VERSION" '
+            .version = $v
+            | .packages = (.packages | map(
+                if .registryType == "npm" then .version = $v
+                elif .registryType == "oci" then .identifier = (.identifier | sub(":[^:]+$"; ":" + $v))
+                else . end))
+          ' server.json > server.tmp && mv server.tmp server.json
+          echo "publishing $VERSION"
+          jq -r '.version, (.packages[] | .identifier + " " + (.version // "tag in identifier"))' server.json
+
+      # Two races to wait out, both of which resolve themselves: npm needs a
+      # moment to propagate before the registry will accept the entry, and the
+      # container image is built by a separate workflow running in parallel.
+      #
+      # The image is checked first because publishing an entry that points at a
+      # tag nobody can pull is worse than publishing nothing: the registry would
+      # advertise an install command that fails for everyone who tries it.
+      - name: Publish to the MCP registry
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          IMAGE=henfrydls/actual-budget-mcp
+
+          image_exists() {
+            local token
+            token=$(curl -sS "https://ghcr.io/token?scope=repository:${IMAGE}:pull&service=ghcr.io" | jq -r .token)
+            curl -sf -o /dev/null \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json' \
+              "https://ghcr.io/v2/${IMAGE}/manifests/${VERSION}"
+          }
+
+          for attempt in 1 2 3 4 5; do
+            if ! image_exists; then
+              echo "attempt $attempt: ghcr has no ${VERSION} tag yet, waiting 30s"
+              sleep 30
+              continue
+            fi
+            if ./mcp-publisher publish; then
+              echo "published ${VERSION} to the MCP registry"
+              exit 0
+            fi
+            echo "attempt $attempt: publish failed, npm may still be propagating, waiting 30s"
+            sleep 30
+          done
+          echo "::error::could not publish ${VERSION} to the MCP registry after 5 attempts"
+          exit 1
