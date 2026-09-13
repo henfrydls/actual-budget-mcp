@@ -56,7 +56,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/henfrydls/actual-budget-mcp:0.8.3",
+      "identifier": "ghcr.io/henfrydls/actual-budget-mcp:0.9.0",
       "transport": {
         "type": "stdio"
       },
