@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for npm provenance
+  id-token: write # npm provenance, and OIDC for the MCP registry
 
 jobs:
   publish:
@@ -32,3 +32,49 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Publishing to the MCP registry used to be a manual step done afterwards,
+      # and 0.8.3 shows what that costs: it never happened, so the registry
+      # advertised 0.8.2 for two weeks while npm served 0.8.3. A step that lives
+      # in someone's memory is a step that eventually does not run.
+      - name: Install mcp-publisher
+        run: |
+          curl -sSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      # No secret to manage and no token to rotate: the registry trusts the
+      # workflow's OIDC identity, which is why `id-token: write` is above.
+      - name: Authenticate to the MCP registry
+        run: ./mcp-publisher login github-oidc
+
+      # package.json is the single source of the version; every other copy is
+      # kept in step by hand and can fall behind (0.8.3 did). Deriving it here
+      # means a stale server.json in the repo cannot make the registry advertise
+      # the wrong version or point at an image that is not this release.
+      - name: Align server.json with the version being published
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          jq --arg v "$VERSION" '
+            .version = $v
+            | .packages = (.packages | map(
+                if .registryType == "npm" then .version = $v
+                elif .registryType == "oci" then .identifier = (.identifier | sub(":[^:]+$"; ":" + $v))
+                else . end))
+          ' server.json > server.tmp && mv server.tmp server.json
+          echo "publishing $VERSION"
+          jq -r '.version, (.packages[] | .identifier + " " + (.version // "tag in identifier"))' server.json
+
+      # The registry verifies the package exists on npm before accepting the
+      # entry, and npm needs a moment to propagate a fresh publish. Retry rather
+      # than fail the release over a race that resolves itself.
+      - name: Publish to the MCP registry
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if ./mcp-publisher publish; then
+              echo "published to the MCP registry"
+              exit 0
+            fi
+            echo "attempt $attempt failed; npm may still be propagating, waiting 30s"
+            sleep 30
+          done
+          echo "::error::could not publish to the MCP registry after 5 attempts"
+          exit 1
