@@ -9,7 +9,7 @@ export function registerGetPayees(server: McpServer): void {
     'get_payees',
     'List all payees in the budget. Useful for seeing available payees and their IDs.',
     {},
-    { readOnlyHint: true },
+    { title: 'List payees', readOnlyHint: true },
     async () => {
       try {
         await ensureConnection();

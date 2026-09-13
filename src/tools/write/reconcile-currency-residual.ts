@@ -83,7 +83,7 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         .describe('Date for the adjustment (YYYY-MM-DD or "today"). Defaults to today.'),
       payee: z.string().optional().describe('Optional payee for the adjustment'),
     },
-    { readOnlyHint: false },
+    { title: 'Reconcile currency residual', readOnlyHint: false },
     async (input) => {
       try {
         const lines = await reconcileCurrencyResidual(input);

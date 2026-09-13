@@ -80,7 +80,7 @@ export function registerDeleteRule(server: McpServer): void {
         .optional()
         .describe('Must be true to delete. Without it, the tool only previews.'),
     },
-    { readOnlyHint: false, destructiveHint: true },
+    { title: 'Delete automation rule', readOnlyHint: false, destructiveHint: true },
     async (input) => {
       try {
         const { deleted, lines } = await deleteRuleGuarded(input);

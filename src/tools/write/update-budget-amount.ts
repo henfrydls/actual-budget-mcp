@@ -22,7 +22,7 @@ export function registerUpdateBudgetAmount(server: McpServer): void {
         .optional()
         .describe('Month (YYYY-MM or natural language). Defaults to current month.'),
     },
-    { readOnlyHint: false, idempotentHint: true },
+    { title: 'Set budgeted amount', readOnlyHint: false, idempotentHint: true },
     async ({ category, amount, month: monthInput }) => {
       try {
         await ensureConnection();

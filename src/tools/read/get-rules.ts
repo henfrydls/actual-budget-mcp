@@ -9,7 +9,7 @@ export function registerGetRules(server: McpServer): void {
     'get_rules',
     'List all transaction rules showing their conditions and actions.',
     {},
-    { readOnlyHint: true },
+    { title: 'List automation rules', readOnlyHint: true },
     async () => {
       try {
         await ensureConnection();

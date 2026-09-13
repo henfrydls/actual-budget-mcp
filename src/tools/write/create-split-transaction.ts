@@ -140,7 +140,7 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         .default(false)
         .describe('Whether the transaction is cleared'),
     },
-    { readOnlyHint: false },
+    { title: 'Add split transaction', readOnlyHint: false },
     async (input) => {
       try {
         const lines = await createSplitTransaction(input);

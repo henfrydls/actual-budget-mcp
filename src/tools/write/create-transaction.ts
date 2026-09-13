@@ -164,7 +164,7 @@ export function registerCreateTransaction(server: McpServer): void {
         .default(false)
         .describe('Whether the transaction is cleared'),
     },
-    { readOnlyHint: false },
+    { title: 'Add transaction', readOnlyHint: false },
     async (input) => {
       try {
         const lines = await createTransaction(input);

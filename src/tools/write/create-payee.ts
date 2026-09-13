@@ -11,7 +11,7 @@ export function registerCreatePayee(server: McpServer): void {
     {
       name: z.string().describe('Name for the new payee'),
     },
-    { readOnlyHint: false },
+    { title: 'Create payee', readOnlyHint: false },
     async ({ name }) => {
       try {
         await ensureConnection();

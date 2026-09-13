@@ -74,7 +74,7 @@ export function registerDeletePayee(server: McpServer): void {
         .optional()
         .describe("The payee's exact name, echoed back as a safeguard."),
     },
-    { readOnlyHint: false, destructiveHint: true },
+    { title: 'Delete payee', readOnlyHint: false, destructiveHint: true },
     async (input) => {
       try {
         const { deleted, lines } = await deletePayeeGuarded(input);

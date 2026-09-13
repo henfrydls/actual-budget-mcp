@@ -125,7 +125,7 @@ export function registerDeleteAccount(server: McpServer): void {
           "The account's exact name, echoed back as a safeguard against deleting the wrong account.",
         ),
     },
-    { readOnlyHint: false, destructiveHint: true },
+    { title: 'Delete account', readOnlyHint: false, destructiveHint: true },
     async (input) => {
       try {
         const { deleted, lines } = await deleteAccountGuarded(input);
