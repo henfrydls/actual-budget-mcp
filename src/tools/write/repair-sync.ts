@@ -48,7 +48,7 @@ export function registerRepairSync(server: McpServer): void {
       'Rebuilds sync bookkeeping without modifying budget data. Use this when other ' +
       'tools report that the budget is out of sync.',
     {},
-    { readOnlyHint: false, idempotentHint: true },
+    { title: 'Repair sync state', readOnlyHint: false, idempotentHint: true },
     async () => {
       try {
         const lines = await repairSyncState();

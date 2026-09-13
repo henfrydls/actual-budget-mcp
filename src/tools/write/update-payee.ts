@@ -13,7 +13,7 @@ export function registerUpdatePayee(server: McpServer): void {
       payee: z.string().describe('Payee name or ID'),
       name: z.string().describe('New name for the payee'),
     },
-    { readOnlyHint: false, idempotentHint: true },
+    { title: 'Rename payee', readOnlyHint: false, idempotentHint: true },
     async ({ payee, name }) => {
       try {
         await ensureConnection();

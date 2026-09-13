@@ -9,7 +9,7 @@ export function registerGetCategories(server: McpServer): void {
     'get_categories',
     'List all category groups with their categories and IDs. Useful for seeing the full budget structure.',
     {},
-    { readOnlyHint: true },
+    { title: 'List categories', readOnlyHint: true },
     async () => {
       try {
         await ensureConnection();

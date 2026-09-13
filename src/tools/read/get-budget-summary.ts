@@ -20,7 +20,7 @@ export function registerGetBudgetSummary(server: McpServer): void {
           'Month (YYYY-MM or natural language). Defaults to current month.',
         ),
     },
-    { readOnlyHint: true },
+    { title: 'Budget summary', readOnlyHint: true },
     async ({ month: monthInput }) => {
       try {
         await ensureConnection();

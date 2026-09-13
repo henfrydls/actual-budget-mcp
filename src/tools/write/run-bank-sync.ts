@@ -15,7 +15,7 @@ export function registerRunBankSync(server: McpServer): void {
         .optional()
         .describe('Account name or ID to sync. If omitted, syncs all linked accounts.'),
     },
-    { readOnlyHint: false },
+    { title: 'Sync with bank', readOnlyHint: false },
     async ({ account }) => {
       try {
         await ensureConnection();

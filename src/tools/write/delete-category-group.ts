@@ -84,7 +84,7 @@ export function registerDeleteCategoryGroup(server: McpServer): void {
         .optional()
         .describe("The group's exact name, echoed back as a safeguard."),
     },
-    { readOnlyHint: false, destructiveHint: true },
+    { title: 'Delete category group', readOnlyHint: false, destructiveHint: true },
     async (input) => {
       try {
         const { deleted, lines } = await deleteCategoryGroupGuarded(input);

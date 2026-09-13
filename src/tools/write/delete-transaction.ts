@@ -93,7 +93,7 @@ export function registerDeleteTransaction(server: McpServer): void {
         .optional()
         .describe('Must be true to delete. Without it, the tool only previews.'),
     },
-    { readOnlyHint: false, destructiveHint: true },
+    { title: 'Delete transaction', readOnlyHint: false, destructiveHint: true },
     async (input) => {
       try {
         const { deleted, lines } = await deleteTransactionGuarded(input);

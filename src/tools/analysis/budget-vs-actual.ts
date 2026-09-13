@@ -22,7 +22,7 @@ export function registerBudgetVsActual(server: McpServer): void {
         .optional()
         .describe('Filter to a specific category group name'),
     },
-    { readOnlyHint: true },
+    { title: 'Budget vs actual spending', readOnlyHint: true },
     async ({ month: monthInput, group: groupFilter }) => {
       try {
         await ensureConnection();

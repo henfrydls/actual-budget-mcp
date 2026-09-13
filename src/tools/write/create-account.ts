@@ -76,7 +76,7 @@ export function registerCreateAccount(server: McpServer): void {
           'Opening balance in human amounts (e.g. 1500.50, not cents). Creates the "Starting Balance" transaction.',
         ),
     },
-    { readOnlyHint: false },
+    { title: 'Create account', readOnlyHint: false },
     async (input) => {
       try {
         const lines = await createNewAccount(input);

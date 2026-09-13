@@ -11,7 +11,7 @@ export function registerCreateCategoryGroup(server: McpServer): void {
     {
       name: z.string().describe('Name for the new category group'),
     },
-    { readOnlyHint: false },
+    { title: 'Create category group', readOnlyHint: false },
     async ({ name }) => {
       try {
         await ensureConnection();

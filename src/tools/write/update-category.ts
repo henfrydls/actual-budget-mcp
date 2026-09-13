@@ -14,7 +14,7 @@ export function registerUpdateCategory(server: McpServer): void {
       name: z.string().optional().describe('New name for the category'),
       hidden: z.boolean().optional().describe('Set to true to hide, false to unhide'),
     },
-    { readOnlyHint: false, idempotentHint: true },
+    { title: 'Rename or hide category', readOnlyHint: false, idempotentHint: true },
     async ({ category, name, hidden }) => {
       try {
         await ensureConnection();

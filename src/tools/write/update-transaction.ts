@@ -113,7 +113,7 @@ export function registerUpdateTransaction(server: McpServer): void {
       notes: z.string().optional().describe('New notes'),
       cleared: z.boolean().optional().describe('Whether the transaction is cleared'),
     },
-    { readOnlyHint: false, idempotentHint: true },
+    { title: 'Edit transaction', readOnlyHint: false, idempotentHint: true },
     async (input) => {
       try {
         const lines = await updateTransactionFields(input);

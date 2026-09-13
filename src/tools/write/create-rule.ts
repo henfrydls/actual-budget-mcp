@@ -17,7 +17,7 @@ export function registerCreateRule(server: McpServer): void {
       action_value: z.string().describe('Value to set (category name/ID, payee name, or note text)'),
       stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
     },
-    { readOnlyHint: false },
+    { title: 'Create automation rule', readOnlyHint: false },
     async ({ condition_field, condition_op, condition_value, action_field, action_value, stage }) => {
       try {
         await ensureConnection();
