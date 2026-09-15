@@ -46,7 +46,24 @@ fi
 
 npm run build >/dev/null
 
-cp "$ROOT/manifest.json" "$STAGE/manifest.json"
+# The manifest's tool list is generated from the server itself, not written by
+# hand. Claude Desktop and the directory show it before anyone installs, so a
+# hand-kept copy would drift the moment a tool is added or renamed - and this
+# project has already had a version string fall behind in two of the five places
+# it is written. Generating it means there is nothing to forget.
+node --input-type=module -e "
+  import { readFileSync, writeFileSync } from 'node:fs';
+  const { registerAllTools } = await import('$ROOT/dist/tools/index.js');
+  const tools = [];
+  registerAllTools({ tool: (name, description, _schema, annotations) => {
+    tools.push({ name, description: annotations?.title ?? description });
+  } });
+  const manifest = JSON.parse(readFileSync('$ROOT/manifest.json', 'utf8'));
+  manifest.tools = tools.sort((a, b) => a.name.localeCompare(b.name));
+  manifest.tools_generated = true;
+  writeFileSync('$STAGE/manifest.json', JSON.stringify(manifest, null, 2) + '\\n');
+  console.error('listed ' + tools.length + ' tools in the manifest');
+"
 cp "$ROOT/README.md" "$STAGE/README.md"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 

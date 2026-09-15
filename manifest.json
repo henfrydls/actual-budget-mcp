@@ -94,5 +94,8 @@
     "runtimes": {
       "node": ">=20.0.0"
     }
-  }
+  },
+  "privacy_policies": [
+    "https://actual-mcp.henfrydls.com/privacy/"
+  ]
 }

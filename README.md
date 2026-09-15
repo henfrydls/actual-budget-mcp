@@ -278,6 +278,43 @@ If **Sync ID** shows `(none)`, that budget has never been synced to a server. Th
 talks to Actual through its sync server, so a local-only budget cannot be used until you
 sync it.
 
+## Privacy Policy
+
+**Data collection.** This server collects nothing. It has no telemetry, no
+analytics and no usage reporting, and none is planned: it reads personal
+finances, and a tool that does that should not be phoning home. There is no
+account to create and nothing to opt out of.
+
+**Usage and storage.** The server talks to one place: the Actual Budget server
+whose URL you configure. Your budget is cached on your own machine, in the data
+directory documented under [Where the cache is kept](#where-the-cache-is-kept),
+so that it does not have to be downloaded on every start. Nothing is written
+anywhere else.
+
+Your credentials are handled by your MCP client, not by this server. Claude
+Desktop stores the password and session token in your operating system's
+keychain; the server receives them as environment variables at launch, uses them
+to connect, and never writes them to disk.
+
+**Third-party sharing.** None. No data is sent to the author, to any analytics
+service, or to any third party. The only network connection the server opens is
+to your own Actual server.
+
+Two things worth naming because they are also true: the model you are talking to
+(Claude, or whichever client you use) necessarily sees the budget data you ask
+about, under that provider's own terms; and installing via `npx` downloads the
+package from npm, which is an ordinary package download and involves no budget
+data.
+
+**Data retention.** The cache lives on your machine until you delete it. Deleting
+it loses nothing, since it is a copy of what is on your Actual server; the next
+run downloads it again. Uninstalling the server leaves nothing behind except
+that directory, which you can remove.
+
+**Contact.** Open an issue at
+https://github.com/henfrydls/actual-budget-mcp/issues. The full policy is also
+published at https://actual-mcp.henfrydls.com/privacy/.
+
 ## Safety
 
 Two things protect your budget from an agent acting on a vague instruction.
