@@ -4,7 +4,7 @@ import { z } from 'zod';
 export function registerAllPrompts(server: McpServer): void {
   server.prompt(
     'monthly-review',
-    'Review your budget for a specific month — checks spending vs budget, highlights overspending, and suggests adjustments.',
+    'Review your budget for a specific month: checks spending vs budget, highlights overspending, and suggests adjustments.',
     { month: z.string().optional().describe('Month to review (YYYY-MM or natural language). Defaults to current month.') },
     async ({ month }) => {
       const monthStr = month || 'this month';
@@ -36,7 +36,7 @@ Keep the analysis concise and actionable.`,
 
   server.prompt(
     'spending-check',
-    'Quick check on current month spending — are you on track or overspending?',
+    'Quick check on current month spending. Are you on track, or overspending?',
     {},
     async () => {
       return {
@@ -54,7 +54,7 @@ Keep the analysis concise and actionable.`,
    - Which categories should I watch?
    - How much can I still spend this month?
 
-Keep it short — just the key numbers and warnings.`,
+Keep it short: just the key numbers and warnings.`,
             },
           },
         ],

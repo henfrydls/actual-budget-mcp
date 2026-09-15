@@ -131,7 +131,7 @@ export async function ensureConnection(): Promise<void> {
       // stderr: stdout carries JSON-RPC.
       console.error(
         `[actual-budget-mcp] warning: another server (pid ${lock.heldBy.pid}) is already ` +
-          `using ${dataDir}. Sharing a data dir puts the budget out of sync — ` +
+          `using ${dataDir}. Sharing a data dir puts the budget out of sync: ` +
           'give each client its own ACTUAL_DATA_DIR.',
       );
     }
