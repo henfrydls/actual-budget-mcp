@@ -213,7 +213,7 @@ they are restarted.
 ### Using a session token (OIDC servers)
 
 If your Actual server signs you in through OIDC, there is no password to put in
-`ACTUAL_PASSWORD` — the server issues a session token instead. Set
+`ACTUAL_PASSWORD`, because the server issues a session token instead. Set
 `ACTUAL_SESSION_TOKEN` to that token and leave the password unset.
 
 To find it, in the browser where you are signed in to Actual:
@@ -226,9 +226,26 @@ To find it, in the browser where you are signed in to Actual:
 It is stored in IndexedDB, not Local Storage, so looking there is why people
 often cannot find it.
 
-Treat the token like a password: it grants the same access. It also expires — if
+Treat the token like a password: it grants the same access. It also expires; if
 it does, the server says so and tells you to issue a new one, rather than
 blaming a password you do not have.
+
+### Claude Desktop extension (one click)
+
+A packaged Desktop Extension is available: install it and Claude Desktop asks
+for your server URL, password and Sync ID in its own settings UI, with the
+password and session token stored in your operating system's keychain rather
+than a config file you have to edit.
+
+Download `actual-budget-mcp.mcpb` from the
+[latest release](https://github.com/henfrydls/actual-budget-mcp/releases/latest)
+and open it, or drag it onto Claude Desktop.
+
+The extension launches the published npm package rather than carrying its own
+copy of the dependencies. Actual's SDK compiles a native SQLite binary for the
+machine it runs on, so a bundle built on one platform would not work on the
+others; letting npm resolve it means the same extension works everywhere. It
+needs Node installed, and the first run downloads the package.
 
 ### Where the cache is kept
 
@@ -278,17 +295,17 @@ delete_category(category: "Groceries", confirm: true, confirm_name: "Groceries")
   → deleted
 ```
 
-Tools that find their target **by name** — `delete_account`, `delete_category`,
-`delete_category_group`, `delete_payee` — also require `confirm_name` with the
+Tools that find their target **by name** (`delete_account`, `delete_category`,
+`delete_category_group`, `delete_payee`) also require `confirm_name` with the
 exact name. That is where deleting the wrong thing actually happens: asking for
 "Adicionales" can resolve to "Ingresos Adicionales". Tools that take an exact id
-— `delete_transaction`, `delete_rule` — need only `confirm: true`.
+(`delete_transaction`, `delete_rule`) need only `confirm: true`.
 
 ### Read-only mode
 
 Set `ACTUAL_READ_ONLY=1` and the server exposes only the 15 read, analysis and
 repair tools. The write tools are **not registered at all**, so they never
-appear in tool discovery — an agent cannot be talked into calling something it
+appear in tool discovery, and an agent cannot be talked into calling something it
 cannot see.
 
 `repair_sync` stays available on purpose: it repairs sync state rather than
@@ -352,7 +369,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write — Transactions (9)
+### Write: Transactions (9)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -389,7 +406,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write — Categories (6)
+### Write: Categories (6)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -417,7 +434,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write — Payees & Rules (5)
+### Write: Payees & Rules (5)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -442,7 +459,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write — Accounts (2)
+### Write: Accounts (2)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -452,7 +469,7 @@ Writes are enabled by default. Read-only is opt-in.
 > **`delete_account` needs two keys.** It destroys the account's entire transaction
 > history, so a single call never deletes. The first call only *previews* what
 > would be lost (name, balance, transaction count) and suggests closing the
-> account instead — closing retires it while keeping its history. To actually
+> account instead, since closing retires it while keeping its history. To actually
 > delete, call again with `confirm: true` **and** `confirm_name` set to the
 > account's exact name. While it declines, the tool reports `isError: true`, so a
 > confirmation prompt is never mistaken for a completed deletion.
@@ -475,7 +492,7 @@ Writes are enabled by default. Read-only is opt-in.
 > If tools start failing with a sync error, the budget's sync state is
 > inconsistent with the server. `repair_sync` rebuilds that state without
 > touching budget data. Note that deleting the local `ACTUAL_DATA_DIR` does
-> *not* fix this — the inconsistency is in the sync state, not the cache.
+> *not* fix this, because the inconsistency is in the sync state, not the cache.
 
 <details>
 <summary>Parameters</summary>
@@ -490,7 +507,7 @@ Built-in prompt templates that guide Claude through multi-step financial analysi
 
 | Prompt | Description |
 |--------|-------------|
-| `monthly-review` | Complete budget review for any month — spending vs budget, overspending, suggestions |
+| `monthly-review` | Complete budget review for any month: spending vs budget, overspending, suggestions |
 | `spending-check` | Quick check: are you on track this month? |
 | `spending-patterns` | Deep analysis of spending trends and patterns over multiple months |
 

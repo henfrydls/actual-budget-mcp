@@ -9,3 +9,6 @@ backlog.md
 
 # Local-only notes (never commit)
 *.local.md
+
+# Built Desktop Extension bundle
+*.mcpb

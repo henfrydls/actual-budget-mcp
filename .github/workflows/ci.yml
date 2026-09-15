@@ -57,3 +57,24 @@ jobs:
       # surfaced for visibility but does not block a release.
       - name: Audit all dependencies (informational)
         run: npm audit --audit-level=high || true
+
+  # The Desktop Extension is built on every change so a broken manifest or a
+  # version that drifted from package.json fails here, not when someone is
+  # trying to cut a release.
+  build-mcpb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - name: Build the Desktop Extension
+        run: ./scripts/build-mcpb.sh "$RUNNER_TEMP/actual-budget-mcp.mcpb"
+      - name: Validate the packed bundle
+        run: npx --yes @anthropic-ai/mcpb@2.1.2 info "$RUNNER_TEMP/actual-budget-mcp.mcpb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: actual-budget-mcp-mcpb
+          path: ${{ runner.temp }}/actual-budget-mcp.mcpb
