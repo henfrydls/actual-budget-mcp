@@ -36,7 +36,7 @@ export function registerSpendingProjection(server: McpServer): void {
         ];
 
         if (elapsed === 0) {
-          lines.push('No days elapsed yet — projection not available.');
+          lines.push('No days elapsed yet, so there is nothing to project from.');
           return { content: [{ type: 'text', text: lines.join('\n') }] };
         }
 

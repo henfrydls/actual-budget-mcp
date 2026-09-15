@@ -57,7 +57,7 @@ export async function deleteAccountGuarded(
   if (account.closed) {
     throw new Error(
       `Account "${account.name}" is closed, and Actual cannot delete a closed account. ` +
-        'Reopen it first if you really need it gone; otherwise leave it closed — ' +
+        'Reopen it first if you really need it gone; otherwise leave it closed, since ' +
         'closed accounts keep their history and stay out of the way.',
     );
   }
@@ -82,7 +82,7 @@ export async function deleteAccountGuarded(
     ],
     // Guardrail 3: offer the reversible option first.
     alternative:
-      'Consider closing the account instead — in Actual, closing retires an\n' +
+      'Consider closing the account instead. In Actual, closing retires an\n' +
       'account while keeping its history, and it can be reopened later.',
     confirmName: account.name,
     input,
