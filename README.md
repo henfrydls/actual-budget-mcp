@@ -202,7 +202,7 @@ they are restarted.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ACTUAL_SERVER_URL` | Yes | Your Actual Budget server URL (e.g., `http://localhost:5006`) |
+| `ACTUAL_SERVER_URL` | Yes | Your Actual Budget server URL. See [Which URL and port](#which-url-and-port) |
 | `ACTUAL_PASSWORD` | Yes* | Server password (set in Actual Budget under Settings). *Not needed if you use `ACTUAL_SESSION_TOKEN` |
 | `ACTUAL_SESSION_TOKEN` | No | For servers behind **OIDC**, which have no password. Use this instead of `ACTUAL_PASSWORD`; if both are set, the token wins |
 | `ACTUAL_BUDGET_ID` | Yes | Budget Sync ID (found in Settings > Show advanced settings) |
@@ -246,6 +246,25 @@ copy of the dependencies. Actual's SDK compiles a native SQLite binary for the
 machine it runs on, so a bundle built on one platform would not work on the
 others; letting npm resolve it means the same extension works everywhere. It
 needs Node installed, and the first run downloads the package.
+
+### Which URL and port
+
+It depends on how you run Actual, and picking the wrong one gives a connection
+error that does not explain itself:
+
+| How you run Actual | URL |
+|---|---|
+| Self-hosted sync server (Docker, a VPS, etc.) | `http://localhost:5006`, or wherever you host it |
+| The desktop app | `http://localhost:5007` |
+
+The desktop app runs its own sync server on port **5007**, and only while the app
+is open. Close the app and nothing is listening, so the server cannot connect.
+
+That embedded server also binds to `127.0.0.1` only. It is reachable from the
+same machine and from nowhere else, so if Claude runs somewhere other than the
+machine with the app, for example another computer or a virtual machine, you need
+an SSH tunnel or a port forward. Pointing at the host's LAN address will not
+work.
 
 ### Where the cache is kept
 

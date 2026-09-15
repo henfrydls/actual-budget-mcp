@@ -147,11 +147,21 @@ export async function ensureConnection(): Promise<void> {
         message.includes('fetch failed');
 
       if (isNetworkError) {
+        // The port is worth naming: the desktop app's embedded server runs on
+        // 5007 and only while the app is open, while a self-hosted sync server
+        // is usually 5006. Pointing at the wrong one of the two is the most
+        // common way to land here, and the raw failure says nothing about it.
+        const portHint = config.serverURL.includes(':5006')
+          ? ' If you use the Actual desktop app rather than a self-hosted server, try port 5007 instead: the app runs its own server there, and only while the app is open.'
+          : config.serverURL.includes(':5007')
+            ? ' Port 5007 is the desktop app\'s own server, which only runs while the app is open. Open Actual and try again, or use 5006 if you meant a self-hosted server.'
+            : '';
+
         throw new Error(
           `Could not reach the Actual Budget server at ${config.serverURL}. ` +
             'Nothing answered on that address, so this is not a password or budget problem. ' +
-            'Check that the server is running and that ACTUAL_SERVER_URL points at it ' +
-            '(if you run Actual as a desktop app, open it first).',
+            'Check that the server is running and that ACTUAL_SERVER_URL points at it.' +
+            portHint,
         );
       }
 

@@ -50,6 +50,30 @@ describe('connection errors point at the real cause', () => {
     await expect(ensureConnection()).rejects.not.toThrow(/ACTUAL_PASSWORD/);
   });
 
+  it('suggests the desktop app port when 5006 is unreachable', async () => {
+    process.env.ACTUAL_SERVER_URL = 'http://localhost:5006';
+    downloadBudget.mockRejectedValue(networkFailure);
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow(/5007/);
+  });
+
+  it('explains that 5007 only answers while the desktop app is open', async () => {
+    process.env.ACTUAL_SERVER_URL = 'http://localhost:5007';
+    downloadBudget.mockRejectedValue(networkFailure);
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow(/while the app is open/i);
+  });
+
+  it('adds no port advice for a URL that is neither', async () => {
+    process.env.ACTUAL_SERVER_URL = 'https://budget.example.com';
+    downloadBudget.mockRejectedValue(networkFailure);
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.not.toThrow(/500[67]/);
+  });
+
   it('still reports a genuine auth failure as such', async () => {
     process.env.ACTUAL_PASSWORD = 'wrong';
     downloadBudget.mockRejectedValue(new Error('Could not get remote files'));
