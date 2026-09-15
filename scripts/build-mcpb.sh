@@ -21,6 +21,11 @@
 #
 # The version in manifest.json is pinned rather than floating, so an extension
 # installed today keeps working the way it was reviewed.
+#
+# The consequence is easy to forget and cost us most of an afternoon: a bundle
+# built from a commit whose fix is not published yet still launches the last
+# published version, so it does not contain the fix. Building the bundle is not
+# releasing it. To test a change end to end, publish first.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
