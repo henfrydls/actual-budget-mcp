@@ -58,21 +58,21 @@
     },
     "password": {
       "type": "string",
-      "title": "Server password",
+      "title": "Server password (or a session token below)",
       "description": "Your Actual server password. Leave empty if your server uses OIDC and you fill in the session token instead.",
       "sensitive": true,
       "required": false
     },
     "session_token": {
       "type": "string",
-      "title": "Session token (OIDC servers only)",
+      "title": "Session token (optional, OIDC servers only)",
       "description": "Only for servers behind OIDC, which have no password. See the README for where to find it. If both this and the password are set, the token wins.",
       "sensitive": true,
       "required": false
     },
     "encryption_password": {
       "type": "string",
-      "title": "Encryption password",
+      "title": "Encryption password (optional)",
       "description": "Only needed if your budget file is end-to-end encrypted.",
       "sensitive": true,
       "required": false
