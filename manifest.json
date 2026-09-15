@@ -46,27 +46,27 @@
     "server_url": {
       "type": "string",
       "title": "Actual server URL",
-      "description": "Where your Actual Budget server is reachable, for example http://localhost:5006",
+      "description": "Where your Actual Budget server is reachable.",
       "default": "http://localhost:5006",
       "required": true
     },
     "sync_id": {
       "type": "string",
       "title": "Budget Sync ID",
-      "description": "In Actual, open Settings and click 'Show advanced settings'. Copy the Sync ID, not the Budget ID shown above it: the two look alike and only the Sync ID works here.",
+      "description": "Actual shows this under Settings, 'Show advanced settings'. Copy the Sync ID, not the Budget ID above it: they look alike and only this one works.",
       "required": true
     },
     "password": {
       "type": "string",
       "title": "Server password",
-      "description": "The password for your Actual server. Leave empty if your server signs you in through OIDC and you fill in the session token instead.",
+      "description": "Your Actual server password. Leave empty if your server uses OIDC and you fill in the session token instead.",
       "sensitive": true,
       "required": false
     },
     "session_token": {
       "type": "string",
       "title": "Session token (OIDC servers only)",
-      "description": "Only for servers behind OIDC, which have no password. Find it in your browser's developer tools under IndexedDB, database 'actual', store 'asyncStorage', key 'user-token'. If both this and the password are filled in, the token wins.",
+      "description": "Only for servers behind OIDC, which have no password. See the README for where to find it. If both this and the password are set, the token wins.",
       "sensitive": true,
       "required": false
     },
@@ -78,9 +78,10 @@
       "required": false
     },
     "read_only": {
-      "type": "string",
+      "type": "boolean",
       "title": "Read-only mode",
-      "description": "Set to 1 to expose only the reading and analysis tools. The write tools are not registered at all, so Claude never sees them. Leave empty for normal use.",
+      "description": "Expose only the reading and analysis tools. The write tools are not registered at all, so Claude never sees them.",
+      "default": false,
       "required": false
     }
   },
