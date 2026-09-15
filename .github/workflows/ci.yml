@@ -74,11 +74,10 @@ jobs:
         run: ./scripts/build-mcpb.sh "$RUNNER_TEMP/actual-budget-mcp.mcpb"
       - name: Validate the packed bundle
         run: npx --yes @anthropic-ai/mcpb@2.1.2 info "$RUNNER_TEMP/actual-budget-mcp.mcpb"
-      # Named for what it runs, not what built it: mcp_config launches the
-      # pinned release from npm, so a bundle built from an unreleased commit
-      # still starts the last published version. Only the bundle attached to a
-      # GitHub release tests the code in it.
+      # The bundle now carries its own server, so an artifact built here does
+      # run this commit. That was not true while it launched a pinned release
+      # from npm, and the name said so; the warning can go with the pin.
       - uses: actions/upload-artifact@v4
         with:
-          name: actual-budget-mcp-mcpb-runs-published-release
+          name: actual-budget-mcp-mcpb
           path: ${{ runner.temp }}/actual-budget-mcp.mcpb

@@ -241,11 +241,16 @@ Download `actual-budget-mcp.mcpb` from the
 [latest release](https://github.com/henfrydls/actual-budget-mcp/releases/latest)
 and open it, or drag it onto Claude Desktop.
 
-The extension launches the published npm package rather than carrying its own
-copy of the dependencies. Actual's SDK compiles a native SQLite binary for the
-machine it runs on, so a bundle built on one platform would not work on the
-others; letting npm resolve it means the same extension works everywhere. It
-needs Node installed, and the first run downloads the package.
+The extension carries everything it needs, so the first question you ask is
+answered straight away rather than after an install you cannot see. It is a
+large download, once, with a progress bar.
+
+Earlier builds launched the package from npm instead. That made the download
+small and moved it to the first run, where nothing showed progress: Claude
+Desktop waited, decided the server was dead and said it could not connect, and
+the extension started working on its own a few minutes later. The bundle now
+includes Actual's SQLite binary for every platform and Node version it
+supports, and picks the right one when it starts.
 
 ### Which URL and port
 
@@ -671,7 +676,7 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
 ### Node Version Managers (fnm, nvm, volta)
 
 **MCP server shows "Server disconnected" in Claude Desktop**
-- Claude Desktop doesn't source your shell profile (`.bashrc`, `.zshrc`), so version managers like fnm, nvm, and volta won't work with the default `npx` command.
+- Claude Desktop doesn't source your shell profile (`.bashrc`, `.zshrc`), so version managers like fnm, nvm, and volta won't work with the default `npx` command. This applies to a manual `npx` entry in the config file, not to the Desktop Extension, which carries its own dependencies.
 - **Solution:** Use the absolute path to node in your config. Find it with:
 
 ```bash

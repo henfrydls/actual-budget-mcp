@@ -33,14 +33,18 @@ describe('the version is the same everywhere', () => {
     expect(read('gemini-extension.json').version).toBe(expected);
   });
 
-  it('manifest.json agrees, and launches the version it declares', () => {
+  it('manifest.json agrees, and launches the server inside the bundle', () => {
     const manifest = read('manifest.json');
 
     expect(manifest.version).toBe(expected);
-    // The Desktop Extension pins the package it launches. If that pin drifts,
-    // installing the extension would quietly run a different version from the
-    // one that was built, tested and reviewed.
-    expect(manifest.server.mcp_config.args.at(-1)).toBe(`actual-budget-mcp@${expected}`);
+    // The bundle carries its own server and starts it directly. It used to
+    // launch a pinned package from npm, which meant a bundle built from a
+    // fixed commit still installed the last published release and still
+    // reproduced the bug it was built to fix. Nothing here may reintroduce
+    // that: the command must run the file the bundle ships.
+    expect(manifest.server.mcp_config.command).toBe('node');
+    expect(manifest.server.mcp_config.args).toEqual(['${__dirname}/server/index.js']);
+    expect(manifest.server.entry_point).toBe('server/index.js');
   });
 
   it('server.json agrees at the top level', () => {
