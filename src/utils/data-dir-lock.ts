@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readEnv } from './env.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -32,7 +33,7 @@ function platformDataDir(): string {
 
 /** The directory the server will actually open. */
 export function effectiveDataDir(): string {
-  return process.env.ACTUAL_DATA_DIR || platformDataDir();
+  return readEnv('ACTUAL_DATA_DIR') || platformDataDir();
 }
 
 /**

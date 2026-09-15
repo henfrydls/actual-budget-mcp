@@ -46,7 +46,7 @@
     "server_url": {
       "type": "string",
       "title": "Actual server URL",
-      "description": "Where your Actual Budget server is reachable.",
+      "description": "Where your Actual Budget server is reachable. The desktop app uses port 5007, and only while it is open; a self-hosted server is usually 5006.",
       "default": "http://localhost:5006",
       "required": true
     },
