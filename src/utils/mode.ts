@@ -1,3 +1,5 @@
+import { readEnv } from './env.js';
+
 /**
  * Whether the server runs read-only, hiding every write tool from discovery.
  *
@@ -10,7 +12,7 @@
  * because writing is what most callers install this server for.
  */
 export function isReadOnly(): boolean {
-  const raw = process.env.ACTUAL_READ_ONLY;
+  const raw = readEnv('ACTUAL_READ_ONLY');
   if (!raw) return false;
   const value = raw.trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';

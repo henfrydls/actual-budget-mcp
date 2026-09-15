@@ -104,3 +104,67 @@ describe('session token authentication (OIDC servers)', () => {
     await expect(ensureConnection()).rejects.not.toThrow(/ACTUAL_PASSWORD/);
   });
 });
+
+/**
+ * The failure Henfry hit on macOS with the Desktop Extension. He left the
+ * optional session token field empty and filled in his password; Claude Desktop
+ * still set ACTUAL_SESSION_TOKEN, to the literal placeholder from the manifest.
+ * The server sent it as a token, the token lost to nothing, and the error told
+ * him to renew a token he had never created.
+ */
+describe('an optional field the host left unsubstituted', () => {
+  const PLACEHOLDER = '${user_config.session_token}';
+
+  beforeEach(() => {
+    vi.resetModules();
+    init.mockReset().mockResolvedValue({ send: vi.fn() });
+    downloadBudget.mockReset().mockResolvedValue(undefined);
+    process.env.ACTUAL_SERVER_URL = 'http://localhost:5007';
+    process.env.ACTUAL_BUDGET_ID = 'budget-1';
+    process.env.ACTUAL_DATA_DIR = '/tmp/actual-mcp-placeholder-test';
+  });
+
+  afterEach(() => {
+    for (const k of [
+      'ACTUAL_SERVER_URL',
+      'ACTUAL_BUDGET_ID',
+      'ACTUAL_DATA_DIR',
+      'ACTUAL_PASSWORD',
+      'ACTUAL_SESSION_TOKEN',
+      'ACTUAL_ENCRYPTION_PASSWORD',
+    ]) {
+      delete process.env[k];
+    }
+  });
+
+  it('uses the password, and never sends the placeholder as a token', async () => {
+    process.env.ACTUAL_SESSION_TOKEN = PLACEHOLDER;
+    process.env.ACTUAL_PASSWORD = 'the-real-password';
+    const { ensureConnection } = await import('../../connection.js');
+
+    await ensureConnection();
+
+    expect(init.mock.calls[0][0]).toMatchObject({ password: 'the-real-password' });
+    expect(init.mock.calls[0][0]).not.toHaveProperty('sessionToken');
+  });
+
+  it('does not send a placeholder encryption password to the budget download', async () => {
+    process.env.ACTUAL_PASSWORD = 'the-real-password';
+    process.env.ACTUAL_ENCRYPTION_PASSWORD = '${user_config.encryption_password}';
+    const { ensureConnection } = await import('../../connection.js');
+
+    await ensureConnection();
+
+    expect(downloadBudget.mock.calls[0][1]).toMatchObject({ password: undefined });
+  });
+
+  it('still prefers a real token over a password', async () => {
+    process.env.ACTUAL_SESSION_TOKEN = 'tok-real';
+    process.env.ACTUAL_PASSWORD = 'also-set';
+    const { ensureConnection } = await import('../../connection.js');
+
+    await ensureConnection();
+
+    expect(init.mock.calls[0][0]).toMatchObject({ sessionToken: 'tok-real' });
+  });
+});
