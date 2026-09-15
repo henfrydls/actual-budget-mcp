@@ -6,7 +6,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # contents:write is needed only to attach the .mcpb to the release; the
+  # workflow does not push code. Narrower than it looks: a release asset upload
+  # cannot modify the repository.
+  contents: write
   id-token: write # npm provenance, and OIDC for the MCP registry
 
 jobs:
@@ -32,6 +35,17 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Attach the Desktop Extension to the release, so the README's download
+      # link points at something that exists for every version.
+      - name: Build the Desktop Extension
+        run: ./scripts/build-mcpb.sh "$RUNNER_TEMP/actual-budget-mcp.mcpb"
+
+      - name: Attach it to the release
+        if: github.event_name == 'release'
+        run: gh release upload "${{ github.event.release.tag_name }}" "$RUNNER_TEMP/actual-budget-mcp.mcpb" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # Publishing to the MCP registry used to be a manual step done afterwards,
       # and 0.8.3 shows what that costs: it never happened, so the registry

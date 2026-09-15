@@ -33,6 +33,16 @@ describe('the version is the same everywhere', () => {
     expect(read('gemini-extension.json').version).toBe(expected);
   });
 
+  it('manifest.json agrees, and launches the version it declares', () => {
+    const manifest = read('manifest.json');
+
+    expect(manifest.version).toBe(expected);
+    // The Desktop Extension pins the package it launches. If that pin drifts,
+    // installing the extension would quietly run a different version from the
+    // one that was built, tested and reviewed.
+    expect(manifest.server.mcp_config.args.at(-1)).toBe(`actual-budget-mcp@${expected}`);
+  });
+
   it('server.json agrees at the top level', () => {
     expect(read('server.json').version).toBe(expected);
   });
