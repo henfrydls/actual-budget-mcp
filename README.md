@@ -247,6 +247,14 @@ machine it runs on, so a bundle built on one platform would not work on the
 others; letting npm resolve it means the same extension works everywhere. It
 needs Node installed, and the first run downloads the package.
 
+### Updating the extension
+
+Installing a new version over an old one keeps the settings you filled in, with
+one exception seen in practice: the saved server password was cleared when a
+field's title changed between versions. If Claude cannot connect after an
+update, open the extension's settings and check the password field before
+looking anywhere else.
+
 ### Which URL and port
 
 It depends on how you run Actual, and picking the wrong one gives a connection
