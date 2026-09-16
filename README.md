@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/actual-budget-mcp)](https://www.npmjs.com/package/actual-budget-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js->=20-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js->=22-green.svg)](https://nodejs.org/)
 [![Glama score](https://glama.ai/mcp/servers/henfrydls/actual-budget-mcp/badges/score.svg)](https://glama.ai/mcp/servers/henfrydls/actual-budget-mcp)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/henfrydls/actual-budget-mcp)
 
@@ -677,9 +677,8 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
 **"ReferenceError: navigator is not defined"**
 - `@actual-app/api` referenced the `navigator` global through 26.6. That global
   only exists on Node.js 21+, so importing the library on Node.js 20 threw
-  before the server could start. 26.8 dropped the reference, and this server
-  has supported Node.js 20 since 0.8.1.
-- **Solution:** Upgrade to actual-budget-mcp 0.8.1 or later, or run Node.js 22.
+  before the server could start. 26.8 dropped the reference.
+- **Solution:** Run Node.js 22 or newer, which is the minimum from 0.9.2 on.
 
 ### Node Version Managers (fnm, nvm, volta)
 
