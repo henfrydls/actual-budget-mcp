@@ -230,7 +230,7 @@ Treat the token like a password: it grants the same access. It also expires; if
 it does, the server says so and tells you to issue a new one, rather than
 blaming a password you do not have.
 
-### Claude Desktop extension (one click)
+### Claude Desktop extension
 
 A packaged Desktop Extension is available: install it and Claude Desktop asks
 for your server URL, password and Sync ID in its own settings UI, with the
@@ -238,8 +238,14 @@ password and session token stored in your operating system's keychain rather
 than a config file you have to edit.
 
 Download `actual-budget-mcp.mcpb` from the
-[latest release](https://github.com/henfrydls/actual-budget-mcp/releases/latest)
-and open it, or drag it onto Claude Desktop.
+[latest release](https://github.com/henfrydls/actual-budget-mcp/releases/latest),
+then open Claude Desktop, go to **Settings > Extensions**, and drag the file
+onto that screen.
+
+On Windows, dragging is the way in: double-clicking the file opens Windows'
+"select an app to open this file" dialogue instead, because Claude Desktop does
+not register the `.mcpb` file type. Verified on a clean Windows 11 install with
+Claude Desktop 0.14.10.
 
 The extension carries everything it needs, so the first question you ask is
 answered straight away rather than after an install you cannot see. It is a
