@@ -6,7 +6,7 @@ import {
   effectiveDataDir,
   ensureDataDirExists,
 } from './utils/data-dir-lock.js';
-import { packageVersion } from './utils/version.js';
+import { packageVersion, actualApiVersion } from './utils/version.js';
 import { readEnv } from './utils/env.js';
 
 let initialized = false;
@@ -107,6 +107,54 @@ function unreachableMessage(serverURL: string): string {
   );
 }
 
+/**
+ * Run the budget download while watching for the one failure Actual reports
+ * only in passing.
+ *
+ * A budget that a newer Actual has migrated cannot be opened by an older
+ * `@actual-app/api`. Actual logs `out-of-sync-migrations` to the console and
+ * then throws `No budget file is open`, which names a symptom the user cannot
+ * act on: nothing about their URL, password or Sync ID is wrong, and no amount
+ * of checking those will help.
+ *
+ * It cost an afternoon to find. The Desktop Extension bundles its dependencies,
+ * so unlike an npx install it cannot pick up a newer Actual library on its own,
+ * which makes this a failure people will actually meet: their Actual updates
+ * itself, and the extension stops opening their budget with an error about a
+ * file.
+ *
+ * Reading it off the console is not elegant, and the alternative is worse: the
+ * marker is not on the error, so without this the message stays useless.
+ */
+async function downloadBudgetWatchingMigrations(
+  budgetId: string,
+  encryptionPassword: string | undefined,
+): Promise<{ migrationsOutOfSync: boolean }> {
+  let migrationsOutOfSync = false;
+  const seen = (args: unknown[]) => {
+    if (args.some((a) => String(a).includes('out-of-sync-migrations'))) {
+      migrationsOutOfSync = true;
+    }
+  };
+
+  const originals = { log: console.log, error: console.error, warn: console.warn };
+  console.log = (...args: unknown[]) => { seen(args); originals.log(...args); };
+  console.error = (...args: unknown[]) => { seen(args); originals.error(...args); };
+  console.warn = (...args: unknown[]) => { seen(args); originals.warn(...args); };
+
+  try {
+    await api.downloadBudget(budgetId, { password: encryptionPassword });
+    return { migrationsOutOfSync };
+  } catch (error) {
+    (error as { migrationsOutOfSync?: boolean }).migrationsOutOfSync = migrationsOutOfSync;
+    throw error;
+  } finally {
+    console.log = originals.log;
+    console.error = originals.error;
+    console.warn = originals.warn;
+  }
+}
+
 export async function ensureConnection(): Promise<void> {
   if (initialized) return;
 
@@ -183,13 +231,25 @@ export async function ensureConnection(): Promise<void> {
     }
 
     try {
-      await api.downloadBudget(config.budgetId, {
-        password: config.encryptionPassword,
-      });
+      await downloadBudgetWatchingMigrations(config.budgetId, config.encryptionPassword);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = errorCode(error);
-      // Checked first: an unreachable server also throws an empty Error, and the
+
+      // Checked before anything else: this one masquerades as every other
+      // failure, because the message it arrives with mentions a file rather
+      // than a version.
+      if ((error as { migrationsOutOfSync?: boolean })?.migrationsOutOfSync) {
+        throw new Error(
+          'Your Actual Budget is newer than the Actual library this server uses ' +
+            `(${actualApiVersion()}), so it cannot open your budget: a budget migrated by a ` +
+            'newer Actual needs a matching library. Nothing is wrong with your password, ' +
+            'URL or Sync ID. Update actual-budget-mcp, or the Desktop Extension, to a ' +
+            'version built against your Actual.',
+        );
+      }
+
+      // Checked next: an unreachable server also throws an empty Error, and the
       // auth heuristic below would then read "no message and no password" as a
       // missing password. That sent people to check a password for an hour when
       // nothing was listening on the URL.

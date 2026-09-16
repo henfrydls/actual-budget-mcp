@@ -158,3 +158,73 @@ describe('a network failure never reads as an authentication failure', () => {
     await expect(ensureConnection()).rejects.toThrow(/session token/i);
   });
 });
+
+/**
+ * The failure that cost an afternoon: a budget migrated by a newer Actual.
+ * The library logs `out-of-sync-migrations` and then throws `No budget file is
+ * open`, which sends the reader to check a password, a URL and a Sync ID that
+ * are all correct.
+ */
+describe('a budget a newer Actual has already migrated', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    init.mockReset().mockResolvedValue({ send: vi.fn() });
+    downloadBudget.mockReset();
+    process.env.ACTUAL_SERVER_URL = 'http://localhost:5007';
+    process.env.ACTUAL_BUDGET_ID = 'budget-1';
+    process.env.ACTUAL_PASSWORD = 'right';
+    process.env.ACTUAL_DATA_DIR = '/tmp/actual-mcp-migrations-test';
+  });
+
+  afterEach(() => {
+    for (const k of ['ACTUAL_SERVER_URL', 'ACTUAL_BUDGET_ID', 'ACTUAL_DATA_DIR', 'ACTUAL_PASSWORD']) {
+      delete process.env[k];
+    }
+  });
+
+  /** What Actual actually does: log the cause, throw something else. */
+  const actualsBehaviour = () => {
+    downloadBudget.mockImplementation(async () => {
+      console.error('Error updating Error: out-of-sync-migrations');
+      throw new Error('No budget file is open');
+    });
+  };
+
+  it('says the library is older than the budget, not that a file is missing', async () => {
+    actualsBehaviour();
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow(/newer than the Actual library/i);
+  });
+
+  it('tells the reader their password and Sync ID are not the problem', async () => {
+    actualsBehaviour();
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow(/Nothing is wrong with your password/i);
+  });
+
+  it('names the version it is running, since nobody can look that up', async () => {
+    actualsBehaviour();
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow(/\d+\.\d+\.\d+/);
+  });
+
+  it('leaves the console as it found it', async () => {
+    actualsBehaviour();
+    const before = console.error;
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow();
+
+    expect(console.error).toBe(before);
+  });
+
+  it('does not claim a migration problem when the download simply fails', async () => {
+    downloadBudget.mockRejectedValue(new Error('Could not get remote files'));
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.not.toThrow(/newer than the Actual library/i);
+  });
+});
