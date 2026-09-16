@@ -66,12 +66,50 @@ rm -f "$STAGE/package-lock.json"
 rm -rf "$STAGE/node_modules/better-sqlite3/deps"
 
 # One binary per ABI and platform, laid out the way native-binding.ts looks for
-# them. Only ABIs with published prebuilds are listed: 115 (Node 20) and 131
-# (Node 23) have none, and a bundle cannot compile one.
+# them.
+#
+# The ABI list is read from the release rather than written here, because the
+# Node an extension runs on is not ours to pin and it moves on its own: Claude
+# Desktop ships its own Node and updated it from 22.19.0 to 24.20.0 (ABI 127 to
+# 137) during a single afternoon of testing. A hardcoded list would have been
+# correct on the day it was written and would break the day a host moved to an
+# ABI nobody remembered to add, with the extension reporting "no SQLite binary
+# for node-vNNN" to a user who did nothing wrong.
+#
+# Whatever better-sqlite3 publishes, the bundle carries. ABIs with no prebuild
+# (115 for Node 20, 131 for Node 23) are absent from the release and so absent
+# here, which is also why those Node versions are not supported.
 BETTER_SQLITE3=$(node -p "require('$ROOT/node_modules/better-sqlite3/package.json').version")
 BASE="https://github.com/WiseLibs/better-sqlite3/releases/download/v${BETTER_SQLITE3}"
-ABIS="127 137 141 147"
 PLATFORMS="darwin-arm64 darwin-x64 win32-x64 win32-arm64 linux-x64 linux-arm64"
+
+# Falls back to the ABIs known when this was written, so a rate-limited or
+# unreachable API degrades to the old behaviour instead of building a bundle
+# with no binaries in it.
+FALLBACK_ABIS="127 137 141 147"
+ABIS=$(curl -sfL "https://api.github.com/repos/WiseLibs/better-sqlite3/releases/tags/v${BETTER_SQLITE3}" \
+  | node -e "
+    let raw = '';
+    process.stdin.on('data', (c) => (raw += c));
+    process.stdin.on('end', () => {
+      try {
+        const names = (JSON.parse(raw).assets || []).map((a) => a.name);
+        const abis = new Set();
+        for (const name of names) {
+          const m = /-node-v(\\d+)-/.exec(name);
+          if (m) abis.add(Number(m[1]));
+        }
+        console.log([...abis].sort((a, b) => a - b).join(' '));
+      } catch {
+        // Nothing printed; the caller falls back.
+      }
+    });
+  " 2>/dev/null) || true
+if [ -z "${ABIS// /}" ]; then
+  echo "note: could not read the published ABI list, using $FALLBACK_ABIS" >&2
+  ABIS="$FALLBACK_ABIS"
+fi
+echo "SQLite ABIs to bundle: $ABIS" >&2
 
 mkdir -p "$STAGE/server/prebuilds"
 COUNT=0
