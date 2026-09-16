@@ -27,10 +27,9 @@
     "type": "node",
     "entry_point": "server/index.js",
     "mcp_config": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "actual-budget-mcp@0.9.1"
+        "${__dirname}/server/index.js"
       ],
       "env": {
         "ACTUAL_SERVER_URL": "${user_config.server_url}",
@@ -93,7 +92,7 @@
       "linux"
     ],
     "runtimes": {
-      "node": ">=20.0.0"
+      "node": ">=22.0.0"
     }
   },
   "privacy_policies": [

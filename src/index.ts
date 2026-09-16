@@ -13,6 +13,7 @@ import { describeError } from './utils/errors.js';
 import * as api from '@actual-app/api';
 
 import { packageVersion } from './utils/version.js';
+import { ensureNativeBinding } from './utils/native-binding.js';
 
 // Redirect console.log/warn/info to stderr so they don't contaminate
 // the MCP JSON-RPC protocol on stdout. Libraries like @actual-app/api
@@ -32,6 +33,7 @@ console.warn = (...args: unknown[]) => console.error(...args);
 // whose stray rejections motivated this.
 installProcessGuards();
 
+
 // --version / -v: answered before anything else, and before any config is
 // required. Typing it used to fall through to startup validation and print
 // "Missing required environment variables", which answers a question nobody
@@ -40,6 +42,22 @@ if (process.argv.includes('--version') || process.argv.includes('-v')) {
   originalLog(packageVersion);
   process.exit(0);
 }
+
+// Which runtime is actually running this, and which SQLite binary it will use.
+// One line on stderr, where MCP clients keep their logs. It is the first thing
+// a bug report needs and the one thing the reporter cannot look up: the ABI
+// decides whether the bundled binary can load at all, and a host that ships its
+// own Node does not advertise which one.
+//
+// Runs before any database is opened. `bindings` resolves the binary lazily,
+// inside the Database constructor, so this is early enough by a wide margin.
+const binding = ensureNativeBinding();
+console.error(
+  `[actual-budget-mcp] ${packageVersion} on node ${process.version} ` +
+    `(abi ${process.versions.modules}, ${process.platform}-${process.arch}) ` +
+    `exec=${process.execPath} sqlite=${binding.status}` +
+    (binding.detail ? ` (${binding.detail})` : ''),
+);
 
 // --verify flag: test connection and exit (restore stdout for user output)
 if (process.argv.includes('--verify')) {
