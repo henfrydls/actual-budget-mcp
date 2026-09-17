@@ -85,3 +85,31 @@ describe('describeError names data dir contention (#47)', () => {
     expect(describeError(new Error(''))).toMatch(/another/i);
   });
 });
+
+/**
+ * #71, from two real crashes on 10 and 11 September: both landed mid-write and
+ * the transaction was already in the budget when the error came back. An error
+ * reads as "it did not happen", so the natural next step duplicates it.
+ */
+describe('an error that cannot promise the write did not happen', () => {
+  it('warns before a retry when the sync state is out of sync', async () => {
+    const { describeError } = await import('../errors.js');
+
+    const text = describeError(new Error('out-of-sync'));
+
+    expect(text).toMatch(/check the budget before retrying/i);
+    expect(text).toMatch(/duplicate/i);
+  });
+
+  it('warns the same way for the empty error Actual throws mid-sync', async () => {
+    const { describeError } = await import('../errors.js');
+
+    expect(describeError(new Error(''))).toMatch(/check the budget before retrying/i);
+  });
+
+  it('stays quiet for an ordinary error that says what went wrong', async () => {
+    const { describeError } = await import('../errors.js');
+
+    expect(describeError(new Error('Category "Food" does not exist'))).not.toMatch(/duplicate/i);
+  });
+});

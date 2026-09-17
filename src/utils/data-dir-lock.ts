@@ -135,11 +135,30 @@ export function acquireDataDirLock(dataDir: string, version: string): LockResult
     startedAt: new Date().toISOString(),
     version,
   };
+
+  // Created exclusively so two servers starting at the same moment cannot both
+  // decide the directory is free. That is not a rare race: it is what happens
+  // when a machine boots and several clients launch their servers together,
+  // which is exactly the case #71 is about. A plain write would let both win.
+  try {
+    writeFileSync(lockPath(dataDir), JSON.stringify(info), { flag: 'wx' });
+    return { acquired: true };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+      // A missing or read-only directory must not stop the server: the lock is
+      // a diagnostic aid, never a prerequisite.
+      return { acquired: true };
+    }
+  }
+
+  // The file existed. Either it is stale, in which case take it over, or
+  // someone claimed it between our check and our write.
+  const now = readDataDirLock(dataDir);
+  if (now && now.pid !== process.pid) return { acquired: false, heldBy: now };
   try {
     writeFileSync(lockPath(dataDir), JSON.stringify(info));
   } catch {
-    // A missing or read-only directory must not stop the server: the lock is a
-    // diagnostic aid, never a prerequisite.
+    // As above: never a prerequisite.
   }
   return { acquired: true };
 }
@@ -153,4 +172,74 @@ export function releaseDataDirLock(dataDir: string): void {
   } catch {
     // Nothing to release, or someone removed it first.
   }
+}
+
+/** Where the server ended up, and why, so the caller can say so once. */
+export interface ClaimedDataDir {
+  /** The directory to actually open. */
+  dataDir: string;
+  /** The configured directory, when it was in use and we stepped aside. */
+  contended?: string;
+  /** The live process holding the configured directory. */
+  heldBy?: LockInfo;
+  /** True when every candidate was taken and we are sharing after all. */
+  shared?: boolean;
+}
+
+/**
+ * How many siblings to try before giving up and sharing.
+ *
+ * Eight is far past any real setup: it means eight live servers on one machine
+ * all pointed at the same directory. Past that, sharing is still better than
+ * refusing to start.
+ */
+const MAX_SIBLINGS = 8;
+
+/**
+ * Claim a data directory, stepping aside instead of sharing a contended one.
+ *
+ * Two servers on one directory drive the budget `out-of-sync` (#47), and the
+ * lock used to do nothing about it but say so on stderr. That was not enough,
+ * and #71 has the measurement: four live servers on this project's own machine,
+ * all configured with the same directory, one of them already holding the
+ * budget open. The warning had been printed correctly every time and nobody had
+ * ever seen it.
+ *
+ * The constraint from #47 still holds and is still right: never refuse to
+ * start. A stale lock must never leave someone unable to run the server at all.
+ * So this never blocks. It picks `<dir>-2`, `-3` and so on until it finds one
+ * no live process holds, which means:
+ *
+ *   - one server, the common case, is untouched and keeps its warm cache
+ *   - a second client pays one budget download and gets a correct budget
+ *   - a directory whose lock names a dead process is reclaimed, not abandoned,
+ *     so these do not pile up after a reboot
+ *
+ * Stepping aside applies to an explicitly configured ACTUAL_DATA_DIR too. That
+ * is deliberate, and it is the case that actually bites: the four servers
+ * measured in #71 all had it set to the same path. Honouring the setting to the
+ * letter would mean corrupting the budget it points at.
+ */
+export function claimDataDir(version: string): ClaimedDataDir {
+  const configured = effectiveDataDir();
+
+  for (let n = 1; n <= MAX_SIBLINGS; n++) {
+    const candidate = n === 1 ? configured : `${configured}-${n}`;
+    ensureDataDirExists(candidate);
+    const lock = acquireDataDirLock(candidate, version);
+    if (lock.acquired) {
+      return n === 1
+        ? { dataDir: candidate }
+        : { dataDir: candidate, contended: configured, heldBy: readDataDirLock(configured) ?? undefined };
+    }
+  }
+
+  // Everything is taken. Sharing is wrong, and not starting is worse.
+  ensureDataDirExists(configured);
+  return {
+    dataDir: configured,
+    contended: configured,
+    heldBy: readDataDirLock(configured) ?? undefined,
+    shared: true,
+  };
 }
