@@ -46,6 +46,24 @@ const OUT_OF_SYNC_HELP =
   "The budget's sync state is out of sync with the Actual server, so no operation " +
   `can run until it is repaired. ${REPAIR_HINT}`;
 
+/**
+ * The part of an out-of-sync failure that costs money if it is left unsaid.
+ *
+ * These failures land mid-write, and the write has often already been applied
+ * locally before the error comes back (#71: two crashes on 10 and 11 September,
+ * both mid-write, both with the transaction already in the budget). An error
+ * reads as "it did not happen", so the natural response is to do it again, and
+ * doing it again duplicates a transaction that was already there. Both times it
+ * had to be checked by hand.
+ *
+ * So the error says what it cannot rule out. Verifying once is cheap; finding a
+ * duplicate a month later, during a reconciliation that no longer balances, is
+ * not.
+ */
+const MAY_ALREADY_BE_APPLIED =
+  ' If this happened during a write, check the budget before retrying: a change ' +
+  'can be applied and still report an error, and repeating it would duplicate it.';
+
 const VERSION_MISMATCH_HELP =
   'This budget cannot be loaded by this version of Actual: its data or migrations ' +
   'are newer or older than the API supports. Update the Actual app and the ' +
@@ -93,8 +111,10 @@ export function describeError(error: unknown): string {
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
-  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + contentionNote();
+  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + MAY_ALREADY_BE_APPLIED + contentionNote();
 
   const message = readable(error);
-  return message.trim() === '' ? EMPTY_ERROR_HINT + contentionNote() : message;
+  return message.trim() === ''
+    ? EMPTY_ERROR_HINT + MAY_ALREADY_BE_APPLIED + contentionNote()
+    : message;
 }

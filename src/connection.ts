@@ -1,7 +1,7 @@
 import * as api from '@actual-app/api';
 import type { ConnectionConfig } from './types.js';
 import {
-  acquireDataDirLock,
+  claimDataDir,
   releaseDataDirLock,
   effectiveDataDir,
   ensureDataDirExists,
@@ -11,6 +11,8 @@ import { readEnv } from './utils/env.js';
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
+/** The directory this process actually claimed, which may not be the configured one. */
+let claimedDataDir: string | null = null;
 
 /**
  * The context `api.init()` returns. Its `send` reaches Actual's internal
@@ -165,22 +167,33 @@ export async function ensureConnection(): Promise<void> {
 
   initializing = (async () => {
     const config = getConfig();
-    const dataDir = effectiveDataDir();
-    // Before anything else: api.init() tolerates a missing directory but
-    // downloadBudget() then dies with a bare ENOENT that masks every other
-    // diagnostic.
-    ensureDataDirExists(dataDir);
+    // Claiming creates the directory as a side effect, which matters: api.init()
+    // tolerates a missing one but downloadBudget() then dies with a bare ENOENT
+    // that masks every other diagnostic.
+    //
+    // #71: when the configured directory is already held by a live server this
+    // steps aside to a sibling rather than sharing. Sharing is what drives a
+    // budget out-of-sync, and warning about it was not enough — four live
+    // servers were measured on one machine, all on one directory, every warning
+    // printed correctly and never read.
+    const claim = claimDataDir(packageVersion);
+    const dataDir = claim.dataDir;
+    claimedDataDir = dataDir;
 
-    // #47: advisory only — never refuse to start. Two servers on one data dir
-    // drive the budget out-of-sync, so warn early and let describeError name
-    // the other process if something does fail later.
-    const lock = acquireDataDirLock(dataDir, packageVersion);
-    if (!lock.acquired && lock.heldBy) {
+    if (claim.shared && claim.heldBy) {
       // stderr: stdout carries JSON-RPC.
       console.error(
-        `[actual-budget-mcp] warning: another server (pid ${lock.heldBy.pid}) is already ` +
-          `using ${dataDir}. Sharing a data dir puts the budget out of sync: ` +
-          'give each client its own ACTUAL_DATA_DIR.',
+        `[actual-budget-mcp] warning: ${claim.contended} and every alternative are in ` +
+          `use (pid ${claim.heldBy.pid} holds the first). Sharing one puts the budget out ` +
+          'of sync: give each client its own ACTUAL_DATA_DIR.',
+      );
+    } else if (claim.contended) {
+      console.error(
+        `[actual-budget-mcp] ${claim.contended} is in use` +
+          (claim.heldBy ? ` by pid ${claim.heldBy.pid}` : '') +
+          `, so this server is using ${dataDir} instead. Two servers on one cache drive ` +
+          'the budget out of sync. The first run here downloads the budget again; set ' +
+          'ACTUAL_DATA_DIR per client to choose the location yourself.',
       );
     }
 
@@ -313,7 +326,11 @@ export async function ensureConnection(): Promise<void> {
 export async function shutdown(): Promise<void> {
   if (!initialized) return;
   await api.shutdown();
-  releaseDataDirLock(effectiveDataDir());
+  // The claimed directory, not the configured one: they differ whenever this
+  // server stepped aside, and releasing the wrong lock would drop someone
+  // else's.
+  releaseDataDirLock(claimedDataDir ?? effectiveDataDir());
+  claimedDataDir = null;
   initialized = false;
   initializing = null;
   internal = null;
