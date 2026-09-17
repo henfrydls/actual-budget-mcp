@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "actual-budget-mcp",
   "display_name": "Actual Budget",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Ask your Actual Budget where the money went, and let it write back safely.",
   "long_description": "Connects Claude to your self-hosted Actual Budget so you can ask questions in plain language: where the money went last month, whether you will make it to payday, which categories drift every month.\n\nIt also writes, and it is careful about it. Every delete previews what it would destroy and asks before doing anything, and the ones that find their target by name make you type the name back, because that is where deleting the wrong thing actually happens. There is a read-only mode that hides every write tool from the model entirely, rather than trusting it to refuse.\n\nYour budget data never leaves your machine: the server talks directly to your own Actual server and nothing is sent anywhere else.",
   "author": {
