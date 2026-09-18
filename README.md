@@ -40,11 +40,17 @@ a lot of people running Actual it does, a local model keeps it on your machine.
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
-- [Node.js](https://nodejs.org/) 20 or higher (see [Node.js requirement](#nodejs-requirement))
+- [Node.js](https://nodejs.org/) 22 or higher (see [Node.js requirement](#nodejs-requirement)).
+  The Desktop Extension below still needs Node present, but never compiles
+  anything: it carries a prebuilt SQLite binary for every Node version it
+  supports.
 
 ## Quick Start
 
-The fastest way to get started - copy this into Claude Code or Claude Desktop:
+On Claude Desktop, the shortest path is the
+[extension](#option-1-claude-desktop-extension-no-config-files): no config file
+to edit and no command to run. Otherwise, copy this into Claude Code or Claude
+Desktop:
 
 ```bash
 Install the actual-budget-mcp MCP server from npm (https://github.com/henfrydls/actual-budget-mcp).
@@ -58,13 +64,48 @@ Claude will configure everything for you.
 
 ## Installation
 
-### Option 1: Claude Code (one command)
+### Option 1: Claude Desktop extension (no config files)
+
+A packaged Desktop Extension is available: install it and Claude Desktop asks
+for your server URL, password and Sync ID in its own settings UI, with the
+password and session token stored in your operating system's keychain rather
+than a config file you have to edit.
+
+**[Download actual-budget-mcp.mcpb](https://github.com/henfrydls/actual-budget-mcp/releases/latest/download/actual-budget-mcp.mcpb)**,
+then open Claude Desktop, go to **Settings > Extensions**, and drag the file
+onto that screen.
+
+On Windows, dragging is the way in: double-clicking the file opens Windows'
+"select an app to open this file" dialogue instead, because Claude Desktop does
+not register the `.mcpb` file type. Verified on a clean Windows 11 install with
+Claude Desktop 0.14.10.
+
+The extension carries everything it needs, so the first question you ask is
+answered straight away rather than after an install you cannot see. It is a
+large download, once, with a progress bar.
+
+Earlier builds launched the package from npm instead. That made the download
+small and moved it to the first run, where nothing showed progress: Claude
+Desktop waited, decided the server was dead and said it could not connect, and
+the extension started working on its own a few minutes later. The bundle now
+includes Actual's SQLite binary for every platform and Node version it
+supports, and picks the right one when it starts.
+
+#### Updating the extension
+
+Installing a new version over an old one keeps the settings you filled in, with
+one exception seen in practice: the saved server password was cleared when a
+field's title changed between versions. If Claude cannot connect after an
+update, open the extension's settings and check the password field before
+looking anywhere else.
+
+### Option 2: Claude Code (one command)
 
 ```bash
 claude mcp add actual-budget-mcp -e ACTUAL_SERVER_URL=http://localhost:5006 -e ACTUAL_PASSWORD=your-password -e ACTUAL_BUDGET_ID=your-budget-id -- npx -y actual-budget-mcp
 ```
 
-### Option 2: Claude Desktop
+### Option 3: Claude Desktop (edit the config file)
 
 Add this to your `claude_desktop_config.json`:
 
@@ -87,7 +128,7 @@ Add this to your `claude_desktop_config.json`:
 }
 ```
 
-### Option 3: Cursor
+### Option 4: Cursor
 
 Go to **Cursor Settings > MCP > Add new MCP server** and add:
 
@@ -107,7 +148,7 @@ Go to **Cursor Settings > MCP > Add new MCP server** and add:
 }
 ```
 
-### Option 4: VS Code (GitHub Copilot)
+### Option 5: VS Code (GitHub Copilot)
 
 Add this to your VS Code `settings.json`:
 
@@ -129,7 +170,7 @@ Add this to your VS Code `settings.json`:
 }
 ```
 
-### Option 5: Docker
+### Option 6: Docker
 
 The image speaks stdio like every other option, so your client starts the
 container and owns its lifetime:
@@ -166,7 +207,7 @@ Two things that bite everyone once:
 - **Mount `/data`.** That is the budget cache. Without a volume, every start
   re-downloads your entire budget from the server.
 
-### Option 6: From source (for contributors)
+### Option 7: From source (for contributors)
 
 ```bash
 git clone https://github.com/henfrydls/actual-budget-mcp.git
@@ -229,42 +270,6 @@ often cannot find it.
 Treat the token like a password: it grants the same access. It also expires; if
 it does, the server says so and tells you to issue a new one, rather than
 blaming a password you do not have.
-
-### Claude Desktop extension
-
-A packaged Desktop Extension is available: install it and Claude Desktop asks
-for your server URL, password and Sync ID in its own settings UI, with the
-password and session token stored in your operating system's keychain rather
-than a config file you have to edit.
-
-Download `actual-budget-mcp.mcpb` from the
-[latest release](https://github.com/henfrydls/actual-budget-mcp/releases/latest),
-then open Claude Desktop, go to **Settings > Extensions**, and drag the file
-onto that screen.
-
-On Windows, dragging is the way in: double-clicking the file opens Windows'
-"select an app to open this file" dialogue instead, because Claude Desktop does
-not register the `.mcpb` file type. Verified on a clean Windows 11 install with
-Claude Desktop 0.14.10.
-
-The extension carries everything it needs, so the first question you ask is
-answered straight away rather than after an install you cannot see. It is a
-large download, once, with a progress bar.
-
-Earlier builds launched the package from npm instead. That made the download
-small and moved it to the first run, where nothing showed progress: Claude
-Desktop waited, decided the server was dead and said it could not connect, and
-the extension started working on its own a few minutes later. The bundle now
-includes Actual's SQLite binary for every platform and Node version it
-supports, and picks the right one when it starts.
-
-### Updating the extension
-
-Installing a new version over an old one keeps the settings you filled in, with
-one exception seen in practice: the saved server password was cleared when a
-field's title changed between versions. If Claude cannot connect after an
-update, open the extension's settings and check the password field before
-looking anywhere else.
 
 ### Which URL and port
 
