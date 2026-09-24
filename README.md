@@ -49,6 +49,9 @@ opposite of what most people running Actual want. Anything that can start a loca
 process works instead: Claude Desktop, Claude Code, Cursor, VS Code, Gemini CLI, or your
 own setup pointed at a local model.
 
+If what you actually want is OpenAI's model, use **Codex**, which does run MCP servers
+locally over stdio. [Option 6](#option-6-codex-openai) is the one command it takes.
+
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
@@ -142,7 +145,12 @@ Add this to your `claude_desktop_config.json`:
 
 ### Option 4: Cursor
 
-Go to **Cursor Settings > MCP > Add new MCP server** and add:
+[![Add to Cursor](https://img.shields.io/badge/Cursor-Install_Server-000000?style=flat-square&logo=cursor&logoColor=white)](cursor://anysphere.cursor-deeplink/mcp/install?name=actual-budget-mcp&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImFjdHVhbC1idWRnZXQtbWNwIl0sImVudiI6eyJBQ1RVQUxfU0VSVkVSX1VSTCI6Imh0dHA6Ly9sb2NhbGhvc3Q6NTAwNiIsIkFDVFVBTF9QQVNTV09SRCI6InlvdXItcGFzc3dvcmQiLCJBQ1RVQUxfQlVER0VUX0lEIjoieW91ci1idWRnZXQtc3luYy1pZCJ9fQ==)
+
+The button installs it with placeholder values. Open **Cursor Settings > MCP**
+afterwards and replace the three: your server URL, your password, and your
+budget's Sync ID. To do it all by hand instead, go to **Cursor Settings > MCP >
+Add new MCP server** and add:
 
 ```json
 {
@@ -162,7 +170,10 @@ Go to **Cursor Settings > MCP > Add new MCP server** and add:
 
 ### Option 5: VS Code (GitHub Copilot)
 
-Add this to your VS Code `settings.json`:
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=actual-budget-mcp&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22actual-budget-mcp%22%5D%2C%22env%22%3A%7B%22ACTUAL_SERVER_URL%22%3A%22http%3A%2F%2Flocalhost%3A5006%22%2C%22ACTUAL_PASSWORD%22%3A%22your-password%22%2C%22ACTUAL_BUDGET_ID%22%3A%22your-budget-sync-id%22%7D%7D) [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_Server-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=actual-budget-mcp&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22actual-budget-mcp%22%5D%2C%22env%22%3A%7B%22ACTUAL_SERVER_URL%22%3A%22http%3A%2F%2Flocalhost%3A5006%22%2C%22ACTUAL_PASSWORD%22%3A%22your-password%22%2C%22ACTUAL_BUDGET_ID%22%3A%22your-budget-sync-id%22%7D%7D&quality=insiders)
+
+Same as above: the button fills in placeholders, and you replace the three
+values afterwards. By hand, add this to your VS Code `settings.json`:
 
 ```json
 {
@@ -182,7 +193,27 @@ Add this to your VS Code `settings.json`:
 }
 ```
 
-### Option 6: Docker
+### Option 6: Codex (OpenAI)
+
+One command, and it writes the entry into `~/.codex/config.toml` for you:
+
+```bash
+codex mcp add actual-budget-mcp \
+  --env ACTUAL_SERVER_URL=http://localhost:5006 \
+  --env ACTUAL_PASSWORD=your-password \
+  --env ACTUAL_BUDGET_ID=your-budget-sync-id \
+  -- npx -y actual-budget-mcp
+```
+
+Codex has no extension or bundle format, so this one-liner is the shortest route
+there is. `codex mcp list` shows it afterwards, and `codex mcp remove
+actual-budget-mcp` undoes it.
+
+This is Codex the local agent, the CLI and the IDE extension. Codex in the
+browser runs on OpenAI's machines and cannot reach an Actual server on your
+network.
+
+### Option 7: Docker
 
 The image speaks stdio like every other option, so your client starts the
 container and owns its lifetime:
@@ -219,7 +250,7 @@ Two things that bite everyone once:
 - **Mount `/data`.** That is the budget cache. Without a volume, every start
   re-downloads your entire budget from the server.
 
-### Option 7: From source (for contributors)
+### Option 8: From source (for contributors)
 
 ```bash
 git clone https://github.com/henfrydls/actual-budget-mcp.git
