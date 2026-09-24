@@ -248,3 +248,37 @@ describe('when the check itself cannot run', () => {
     ).rejects.toThrow(/could not be.*determined/is);
   });
 });
+
+/**
+ * The probe window is for answering "did it land?" after a failure. Reusing it
+ * for the category diff widened that diff from one day to sixty-two, and every
+ * mutation schedules a full sync a second later, so rows written by another
+ * process land inside the gap and were given this transaction's category.
+ * Silent, on the success path, and invisible in a reconciliation.
+ */
+describe('forcing the category never touches another row', () => {
+  it('leaves a row from another day alone, even inside the probe window', async () => {
+    vi.mocked(api.getTransactions)
+      .mockReset()
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        { id: 'mine', account: 'acc-1', date: '2026-09-21', amount: -5000, category: null },
+        // Arrived between the two reads, from someone else's write.
+        { id: 'theirs', account: 'acc-1', date: '2026-09-07', amount: -31900, category: 'cat-2' },
+      ] as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
+
+    await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+      category: 'Alimentación',
+    });
+
+    const touched = vi.mocked(api.updateTransaction).mock.calls.map((c) => c[0]);
+    expect(touched).toEqual(['mine']);
+    expect(touched).not.toContain('theirs');
+  });
+});

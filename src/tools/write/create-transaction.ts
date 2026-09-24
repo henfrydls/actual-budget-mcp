@@ -100,18 +100,49 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
-  const probe = {
-    before: beforeIds,
-    window: window.label,
-    read: () => api.getTransactions(accountId, window.start, window.end),
-    // Amount alone is not enough: with two agents reconciling one statement,
-    // the same amount on the same day in the same account is the normal case,
-    // not a coincidence. Every field we sent is compared, and an unrecognised
-    // new row makes the answer "unknown" rather than "not saved".
-    matches: (row: Record<string, any>) =>
-      row.amount === amountCents &&
-      (input.notes === undefined || row.notes === input.notes) &&
-      (transferPayeeId === undefined || row.payee === transferPayeeId),
+  const cleared = input.cleared ?? false;
+
+  /**
+   * Built after the failure, not before, because the payee has to be resolved
+   * by then.
+   *
+   * Amount alone is not enough, and an earlier version compared the payee only
+   * for transfers — so the commonest call of all, a payee by name with no
+   * notes, was matched on amount and nothing else. One stranger's row of the
+   * same amount inside the window was enough to answer "it was saved, do not
+   * repeat it" about a transaction that was never written. That answer now
+   * comes back as a clean success rather than an error, which raises the price
+   * of getting it wrong, so the comparison has to carry its weight.
+   *
+   * `payee_name` is sent, not an id, and Actual creates the payee if it is new.
+   * By the time this runs the payee exists, so the name resolves and the row's
+   * `payee` can be compared like any other field.
+   */
+  const buildProbe = async () => {
+    let expectedPayee: string | undefined = transferPayeeId;
+    if (!expectedPayee && input.payee) {
+      try {
+        const payees = await api.getPayees();
+        expectedPayee = payees.find(
+          (p) => p.name?.toLowerCase() === input.payee!.toLowerCase(),
+        )?.id;
+      } catch {
+        // Leave it unset: an unresolvable payee is one fewer field to compare,
+        // and the fields that remain still have to agree.
+        expectedPayee = undefined;
+      }
+    }
+
+    return {
+      before: beforeIds,
+      window: window.label,
+      read: () => api.getTransactions(accountId, window.start, window.end),
+      matches: (row: Record<string, any>) =>
+        row.amount === amountCents &&
+        Boolean(row.cleared) === cleared &&
+        (input.notes === undefined || row.notes === input.notes) &&
+        (expectedPayee === undefined || row.payee === expectedPayee),
+    };
   };
 
   // One wrapper around the whole write, not one per call. The middle step below
@@ -128,7 +159,17 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // SDK overrode it with a learned mapping.
     if (categoryId) {
       const after = (await api.getTransactions(accountId, window.start, window.end)) ?? [];
-      const created = beforeIds ? after.filter((t) => !beforeIds!.has(t.id)) : [];
+      // Scoped to the day, not to the probe window. The window exists to answer
+      // "did the write land?" after a failure; reusing it here widened this
+      // diff from one day to sixty-two, and every mutation schedules a full
+      // sync a second later, so registering transactions in series lands other
+      // people's rows inside the gap. They were then given this transaction's
+      // category: silent corruption, on the success path, with no error
+      // anywhere and no stderr warning because `created` was not empty. A
+      // duplicate shows up in a reconciliation; a rewritten category does not.
+      const created = beforeIds
+        ? after.filter((t) => !beforeIds!.has(t.id) && t.date === txnDate)
+        : [];
       for (const t of created) {
         if (t.category !== categoryId) {
           // #44: pass the amount we already have, so the update can never reset
@@ -153,7 +194,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     const { verdict, message } = await verifyFailedWrite(error, {
       action: 'The transaction',
       whereToLook: `${acctName} around ${txnDate}`,
-      probe,
+      probe: await buildProbe(),
     });
     throw new WriteReportedError(message, verdict);
   }

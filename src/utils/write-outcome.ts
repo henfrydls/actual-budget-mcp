@@ -1,4 +1,4 @@
-import { describeError, contentionNote } from './errors.js';
+import { describeError, contentionNote, readable } from './errors.js';
 
 /**
  * What actually happened to a write that reported failure.
@@ -12,9 +12,10 @@ export type WriteVerdict = 'applied' | 'not-applied' | 'undetermined';
 
 /** Everything this module reads off an error, in one place. */
 function errorText(error: unknown): string {
-  const parts: string[] = [];
-  if (error instanceof Error) parts.push(error.message);
-  else parts.push(String(error));
+  // readable() is what describeError uses. Keeping a second reader here made
+  // the two disagree about the same error, and turned `{message: '...'}` into
+  // "[object Object]".
+  const parts: string[] = [readable(error)];
   const tagged = error as { reason?: unknown; code?: unknown } | null | undefined;
   if (tagged?.reason) parts.push(String(tagged.reason));
   // `withErrorCode` writes `code`; missing it is what let the SDK's own wording
@@ -40,7 +41,7 @@ function errorText(error: unknown): string {
 export function mayHaveBeenApplied(error: unknown): boolean {
   const text = errorText(error);
   if (/out-of-sync-(migrations|data)/i.test(text)) return false;
-  if ((error instanceof Error ? error.message : String(error)).trim() === '') return true;
+  if (readable(error).trim() === '') return true;
   return /unknown problem opening/i.test(text) || /out-of-sync/i.test(text);
 }
 
@@ -104,7 +105,12 @@ export async function probeVerdict(probe: WriteProbe): Promise<WriteVerdict> {
   }
 
   if (!probe.before) return 'undetermined';
-  const fresh = (rows ?? []).filter((row) => !probe.before!.has(row.id));
+  // No rows at all is not the same as an empty account: it means the read
+  // answered nothing. Treating it as "nothing is there" would say "you can
+  // retry" on no evidence, which is the asymmetry `before: null` already
+  // guards against.
+  if (rows === undefined) return 'undetermined';
+  const fresh = rows.filter((row) => !probe.before!.has(row.id));
   const matching = fresh.filter((row) => probe.matches(row));
 
   if (matching.length === 1) return 'applied';
@@ -144,7 +150,10 @@ export async function verifyFailedWrite(
   const verdict = await probeVerdict(context.probe);
 
   // Without the caution: a definite answer that also hedges contradicts itself.
-  const reported = describeError(error, { omitUncertainWriteCaution: true });
+  const reported = describeError(error, {
+    omitUncertainWriteCaution: true,
+    omitContentionNote: true,
+  });
   // #79 asks that contention be named where it is the cause, so the message can
   // distinguish "another process has the file" from "the file is broken".
   const contention = contentionNote();
@@ -165,7 +174,9 @@ export async function verifyFailedWrite(
       message:
         `${context.action} was not saved, and can be retried. Nothing new ` +
         `appeared in ${context.whereToLook} (${context.probe.window}) after the ` +
-        `failure. The error was: ${reported}${contention}`,
+        `failure. One caveat before repeating it: Actual runs rules on every ` +
+        `insert, and a rule that sets a date outside that window would hide a ` +
+        `transaction that was in fact written. The error was: ${reported}${contention}`,
     };
   }
 
@@ -175,8 +186,7 @@ export async function verifyFailedWrite(
       `${context.action} failed, and whether it was saved could not be ` +
       `determined. Check ${context.whereToLook} (${context.probe.window}) before ` +
       `trying again: repeating a write that already landed creates a duplicate. ` +
-      `Actual applies rules on every insert, so a rule may have changed the ` +
-      `amount or date of what was written. The error was: ${reported}${contention}`,
+      `The error was: ${reported}${contention}`,
   };
 }
 

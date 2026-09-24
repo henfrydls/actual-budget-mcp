@@ -146,3 +146,44 @@ describe('which errors the gate lets through', () => {
     expect(mayHaveBeenApplied(new Error('out-of-sync-data'))).toBe(false);
   });
 });
+
+describe('the message and the verdict stay consistent', () => {
+  it('warns about date rules on the verdict that authorises a retry', async () => {
+    // It used to say this only on "unknown", which is the one verdict where
+    // nobody is about to repeat anything. The caveat belongs where the retry is.
+    const { message } = await verifyFailedWrite(
+      new Error('We had an unknown problem opening "x"'),
+      context(absent),
+    );
+
+    expect(message).toMatch(/can be retried/i);
+    expect(message).toMatch(/rules on every insert/i);
+  });
+
+  it('does not print the contention paragraph twice', async () => {
+    const { message } = await verifyFailedWrite(new Error('out-of-sync'), context(present));
+
+    const occurrences = message.split('Another actual-budget-mcp server').length - 1;
+    expect(occurrences).toBeLessThanOrEqual(1);
+  });
+
+  it('treats a read that answers nothing as unknown, not as an empty account', async () => {
+    const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
+      action: 'The transaction',
+      whereToLook: 'BHD around 2026-09-21',
+      probe: {
+        before: new Set<string>(),
+        window: 'searched a window',
+        read: async () => undefined,
+        matches: () => false,
+      },
+    });
+
+    expect(verdict).toBe('undetermined');
+  });
+
+  it('reads an error that is not an Error instance', async () => {
+    // String(error) turned { message } into "[object Object]".
+    expect(mayHaveBeenApplied({ message: 'We had an unknown problem opening "x"' })).toBe(true);
+  });
+});

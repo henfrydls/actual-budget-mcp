@@ -6,6 +6,7 @@ import { amountToCents, centsToAmount, formatMoney } from '../../utils/money.js'
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { createTransaction } from './create-transaction.js';
 import { describeError } from '../../utils/errors.js';
+import { WriteReportedError } from '../../utils/write-outcome.js';
 
 export interface ReconcileResidualInput {
   account: string;
@@ -89,6 +90,12 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         const lines = await reconcileCurrencyResidual(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
+        // This calls createTransaction internally, so it can receive a verdict
+        // about a write that landed. Reporting that as an error would invite
+        // the retry the verdict exists to prevent.
+        if (error instanceof WriteReportedError && error.verdict === 'applied') {
+          return { content: [{ type: 'text', text: error.message }] };
+        }
         const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],

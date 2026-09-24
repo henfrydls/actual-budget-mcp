@@ -129,7 +129,17 @@ describe('a split that fails after it has already been applied', () => {
     vi.mocked(api.getTransactions)
       .mockResolvedValueOnce([] as any)
       .mockResolvedValueOnce([
-        { id: 'parent-new', account: 'acc-1', date: '2026-09-21', amount: -10000 },
+        {
+          id: 'parent-new',
+          account: 'acc-1',
+          date: '2026-09-21',
+          amount: -10000,
+          is_parent: true,
+          subtransactions: [
+            { id: 'c1', amount: -6000 },
+            { id: 'c2', amount: -4000 },
+          ],
+        },
       ] as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
@@ -140,6 +150,20 @@ describe('a split that fails after it has already been applied', () => {
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     await expect(split()).rejects.toThrow(/was not saved.*can be retried/is);
+  });
+
+  it('does not accept a plain transaction of the same total as the split', async () => {
+    // getTransactions returns split parents with their children attached, so a
+    // row without them is not a split. Without this check an ordinary -100.00
+    // answered "the split was saved, do not repeat it".
+    vi.mocked(api.getTransactions)
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        { id: 'ordinary', account: 'acc-1', date: '2026-09-21', amount: -10000 },
+      ] as any);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(split()).rejects.toThrow(/could not be.*determined/is);
   });
 
   it('leaves an ordinary refusal exactly as it was', async () => {

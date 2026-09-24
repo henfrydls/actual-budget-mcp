@@ -102,8 +102,14 @@ export async function createSplitTransaction(
     before: beforeIds,
     window: window.label,
     read: () => api.getTransactions(accountId, window.start, window.end),
+    // A split, not just anything of the same total. `transactions-get` uses
+    // `splits: 'grouped'`, so a real split parent comes back with its children
+    // attached; without this check an ordinary transaction of the same amount
+    // answered "the split was saved, do not repeat it".
     matches: (row: Record<string, any>) =>
-      row.amount === totalCents && (input.notes === undefined || row.notes === input.notes),
+      row.amount === totalCents &&
+      (row.is_parent === true || (Array.isArray(row.subtransactions) && row.subtransactions.length > 0)) &&
+      (input.notes === undefined || row.notes === input.notes),
   };
 
   try {

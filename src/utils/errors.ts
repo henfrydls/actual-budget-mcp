@@ -11,7 +11,7 @@
  * is in practice a sync/load failure, that is the case the fallback speaks to.
  */
 
-import { readDataDirLock, activeDataDir } from './data-dir-lock.js';
+import { readDataDirLock, activeDataDir, effectiveDataDir } from './data-dir-lock.js';
 
 /**
  * #47: two servers sharing an ACTUAL_DATA_DIR drive the budget out-of-sync, but
@@ -32,15 +32,37 @@ import { readDataDirLock, activeDataDir } from './data-dir-lock.js';
  * who reported it both guessed at without being able to confirm.
  */
 export function contentionNote(): string {
-  const dataDir = activeDataDir();
-  const holder = readDataDirLock(dataDir);
-  if (!holder || holder.pid === process.pid) return '';
-  return (
-    ` Another actual-budget-mcp server (pid ${holder.pid}, started ${holder.startedAt}) ` +
-    `is using the same ACTUAL_DATA_DIR (${dataDir}). Two servers sharing it ` +
-    'is what puts the budget out of sync in the first place: give each client its own ' +
-    'ACTUAL_DATA_DIR, or close the other one, or the problem will come straight back.'
-  );
+  const inUse = activeDataDir();
+  const configured = effectiveDataDir();
+
+  const sharing = readDataDirLock(inUse);
+  if (sharing && sharing.pid !== process.pid) {
+    return (
+      ` Another actual-budget-mcp server (pid ${sharing.pid}, started ${sharing.startedAt}) ` +
+      `is using the same ACTUAL_DATA_DIR (${inUse}). Two servers sharing it ` +
+      'is what puts the budget out of sync in the first place: give each client its own ' +
+      'ACTUAL_DATA_DIR, or close the other one, or the problem will come straight back.'
+    );
+  }
+
+  // Since #71 this server steps aside when the configured directory is taken,
+  // so it holds its own lock and the check above finds only itself. Reporting
+  // nothing then was a regression: another server is still running against the
+  // same budget, which is the thing worth knowing. It just is not sharing this
+  // cache, so it gets its own wording rather than the one about sharing.
+  if (inUse !== configured) {
+    const neighbour = readDataDirLock(configured);
+    if (neighbour && neighbour.pid !== process.pid) {
+      return (
+        ` Another actual-budget-mcp server (pid ${neighbour.pid}, started ${neighbour.startedAt}) ` +
+        `is running against the same budget from ${configured}; this one stepped aside to ` +
+        `${inUse}. They do not share a cache, so neither can corrupt the other's, but both ` +
+        'are writing to the same Actual server.'
+      );
+    }
+  }
+
+  return '';
 }
 
 const REPAIR_HINT =
@@ -90,7 +112,7 @@ const VERSION_MISMATCH_HELP =
  * objects. So prefer an explicit `message`, then fall back to serialising the
  * object.
  */
-function readable(error: unknown): string {
+export function readable(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (error === null || error === undefined) return '';
   if (typeof error === 'object') {
@@ -119,6 +141,13 @@ function haystack(error: unknown): string {
  */
 export interface DescribeErrorOptions {
   /**
+   * Leave out the contention note.
+   *
+   * Set by a caller that adds it itself, so the paragraph does not appear
+   * twice in the same message.
+   */
+  omitContentionNote?: boolean;
+  /**
    * Leave out the "this may already have been applied" caution.
    *
    * Set by a caller that has gone and checked. The caution exists for tools
@@ -132,14 +161,15 @@ export interface DescribeErrorOptions {
 export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
   const text = haystack(error);
   const caution = options.omitUncertainWriteCaution ? '' : MAY_ALREADY_BE_APPLIED;
+  const contention = options.omitContentionNote ? '' : contentionNote();
 
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
-  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + caution + contentionNote();
+  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + caution + contention;
 
   const message = readable(error);
   return message.trim() === ''
-    ? EMPTY_ERROR_HINT + caution + contentionNote()
+    ? EMPTY_ERROR_HINT + caution + contention
     : message;
 }
