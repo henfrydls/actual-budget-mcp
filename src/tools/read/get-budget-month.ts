@@ -82,11 +82,14 @@ export function registerGetBudgetMonth(server: McpServer): void {
             budget.categoryGroups as BudgetMonthGroup[],
           );
           lines.push(...describeDivergences(divergences));
-        } catch {
+        } catch (crossCheckError) {
+          // The reason matters: a check that is permanently broken would
+          // otherwise be invisible, and this note would look like a quirk.
           lines.push(
             '',
             'Note: could not cross-check these figures against the transactions,',
             'so they are reported as the budget module gave them.',
+            `Reason: ${describeError(crossCheckError)}`,
           );
         }
 

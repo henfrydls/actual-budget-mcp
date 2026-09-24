@@ -36,7 +36,7 @@ beforeEach(() => {
 describe('cross-checking a month against its own transactions', () => {
   it('says nothing when the two agree', async () => {
     getTransactions.mockResolvedValue([
-      { id: 't1', category: 'cat-1', amount: -5263598 },
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -5263598 },
     ]);
 
     expect(await findSpendingDivergences('2026-09', groups(-5263598))).toEqual([]);
@@ -46,12 +46,14 @@ describe('cross-checking a month against its own transactions', () => {
     // get_budget_month said `Hipoteca: Spent 0.00` while the transaction
     // existed and carried the category (#80).
     getTransactions.mockResolvedValue([
-      { id: 't1', category: 'cat-1', amount: -5263598 },
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -5263598 },
     ]);
 
     const [divergence] = await findSpendingDivergences('2026-09', groups(0));
 
     expect(divergence.category).toBe('Hipoteca');
+    // Actual allows the same name in two groups, so the group identifies it.
+    expect(divergence.group).toBe('Housing');
     expect(divergence.reported).toBe(0);
     expect(divergence.observed).toBe(-5263598);
   });
@@ -80,11 +82,29 @@ describe('cross-checking a month against its own transactions', () => {
       { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
       { id: 'acc-2', name: 'Inversión', offbudget: true, closed: false },
     ]);
-    getTransactions.mockImplementation(async (id: string) =>
-      id === 'acc-1' ? [{ id: 't1', category: 'cat-1', amount: -1000 }] : [{ id: 't2', category: 'cat-1', amount: -9999 }],
-    );
+    // One query returns every account's rows, so the filtering happens here.
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -1000 },
+      { id: 't2', account: 'acc-2', category: 'cat-1', amount: -9999 },
+    ]);
 
     expect(await findSpendingDivergences('2026-09', groups(-1000))).toEqual([]);
+  });
+
+  it('asks once for the whole month rather than once per account', async () => {
+    // Each query costs about 28 ms whatever it returns, so asking per account
+    // made the check scale with the number of accounts: 312 ms against 34 ms
+    // on a real budget with 14 of them.
+    getAccounts.mockResolvedValue([
+      { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
+      { id: 'acc-2', name: 'APAP', offbudget: false, closed: false },
+      { id: 'acc-3', name: 'BanReservas', offbudget: false, closed: false },
+    ]);
+    getTransactions.mockResolvedValue([]);
+
+    await findSpendingDivergences('2026-09', groups(0));
+
+    expect(getTransactions).toHaveBeenCalledOnce();
   });
 
   it('still counts a closed account, whose history belongs to its month', async () => {
@@ -119,7 +139,7 @@ describe('cross-checking a month against its own transactions', () => {
 describe('how a divergence is reported', () => {
   it('shows both numbers, because one of them alone proves nothing', () => {
     const text = describeDivergences([
-      { category: 'Hipoteca', reported: 0, observed: -5263598 },
+      { category: 'Hipoteca', group: 'Housing', reported: 0, observed: -5263598 },
     ]).join('\n');
 
     expect(text).toMatch(/WARNING/);
@@ -129,10 +149,14 @@ describe('how a divergence is reported', () => {
 
   it('names the cure, since the cause is upstream and fixable', () => {
     const text = describeDivergences([
-      { category: 'Hipoteca', reported: 0, observed: -1 },
+      { category: 'Hipoteca', group: 'Housing', reported: 0, observed: -1 },
     ]).join('\n');
 
-    expect(text).toMatch(/repair_sync/);
+    // repair_sync rebuilds the sync state, which is not what is stale. An
+    // accurate warning that prescribes a useless action teaches people to
+    // distrust the warning.
+    expect(text).toMatch(/repair_sync will not help/);
+    expect(text).toMatch(/Restarting/);
   });
 
   it('stays silent when everything agrees', () => {

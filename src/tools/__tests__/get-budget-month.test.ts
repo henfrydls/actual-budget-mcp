@@ -65,7 +65,9 @@ describe('get_budget_month', () => {
   it('warns in the answer when the figures disagree with the transactions', async () => {
     // The case that started #80: Spent 0.00 for a category holding a real
     // charge of 52,635.98.
-    getTransactions.mockResolvedValue([{ id: 't1', category: 'cat-1', amount: -5263598 }]);
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -5263598 },
+    ]);
 
     const text = (await handler()({ month: '2026-09' })).content[0].text;
 
@@ -76,7 +78,9 @@ describe('get_budget_month', () => {
 
   it('says nothing extra when they agree', async () => {
     getBudgetMonth.mockResolvedValue(budget(-1000));
-    getTransactions.mockResolvedValue([{ id: 't1', category: 'cat-1', amount: -1000 }]);
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -1000 },
+    ]);
 
     const text = (await handler()({ month: '2026-09' })).content[0].text;
 
@@ -100,7 +104,8 @@ describe('get_budget_month', () => {
   it('asks for the month it was given, from the first day to the last', async () => {
     await handler()({ month: '2026-09' });
 
-    expect(getTransactions).toHaveBeenCalledWith('acc-1', '2026-09-01', '2026-09-31');
+    // One query for every account: the accountId is left out on purpose.
+    expect(getTransactions).toHaveBeenCalledWith(undefined, '2026-09-01', '2026-09-31');
   });
 
   it('reads every on-budget account, not just the first', async () => {
@@ -109,11 +114,10 @@ describe('get_budget_month', () => {
       { id: 'acc-2', name: 'APAP', offbudget: false, closed: false },
     ]);
     getBudgetMonth.mockResolvedValue(budget(-3000));
-    getTransactions.mockImplementation(async (id: string) =>
-      id === 'acc-1'
-        ? [{ id: 't1', category: 'cat-1', amount: -1000 }]
-        : [{ id: 't2', category: 'cat-1', amount: -2000 }],
-    );
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -1000 },
+      { id: 't2', account: 'acc-2', category: 'cat-1', amount: -2000 },
+    ]);
 
     const text = (await handler()({ month: '2026-09' })).content[0].text;
 
