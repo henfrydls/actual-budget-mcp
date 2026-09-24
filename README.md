@@ -55,10 +55,12 @@ locally over stdio. [Option 6](#option-6-codex-openai) is the one command it tak
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
-- [Node.js](https://nodejs.org/) 22 or higher (see [Node.js requirement](#nodejs-requirement)).
-  The Desktop Extension below still needs Node present, but never compiles
-  anything: it carries a prebuilt SQLite binary for every Node version it
-  supports.
+- [Node.js](https://nodejs.org/) 22 or higher for every option below **except the
+  Desktop Extension** (see [Node.js requirement](#nodejs-requirement))
+- The Desktop Extension needs nothing but Claude Desktop. It runs on the Node
+  that Claude Desktop ships, and the bundle carries a prebuilt SQLite binary for
+  every Node version it supports, so nothing is compiled either. Checked on
+  Windows 11 with Claude Desktop 2.110.0 and Node removed from the machine.
 
 ## Quick Start
 
@@ -98,6 +100,11 @@ Claude Desktop 0.14.10.
 The extension carries everything it needs, so the first question you ask is
 answered straight away rather than after an install you cannot see. It is a
 large download, once, with a progress bar.
+
+You do not need Node.js installed for this route. Claude Desktop runs the
+extension on the Node it ships with. Checked by renaming Node out of the way on
+a Windows 11 machine and asking a question anyway: the server started and
+answered.
 
 Earlier builds launched the package from npm instead. That made the download
 small and moved it to the first run, where nothing showed progress: Claude
