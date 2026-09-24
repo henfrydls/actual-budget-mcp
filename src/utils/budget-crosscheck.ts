@@ -51,7 +51,14 @@ export async function sumTransactionsByCategory(month: string): Promise<Map<stri
   // made the check scale with the number of accounts rather than the data:
   // 312 ms against 34 ms on a budget with 14 accounts, for identical sums.
   // Running them in parallel does not help, since the query engine serialises.
-  const offBudget = new Set(accounts.filter((a) => a.offbudget).map((a) => a.id));
+  // An inclusion set, not an exclusion one. `getAccounts()` only returns live
+  // accounts (tombstone = 0) while the month-wide query returns rows from any
+  // account, so excluding "the off-budget ones I know about" silently counts
+  // rows belonging to a deleted account that still has live transactions. That
+  // is not hypothetical here: it is a half-synced delete, where the message
+  // removing the account arrived and the ones removing its transactions did
+  // not, which is exactly the local inconsistency this check exists to find.
+  const onBudget = new Set(accounts.filter((a) => !a.offbudget).map((a) => a.id));
   // No `?? []`: `getTransactions` returns an array or throws, and a failed
   // read must surface rather than be counted as "no transactions" — that would
   // report every category as diverging, precisely when something is wrong and
@@ -59,8 +66,9 @@ export async function sumTransactionsByCategory(month: string): Promise<Map<stri
   const rows = await api.getTransactions(undefined as unknown as string, start, end);
 
   for (const row of rows as Array<Record<string, any>>) {
-    // Off-budget accounts do not touch a budget category.
-    if (offBudget.has(row.account)) continue;
+    // Only accounts known to be on budget. Anything else, including rows whose
+    // account no longer exists, is not part of a budget category.
+    if (!onBudget.has(row.account)) continue;
     const subs = row.subtransactions;
     if (Array.isArray(subs) && subs.length > 0) {
       for (const sub of subs) add(sub.category, sub.amount);
@@ -125,12 +133,18 @@ export function describeDivergences(divergences: SpendingDivergence[]): string[]
     `WARNING: ${divergences.length} ${divergences.length === 1 ? 'category disagrees' : 'categories disagree'} with the transactions behind them.`,
     "The budget module and the month's own transactions do not match, so the",
     'numbers above may understate or overstate what was really spent. The',
-    'transaction figures are the ones to trust: they are the underlying records.',
+    'The transaction figures usually deserve more weight, since they are the',
+    'underlying records, but check them: a half-synced delete can leave',
+    'transactions behind whose account is gone, and those inflate this side.',
     '',
-    'The cause is a stale budget calculation, not a damaged budget. Restarting',
-    'this server, or reopening the budget in Actual, recalculates it. Note that',
-    'repair_sync will not help: it rebuilds the sync state, which is a different',
-    'thing and is not what is stale here.',
+    'The cause is a stale budget calculation, not damaged data.',
+    '',
+    'What clears it: delete cache.sqlite inside the data directory this server',
+    'uses (ACTUAL_DATA_DIR). It is a derived file and Actual rebuilds it.',
+    '',
+    'What does not: restarting this server, which reloads the same local copy',
+    'and the same stale calculation with it; and repair_sync, which rebuilds',
+    'the sync state, a different thing from the one that is stale.',
     '',
   ];
 

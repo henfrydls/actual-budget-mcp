@@ -65,6 +65,7 @@ describe('cross-checking a month against its own transactions', () => {
     getTransactions.mockResolvedValue([
       {
         id: 'parent',
+        account: 'acc-1',
         category: null,
         amount: -10000,
         subtransactions: [
@@ -111,7 +112,25 @@ describe('cross-checking a month against its own transactions', () => {
     getAccounts.mockResolvedValue([
       { id: 'acc-1', name: 'Old card', offbudget: false, closed: true },
     ]);
-    getTransactions.mockResolvedValue([{ id: 't1', category: 'cat-1', amount: -1000 }]);
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -1000 },
+    ]);
+
+    expect(await findSpendingDivergences('2026-09', groups(-1000))).toEqual([]);
+  });
+
+  it('ignores rows whose account no longer exists', async () => {
+    // A half-synced delete: the message removing the account arrived, the ones
+    // removing its transactions did not. An exclusion set built from the live
+    // accounts would count these and invent divergences, then tell the reader
+    // to trust the side that is wrong.
+    getAccounts.mockResolvedValue([
+      { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
+    ]);
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -1000 },
+      { id: 't2', account: 'gone', category: 'cat-1', amount: -77700 },
+    ]);
 
     expect(await findSpendingDivergences('2026-09', groups(-1000))).toEqual([]);
   });
@@ -155,8 +174,40 @@ describe('how a divergence is reported', () => {
     // repair_sync rebuilds the sync state, which is not what is stale. An
     // accurate warning that prescribes a useless action teaches people to
     // distrust the warning.
-    expect(text).toMatch(/repair_sync will not help/);
-    expect(text).toMatch(/Restarting/);
+    // Verified against the real engine: deleting the derived cache clears it,
+    // and restarting the server does not, because a persistent data dir
+    // reloads the same local copy and the same stale calculation.
+    expect(text).toMatch(/cache\.sqlite/);
+    expect(text).toMatch(/repair_sync/);
+    expect(text).toMatch(/does not.*restarting this server/is);
+  });
+
+  it('names the group on the line itself, not only in the data', () => {
+    // Two groups may hold a category of the same name, so a line without the
+    // group cannot be acted on. The field being right is not the promise; the
+    // printed line is.
+    const text = describeDivergences([
+      { category: 'Otros', group: 'Provisiones', reported: 0, observed: -1000 },
+    ]).join('\n');
+
+    expect(text).toMatch(/Provisiones \/ Otros/);
+  });
+
+  it('shows the difference, so nobody has to subtract by hand', () => {
+    const text = describeDivergences([
+      { category: 'Hipoteca', group: 'Housing', reported: 0, observed: -5263598 },
+    ]).join('\n');
+
+    expect(text).toMatch(/difference:\s+-?52,635\.98/);
+  });
+
+  it('says how many categories disagree', () => {
+    const text = describeDivergences([
+      { category: 'A', group: 'G', reported: 0, observed: -1 },
+      { category: 'B', group: 'G', reported: 0, observed: -2 },
+    ]).join('\n');
+
+    expect(text).toMatch(/2 categories disagree/);
   });
 
   it('stays silent when everything agrees', () => {

@@ -99,6 +99,8 @@ describe('get_budget_month', () => {
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toMatch(/Total Spent/);
     expect(result.content[0].text).toMatch(/could not cross-check/i);
+    // Why it failed, so a permanently broken check cannot hide behind the note.
+    expect(result.content[0].text).toMatch(/Reason:.*could not read transactions/i);
   });
 
   it('asks for the month it was given, from the first day to the last', async () => {
