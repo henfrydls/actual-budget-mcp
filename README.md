@@ -37,6 +37,18 @@ Ollama or LM Studio, talks to it the same way.
 Your budget data goes to whatever model your client uses. If that matters to you, and for
 a lot of people running Actual it does, a local model keeps it on your machine.
 
+## Does it work with ChatGPT?
+
+No, and the reason is not this server. ChatGPT's connectors only accept remote MCP
+servers: a public HTTPS endpoint speaking SSE or Streamable HTTP. There is no way to
+point ChatGPT at a process running on your own machine, which is what this server is.
+OpenAI does offer a tunnel for local servers, but it is limited to enterprise plans.
+
+Making it work would mean exposing your Actual server to the internet, which is the
+opposite of what most people running Actual want. Anything that can start a local MCP
+process works instead: Claude Desktop, Claude Code, Cursor, VS Code, Gemini CLI, or your
+own setup pointed at a local model.
+
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
