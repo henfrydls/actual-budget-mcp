@@ -7,7 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
-import { probeWindow } from '../../utils/write-window.js';
+import { newWriteMarker, findByMarker } from '../../utils/write-marker.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 
 export interface CreateTransactionInput {
@@ -84,103 +84,42 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   if (categoryId) transaction.category = categoryId;
   if (input.notes) transaction.notes = input.notes;
 
-  // Snapshot before writing, over a window rather than the single day: this is
-  // what answers "did the write land?" if the call fails afterwards (#79), and
-  // Actual's rules can move the date off the day we asked for.
-  const window = probeWindow(txnDate);
-  // A failed snapshot must not stop the write: it only costs the ability to
-  // say afterwards what happened, which is reported as "unknown".
-  let beforeIds: Set<string> | null = null;
-  try {
-    const before = await api.getTransactions(accountId, window.start, window.end);
-    beforeIds = new Set((before ?? []).map((t) => t.id));
-  } catch {
-    beforeIds = null;
-  }
+  // Label the write before sending it. This is what identifies the row
+  // afterwards, instead of a snapshot and a date window (#93): rules can
+  // rewrite the amount and the date, so nothing else on the row is both stable
+  // and ours.
+  const marker = newWriteMarker();
+  transaction.imported_id = marker;
 
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
-  const cleared = input.cleared ?? false;
-
-  /**
-   * Built after the failure, not before, because the payee has to be resolved
-   * by then.
-   *
-   * Amount alone is not enough, and an earlier version compared the payee only
-   * for transfers — so the commonest call of all, a payee by name with no
-   * notes, was matched on amount and nothing else. One stranger's row of the
-   * same amount inside the window was enough to answer "it was saved, do not
-   * repeat it" about a transaction that was never written. That answer now
-   * comes back as a clean success rather than an error, which raises the price
-   * of getting it wrong, so the comparison has to carry its weight.
-   *
-   * `payee_name` is sent, not an id, and Actual creates the payee if it is new.
-   * By the time this runs the payee exists, so the name resolves and the row's
-   * `payee` can be compared like any other field.
-   */
-  const buildProbe = async () => {
-    let expectedPayee: string | undefined = transferPayeeId;
-    if (!expectedPayee && input.payee) {
-      try {
-        const payees = await api.getPayees();
-        expectedPayee = payees.find(
-          (p) => p.name?.toLowerCase() === input.payee!.toLowerCase(),
-        )?.id;
-      } catch {
-        // Leave it unset: an unresolvable payee is one fewer field to compare,
-        // and the fields that remain still have to agree.
-        expectedPayee = undefined;
-      }
-    }
-
-    return {
-      before: beforeIds,
-      window: window.label,
-      read: () => api.getTransactions(accountId, window.start, window.end),
-      matches: (row: Record<string, any>) =>
-        row.amount === amountCents &&
-        Boolean(row.cleared) === cleared &&
-        (input.notes === undefined || row.notes === input.notes) &&
-        (expectedPayee === undefined || row.payee === expectedPayee),
-    };
-  };
-
-  // One wrapper around the whole write, not one per call. The middle step below
-  // reads and updates the row that was just created, so by then it certainly
-  // exists; leaving it outside meant the same error came out raw, with no
-  // verdict at all, and only when a category was given, which is almost always.
   try {
     await api.addTransactions(accountId, [transaction as any], {
       learnCategories: false,
       runTransfers: !!transferPayeeId,
     });
 
-    // Force the explicit category on the newly created transaction(s) if the
-    // SDK overrode it with a learned mapping.
+    // Force the explicit category on the transaction we just created, found by
+    // its marker rather than by "new rows around this date". The old diff could
+    // reach another process's row and give it this transaction's category:
+    // silent, on the success path, and invisible in a reconciliation.
     if (categoryId) {
-      const after = (await api.getTransactions(accountId, window.start, window.end)) ?? [];
-      // Scoped to the day, not to the probe window. The window exists to answer
-      // "did the write land?" after a failure; reusing it here widened this
-      // diff from one day to sixty-two, and every mutation schedules a full
-      // sync a second later, so registering transactions in series lands other
-      // people's rows inside the gap. They were then given this transaction's
-      // category: silent corruption, on the success path, with no error
-      // anywhere and no stderr warning because `created` was not empty. A
-      // duplicate shows up in a reconciliation; a rewritten category does not.
-      const created = beforeIds
-        ? after.filter((t) => !beforeIds!.has(t.id) && t.date === txnDate)
-        : [];
-      for (const t of created) {
-        if (t.category !== categoryId) {
-          // #44: pass the amount we already have, so the update can never reset
-          // it (no extra lookup needed — these rows come from getTransactions).
-          await updatePreservingChildAmount(t.id, { category: categoryId, amount: t.amount });
+      const ours = await findByMarker(marker);
+      if (ours && ours.length > 0) {
+        for (const row of ours) {
+          if (row.category !== categoryId) {
+            // #44: pass the amount we already have, so the update can never
+            // reset it.
+            await updatePreservingChildAmount(row.id, {
+              category: categoryId,
+              amount: row.amount,
+            });
+          }
         }
-      }
-      if (created.length === 0) {
+      } else {
         // Warn on stderr — never stdout, which is the MCP protocol channel.
         console.error(
-          `[create_transaction] warning: could not verify explicit category for the new transaction on ${txnDate}; it may have been overridden by a learned mapping.`,
+          `[create_transaction] warning: could not find the new transaction on ${txnDate} to enforce its category; it may have been overridden by a learned mapping.`,
         );
       }
     }
@@ -193,8 +132,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // "it did not happen". Go and look before saying anything.
     const { verdict, message } = await verifyFailedWrite(error, {
       action: 'The transaction',
-      whereToLook: `${acctName} around ${txnDate}`,
-      probe: await buildProbe(),
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: { marker, find: findByMarker },
     });
     throw new WriteReportedError(message, verdict);
   }

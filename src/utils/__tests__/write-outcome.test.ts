@@ -2,25 +2,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { mayHaveBeenApplied, verifyFailedWrite } from '../write-outcome.js';
 
 /**
- * A probe over a window of rows. `before` is what was there; `read` returns
- * what is there now; `matches` recognises the row we tried to write.
+ * The probe is a lookup by the marker written with the transaction. `null`
+ * means the budget could not be read, which is a third answer and not a zero.
  */
-const context = (rows: Array<Record<string, unknown>> | (() => never)) => ({
+const context = (rows: Array<{ id: string }> | null) => ({
   action: 'The transaction',
-  whereToLook: 'BHD around 2026-09-21',
+  whereToLook: 'BHD on 2026-09-21',
   probe: {
-    before: new Set(['old-1']),
-    window: 'searched 2026-08-21 to 2026-10-22',
-    read: async () => {
-      if (typeof rows === 'function') rows();
-      return rows as Array<Record<string, unknown>>;
-    },
-    matches: (row: Record<string, any>) => row.amount === -5000,
+    marker: 'marker-1',
+    find: async () => rows,
   },
 });
 
-const present = [{ id: 'new-1', amount: -5000 }];
-const absent: Array<Record<string, unknown>> = [{ id: 'old-1', amount: -5000 }];
+const present = [{ id: 'ours' }];
+const absent: Array<{ id: string }> = [];
 
 describe('which failures can have landed anyway', () => {
   it('counts the one people actually hit', () => {
@@ -76,9 +71,7 @@ describe('reporting what really happened to a failed write', () => {
     // the only case where the caller has to go and look.
     const { verdict, message } = await verifyFailedWrite(
       failure,
-      context(() => {
-        throw new Error('still broken');
-      }),
+      context(null),
     );
 
     expect(verdict).toBe('undetermined');
@@ -87,9 +80,9 @@ describe('reporting what really happened to a failed write', () => {
   });
 
   it('names where to look in every outcome', async () => {
-    for (const rows of [present, absent, (() => { throw new Error('x'); }) as never]) {
+    for (const rows of [present, absent, null]) {
       const { message } = await verifyFailedWrite(failure, context(rows));
-      expect(message).toContain('BHD around 2026-09-21');
+      expect(message).toContain('BHD on 2026-09-21');
     }
   });
 
@@ -100,7 +93,7 @@ describe('reporting what really happened to a failed write', () => {
   });
 
   it('never reports a bare failure for this class of error', async () => {
-    const cases = [present, absent, (() => { throw new Error('x'); }) as never];
+    const cases = [present, absent, null];
     for (const rows of cases) {
       const { message } = await verifyFailedWrite(failure, context(rows));
       // Each outcome must tell the caller what to do next, not just what broke.
@@ -160,26 +153,46 @@ describe('the message and the verdict stay consistent', () => {
     );
 
     expect(message).toMatch(/can be retried/i);
-    expect(message).toMatch(/rules on every insert/i);
+    expect(message).toMatch(/no transaction carries that label/i);
   });
 
-  it('does not print the contention paragraph twice', async () => {
+  it('prints the contention paragraph exactly once, not twice', async () => {
+    // With no other server the note is empty and a "<= 1" assertion counts
+    // zero and passes whatever the code does. Contention has to be real for
+    // this to mean anything.
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { claimDataDir, forgetActiveDataDir, LOCK_FILE } = await import('../data-dir-lock.js');
+
+    const root = mkdtempSync(join(tmpdir(), 'contend-twice-'));
+    const configured = join(root, 'cache');
+    mkdirSync(configured, { recursive: true });
+    writeFileSync(
+      join(configured, LOCK_FILE),
+      JSON.stringify({ pid: process.pid, startedAt: '2026-09-24T00:00:00.000Z', version: '0.9.2' }),
+    );
+    process.env.ACTUAL_DATA_DIR = configured;
+    const spy = vi.spyOn(process, 'pid', 'get').mockReturnValue(999_300);
+    claimDataDir('0.9.2');
+
+    // out-of-sync is the message describeError would also decorate.
     const { message } = await verifyFailedWrite(new Error('out-of-sync'), context(present));
 
+    spy.mockRestore();
+    forgetActiveDataDir();
+    delete process.env.ACTUAL_DATA_DIR;
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+
     const occurrences = message.split('Another actual-budget-mcp server').length - 1;
-    expect(occurrences).toBeLessThanOrEqual(1);
+    expect(occurrences).toBe(1);
   });
 
   it('treats a read that answers nothing as unknown, not as an empty account', async () => {
     const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
       action: 'The transaction',
       whereToLook: 'BHD around 2026-09-21',
-      probe: {
-        before: new Set<string>(),
-        window: 'searched a window',
-        read: async () => undefined,
-        matches: () => false,
-      },
+      probe: { marker: 'm', find: async () => null },
     });
 
     expect(verdict).toBe('undetermined');

@@ -7,7 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
-import { probeWindow } from '../../utils/write-window.js';
+import { newWriteMarker, findByMarker } from '../../utils/write-marker.js';
 
 export interface SplitInput {
   category: string;
@@ -82,35 +82,15 @@ export async function createSplitTransaction(
   // fails afterwards. A split that is silently created and then reported as an
   // error is worse than a plain one, because repeating it duplicates a parent
   // and every child under it (#79).
-  // Over a window, not the single day: Actual's rules run on every insert and
-  // can move the date, and a "not saved" that is wrong about a split authorises
-  // a retry that duplicates a parent and every child under it.
-  const window = probeWindow(txnDate);
-  let beforeIds: Set<string> | null = null;
-  try {
-    const before = await api.getTransactions(accountId, window.start, window.end);
-    beforeIds = new Set((before ?? []).map((t) => t.id));
-  } catch {
-    beforeIds = null;
-  }
+  // Labelled before sending, so the row can be found by identity rather than
+  // by what appeared near a date (#93). A repeated split duplicates a parent
+  // and every child under it, so a wrong answer here is expensive.
+  const marker = newWriteMarker();
+  parent.imported_id = marker;
 
   const accounts = await api.getAccounts();
   const acct = accounts.find((a) => a.id === accountId);
   const acctName = acct?.name || accountId;
-
-  const probe = {
-    before: beforeIds,
-    window: window.label,
-    read: () => api.getTransactions(accountId, window.start, window.end),
-    // A split, not just anything of the same total. `transactions-get` uses
-    // `splits: 'grouped'`, so a real split parent comes back with its children
-    // attached; without this check an ordinary transaction of the same amount
-    // answered "the split was saved, do not repeat it".
-    matches: (row: Record<string, any>) =>
-      row.amount === totalCents &&
-      (row.is_parent === true || (Array.isArray(row.subtransactions) && row.subtransactions.length > 0)) &&
-      (input.notes === undefined || row.notes === input.notes),
-  };
 
   try {
     await api.addTransactions(accountId, [parent as any], {
@@ -122,8 +102,8 @@ export async function createSplitTransaction(
     if (!mayHaveBeenApplied(error)) throw error;
     const { verdict, message } = await verifyFailedWrite(error, {
       action: 'The split transaction',
-      whereToLook: `${acctName} around ${txnDate}`,
-      probe,
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: { marker, find: findByMarker },
     });
     throw new WriteReportedError(message, verdict);
   }

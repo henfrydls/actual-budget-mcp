@@ -12,6 +12,10 @@ vi.mock('@actual-app/api', () => ({
   getTransactions: vi.fn().mockResolvedValue([]),
   addTransactions: vi.fn().mockResolvedValue('ok'),
   sync: vi.fn().mockResolvedValue(undefined),
+  // The write is labelled with an imported_id and found again by querying for
+  // it, which is what replaced the date window and the snapshot (#93).
+  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  q: () => ({ filter: () => ({ select: () => ({}) }) }),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,
@@ -89,28 +93,29 @@ describe('create_transfer', () => {
  * of linked rows to unpick, which is harder to undo than a duplicate expense.
  */
 describe('a transfer that fails after it has already been applied', () => {
-  const failure = () =>
-    new Error('We had an unknown problem opening "My-Finances-8174eb5"');
+  const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
+
+  beforeEach(() => {
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+  });
 
   it('does not report a plain failure when the transfer is there', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-09-21', amount: -500000, payee: 'payee-transfer-2' },
-      ] as any);
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     const result = await transfer();
 
     // Not reported as an error: an agent reading "Error:" has every reason to
-    // try again, and trying again is what moves the money twice.
+    // try again, and trying again moves the money twice.
     expect(result.isError).toBeUndefined();
     expect(result.content[0].text).toMatch(/was saved/i);
     expect(result.content[0].text).toMatch(/do not repeat it/i);
     expect(result.content[0].text).not.toMatch(/^Error:/);
   });
 
-  it('says a retry is safe when the transfer is genuinely absent', async () => {
+  it('says a retry is safe when nothing carries the marker', async () => {
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     const result = await transfer();
@@ -119,44 +124,45 @@ describe('a transfer that fails after it has already been applied', () => {
     expect(result.content[0].text).toMatch(/can be retried/i);
   });
 
-  it('will not say "not saved" when something unrecognised appeared', async () => {
-    // A rule may have rewritten the amount or the date of ours.
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'other', account: 'acc-1', date: '2026-09-21', amount: -123 },
-      ] as any);
+  it('is not fooled by another transaction of the same amount', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue([
+      { id: 'other', account: 'acc-1', date: '2026-09-21', amount: -500000 },
+    ] as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
-    expect((await transfer()).content[0].text).toMatch(/could not be.*determined/is);
+    expect((await transfer()).content[0].text).toMatch(/was not saved/i);
   });
 
   it('admits it cannot tell when the budget will not open again either', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockRejectedValueOnce(failure());
+    vi.mocked(api.runQuery).mockRejectedValue(failure());
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
-    const text = (await transfer()).content[0].text;
+    const result = await transfer();
 
-    expect(text).toMatch(/could not be.*determined/is);
-    expect(text).toMatch(/before trying again/i);
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not be.*determined/is);
   });
 
   it('covers the sync step, where the rows are in and the sync is not', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-09-21', amount: -500000, payee: 'payee-transfer-2' },
-      ] as any);
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
     vi.mocked(api.sync).mockRejectedValue(failure());
 
     expect((await transfer()).content[0].text).toMatch(/was saved/i);
   });
 
-  it('leaves an ordinary refusal exactly as it was', async () => {
+  it('labels the write, since that is what gets found again', async () => {
+    await transfer();
+
+    const [, [written]] = vi.mocked(api.addTransactions).mock.calls[0] as any;
+    expect(written.imported_id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('leaves an ordinary refusal unwrapped, not merely quoted inside a verdict', async () => {
     vi.mocked(api.addTransactions).mockRejectedValue(new Error('amount is required'));
 
-    expect((await transfer()).content[0].text).toMatch(/amount is required/);
+    const text = (await transfer()).content[0].text;
+
+    expect(text).toMatch(/amount is required/);
+    expect(text).not.toMatch(/was not saved|could not be determined|was saved/);
   });
 });

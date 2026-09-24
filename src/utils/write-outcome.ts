@@ -45,80 +45,30 @@ export function mayHaveBeenApplied(error: unknown): boolean {
   return /unknown problem opening/i.test(text) || /out-of-sync/i.test(text);
 }
 
-/** A row as `getTransactions` returns it. */
-type Row = Record<string, any>;
-
 export interface WriteProbe {
-  /**
-   * Ids present across the window before the write was attempted, or null if
-   * that snapshot could not be taken.
-   *
-   * Null means the verdict can only be "unknown": without a baseline, a row
-   * that is there now might have been there all along. The write still goes
-   * ahead — a check that cannot run must not stop the operation it was added
-   * to describe.
-   */
-  before: Set<string> | null;
-  /** Re-read the same window. */
-  read: () => Promise<Row[] | undefined>;
-  /** Whether a row looks like the one we tried to write. */
-  matches: (row: Row) => boolean;
-  /** The window that was searched, for the message. */
-  window: string;
+  /** The label written with the transaction, used to find it again. */
+  marker: string;
+  /** Where the caller should look, in their own terms. */
+  find: (marker: string) => Promise<Array<{ id: string }> | null>;
 }
 
 /**
- * Decide what happened, erring towards "I do not know".
+ * Decide what happened by looking for the row this server labelled.
  *
- * The first version of this asked one question — is there a new row on this day
- * with this amount — and answered "not saved, safe to retry" whenever it found
- * none. An audit showed that answer is wrong in two ways that both end in a
- * duplicate:
+ * There is no window and no snapshot: either the row carrying our marker is
+ * there or it is not. `null` means the budget could not be read, which is a
+ * third answer and not a zero — "you can retry" on no evidence is the mistake
+ * this whole change exists to stop making.
  *
- *  - Actual runs rules on every insert, and a rule can rewrite the amount or
- *    the date. The row lands; the probe does not recognise it; the caller is
- *    told it is safe to write it again. The old code already knew this could
- *    happen: it warns on stderr that the SDK may normalise a date outside the
- *    queried window.
- *  - `api.sync()` applies remote messages before failing its push, so another
- *    agent's transaction can materialise inside the window during the very
- *    operation that failed. Same amount, same day, same account is not a freak
- *    coincidence when two agents reconcile the same statement: it is the normal
- *    case.
- *
- * So a bare "no match" is no longer enough to say "not saved". Anything new and
- * unrecognised, or more than one candidate, is reported as unknown. A confident
- * wrong answer here authorises the one action that corrupts data, which makes
- * it worse than the plain error this replaced.
+ * More than one row with the same marker should be impossible, since the marker
+ * is generated per write. If it ever happens, something wrote twice and saying
+ * so is more useful than picking one.
  */
 export async function probeVerdict(probe: WriteProbe): Promise<WriteVerdict> {
-  let rows: Row[] | undefined;
-  try {
-    rows = await probe.read();
-  } catch (error) {
-    // stderr, never stdout: stdout carries the MCP protocol. Logged because
-    // the evidence for this whole issue came out of these logs.
-    console.error(
-      `[actual-budget-mcp] could not re-read after a failed write: ${describeError(error)}`,
-    );
-    return 'undetermined';
-  }
-
-  if (!probe.before) return 'undetermined';
-  // No rows at all is not the same as an empty account: it means the read
-  // answered nothing. Treating it as "nothing is there" would say "you can
-  // retry" on no evidence, which is the asymmetry `before: null` already
-  // guards against.
-  if (rows === undefined) return 'undetermined';
-  const fresh = rows.filter((row) => !probe.before!.has(row.id));
-  const matching = fresh.filter((row) => probe.matches(row));
-
-  if (matching.length === 1) return 'applied';
-  // Two candidates means one of them is probably someone else's. Guessing
-  // which would be the same confident wrong answer in a different direction.
-  if (matching.length > 1) return 'undetermined';
-  // Something landed that we do not recognise. A rule may have rewritten ours.
-  if (fresh.length > 0) return 'undetermined';
+  const rows = await probe.find(probe.marker);
+  if (rows === null) return 'undetermined';
+  if (rows.length === 1) return 'applied';
+  if (rows.length > 1) return 'undetermined';
   return 'not-applied';
 }
 
@@ -172,11 +122,10 @@ export async function verifyFailedWrite(
     return {
       verdict,
       message:
-        `${context.action} was not saved, and can be retried. Nothing new ` +
-        `appeared in ${context.whereToLook} (${context.probe.window}) after the ` +
-        `failure. One caveat before repeating it: Actual runs rules on every ` +
-        `insert, and a rule that sets a date outside that window would hide a ` +
-        `transaction that was in fact written. The error was: ${reported}${contention}`,
+        `${context.action} was not saved, and can be retried. It is not in ` +
+        `${context.whereToLook}, or anywhere else: this server labels what it ` +
+        `writes and no transaction carries that label. The error was: ` +
+        `${reported}${contention}`,
     };
   }
 
@@ -184,9 +133,9 @@ export async function verifyFailedWrite(
     verdict,
     message:
       `${context.action} failed, and whether it was saved could not be ` +
-      `determined. Check ${context.whereToLook} (${context.probe.window}) before ` +
-      `trying again: repeating a write that already landed creates a duplicate. ` +
-      `The error was: ${reported}${contention}`,
+      `determined: the budget could not be read back. Check ${context.whereToLook} ` +
+      `before trying again, because repeating a write that already landed creates ` +
+      `a duplicate. The error was: ${reported}${contention}`,
   };
 }
 

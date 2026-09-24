@@ -7,7 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
-import { probeWindow } from '../../utils/write-window.js';
+import { newWriteMarker, findByMarker } from '../../utils/write-marker.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -58,14 +58,11 @@ export function registerCreateTransfer(server: McpServer): void {
         // Snapshot first, so a failure afterwards can be answered rather than
         // guessed at. A repeated transfer moves the money twice and leaves two
         // pairs of linked rows to unpick (#79).
-        const window = probeWindow(txnDate);
-        let beforeIds: Set<string> | null = null;
-        try {
-          const before = await api.getTransactions(fromId, window.start, window.end);
-          beforeIds = new Set((before ?? []).map((t) => t.id));
-        } catch {
-          beforeIds = null;
-        }
+        // Labelled before sending, so a failure afterwards can be answered by
+        // identity rather than guessed at (#93). A repeated transfer moves the
+        // money twice and leaves two pairs of linked rows to unpick.
+        const marker = newWriteMarker();
+        transaction.imported_id = marker;
 
         // Get account names for confirmation
         const accounts = await api.getAccounts();
@@ -81,14 +78,8 @@ export function registerCreateTransfer(server: McpServer): void {
           if (!mayHaveBeenApplied(error)) throw error;
           const { verdict, message } = await verifyFailedWrite(error, {
             action: 'The transfer',
-            whereToLook: `${fromAcct?.name || fromId} around ${txnDate}`,
-            probe: {
-              before: beforeIds,
-              window: window.label,
-              read: () => api.getTransactions(fromId, window.start, window.end),
-              matches: (row: Record<string, any>) =>
-                row.amount === -amountCents && row.payee === transferPayee.id,
-            },
+            whereToLook: `${fromAcct?.name || fromId} on ${txnDate}`,
+            probe: { marker, find: findByMarker },
           });
           throw new WriteReportedError(message, verdict);
         }

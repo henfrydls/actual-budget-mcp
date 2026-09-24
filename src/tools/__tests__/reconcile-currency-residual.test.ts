@@ -13,6 +13,10 @@ vi.mock('@actual-app/api', () => ({
   addTransactions: vi.fn().mockResolvedValue('ok'),
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
+  // The write is labelled with an imported_id and found again by querying for
+  // it, which is what replaced the date window and the snapshot (#93).
+  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  q: () => ({ filter: () => ({ select: () => ({}) }) }),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,
@@ -93,19 +97,9 @@ describe('a verdict arriving from createTransaction', () => {
     } as never);
 
     vi.mocked(api.getAccountBalance).mockResolvedValue(-10000 as any);
-    vi.mocked(api.getTransactions)
-      .mockReset()
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValue([
-        {
-          id: 'new',
-          account: 'acc-1',
-          date: '2026-09-21',
-          amount: 5000,
-          cleared: false,
-          notes: 'FX residual adjustment',
-        },
-      ] as any);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    // Found by the marker written with it, not by scanning a date range.
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [{ id: 'new' }] } as any);
     vi.mocked(api.addTransactions)
       .mockReset()
       .mockRejectedValue(new Error('We had an unknown problem opening "x"'));

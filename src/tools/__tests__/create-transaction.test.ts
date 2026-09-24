@@ -13,9 +13,15 @@ vi.mock('@actual-app/api', () => ({
     { id: 'cat-2', name: 'Cashback', group_id: 'grp-2', hidden: false },
   ]),
   getTransactions: vi.fn(),
+  // Resolved after a failed write, to compare the payee of a candidate row.
+  getPayees: vi.fn().mockResolvedValue([]),
   addTransactions: vi.fn().mockResolvedValue('ok'),
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
+  // The write is labelled with an imported_id and found again by querying for
+  // it, which is what replaced the date window and the snapshot (#93).
+  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  q: () => ({ filter: () => ({ select: () => ({}) }) }),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,
@@ -33,260 +39,215 @@ describe('createTransaction (#26 explicit category must win)', () => {
   beforeEach(() => {
     vi.mocked(api.addTransactions).mockClear().mockResolvedValue('ok' as any);
     vi.mocked(api.updateTransaction).mockClear().mockResolvedValue({} as any);
-    vi.mocked(api.getTransactions).mockReset();
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
   });
 
   it('forces the explicit category when the SDK overrides it with a learned one', async () => {
-    // before snapshot: empty; after: the new txn came back with the WRONG (learned) category
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any) // before add
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-06-05', amount: -10000, category: 'cat-2' },
-      ] as any); // after add — SDK applied a learned category instead of the requested one
+    // The created row, found by its marker, came back with the wrong (learned)
+    // category.
+    vi.mocked(api.runQuery).mockResolvedValue({
+      data: [{ id: 'txn-new', category: 'cat-2', amount: -10000 }],
+    } as any);
 
-    await createTransaction({ account: 'Checking', amount: -100, payee: 'Vendor', category: 'Alimentación', date: '2026-06-05' });
+    await createTransaction({
+      account: 'Checking',
+      amount: -100,
+      payee: 'Vendor',
+      category: 'Alimentación',
+      date: '2026-06-05',
+    });
 
     expect(api.addTransactions).toHaveBeenCalledWith('acc-1', expect.any(Array), {
       learnCategories: false,
       runTransfers: false,
     });
-    // The fix: re-find the created txn and force the caller's category
     expect(api.updateTransaction).toHaveBeenCalledOnce();
-    // #44: the amount is re-sent so the update can never reset it to 0
-    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1', amount: -10000 });
+    // #44: the amount is re-sent so the update can never reset it to 0.
+    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', {
+      category: 'cat-1',
+      amount: -10000,
+    });
   });
 
   it('does not call updateTransaction when the stored category already matches', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-06-05', amount: -10000, category: 'cat-1' },
-      ] as any); // already correct
-
-    await createTransaction({ account: 'Checking', amount: -100, category: 'Alimentación', date: '2026-06-05' });
-
-    expect(api.updateTransaction).not.toHaveBeenCalled();
-  });
-
-  it('still snapshots without a category, but corrects nothing', async () => {
-    // The snapshot used to be skipped here, since there was no category to
-    // enforce. It is taken every time now: it is also what answers "did the
-    // write land?" when the call fails afterwards (#79), and that question
-    // does not depend on whether a category was given.
-    vi.mocked(api.getTransactions).mockResolvedValue([] as any);
-
-    await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
-
-    expect(api.addTransactions).toHaveBeenCalledOnce();
-    expect(api.getTransactions).toHaveBeenCalled();
-    expect(api.updateTransaction).not.toHaveBeenCalled();
-  });
-
-  it('only corrects the newly created transaction, not pre-existing ones', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([
-        { id: 'old-1', account: 'acc-1', date: '2026-06-05', amount: -500, category: 'cat-2' },
-      ] as any) // before: an existing txn with a different category
-      .mockResolvedValueOnce([
-        { id: 'old-1', account: 'acc-1', date: '2026-06-05', amount: -500, category: 'cat-2' },
-        { id: 'txn-new', account: 'acc-1', date: '2026-06-05', amount: -10000, category: 'cat-2' },
-      ] as any);
-
-    await createTransaction({ account: 'Checking', amount: -100, category: 'Alimentación', date: '2026-06-05' });
-
-    expect(api.updateTransaction).toHaveBeenCalledOnce();
-    // #44: the amount is re-sent so the update can never reset it to 0
-    expect(api.updateTransaction).toHaveBeenCalledWith('txn-new', { category: 'cat-1', amount: -10000 });
-  });
-});
-
-/**
- * #79: six reported occurrences, from two people using the server daily, where
- * the call returned `We had an unknown problem opening "My-Finances-..."` and
- * the transaction was already in the budget. The error arrives after the write,
- * not instead of it, so it invites the one action that corrupts data.
- */
-describe('a write that fails after it has already been applied', () => {
-  const failure = () =>
-    new Error('We had an unknown problem opening "My-Finances-8174eb5"');
-
-  beforeEach(() => {
-    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
-    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
-    vi.mocked(api.getTransactions).mockReset();
-    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
-  });
-
-  it('does not report a plain failure when the transaction is there', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any) // before
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-09-21', amount: -5000 },
-      ] as any); // after the failure: it landed
-    vi.mocked(api.addTransactions).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/was saved/i);
-  });
-
-  it('tells the caller not to repeat it, which is what duplicates', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-09-21', amount: -5000 },
-      ] as any);
-    vi.mocked(api.addTransactions).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/do not repeat it/i);
-  });
-
-  it('says a retry is safe only when nothing new appeared at all', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue([] as any);
-    vi.mocked(api.addTransactions).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/not saved.*can be retried/is);
-  });
-
-  it('will not say "not saved" when something unrecognised did appear', async () => {
-    // An earlier version answered "not saved, safe to retry" here, reasoning
-    // that a row with a different amount is not ours. Actual runs rules on
-    // every insert and a rule can rewrite the amount or the date, so this row
-    // may well be ours, rewritten. "Not saved" would authorise the retry that
-    // duplicates, which is worse than the plain error this replaced.
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'unrecognised', account: 'acc-1', date: '2026-09-21', amount: -999 },
-      ] as any);
-    vi.mocked(api.addTransactions).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/could not be.*determined/is);
-  });
-
-  it('will not pick one of two identical-looking rows and call it ours', async () => {
-    // Two agents reconciling the same statement produce the same amount on the
-    // same day in the same account. Guessing which row is ours would say "do
-    // not repeat it" about a transaction the user never got.
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'a', account: 'acc-1', date: '2026-09-21', amount: -5000 },
-        { id: 'b', account: 'acc-1', date: '2026-09-21', amount: -5000 },
-      ] as any);
-    vi.mocked(api.addTransactions).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/could not be.*determined/is);
-  });
-
-  it('admits it cannot tell when the budget will not open again either', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockRejectedValueOnce(failure());
-    vi.mocked(api.addTransactions).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/could not be.*determined/is);
-  });
-
-  it('covers the sync step too, where the rows are in and the sync is not', async () => {
-    vi.mocked(api.getTransactions)
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'txn-new', account: 'acc-1', date: '2026-09-21', amount: -5000 },
-      ] as any);
-    vi.mocked(api.sync).mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/was saved/i);
-  });
-
-  it('leaves an ordinary refusal exactly as it was', async () => {
-    vi.mocked(api.getTransactions).mockResolvedValue([] as any);
-    vi.mocked(api.addTransactions).mockRejectedValue(new Error('amount is required'));
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow('amount is required');
-  });
-});
-
-describe('when the check itself cannot run', () => {
-  const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
-
-  it('still writes when the snapshot fails, and says the outcome is unknown', async () => {
-    // A diagnostic must not block the operation it was added to describe.
-    vi.mocked(api.getTransactions).mockReset().mockRejectedValue(new Error('read failed'));
-    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
-    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
-
-    const lines = await createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' });
-
-    expect(api.addTransactions).toHaveBeenCalledOnce();
-    expect(lines.join('\n')).toMatch(/Transaction created/);
-  });
-
-  it('reports unknown rather than guessing when there is no baseline', async () => {
-    vi.mocked(api.getTransactions)
-      .mockReset()
-      .mockRejectedValueOnce(new Error('read failed'))
-      .mockResolvedValue([{ id: 'x', account: 'acc-1', date: '2026-09-21', amount: -5000 }] as any);
-    vi.mocked(api.addTransactions).mockReset().mockRejectedValue(failure());
-
-    await expect(
-      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/could not be.*determined/is);
-  });
-});
-
-/**
- * The probe window is for answering "did it land?" after a failure. Reusing it
- * for the category diff widened that diff from one day to sixty-two, and every
- * mutation schedules a full sync a second later, so rows written by another
- * process land inside the gap and were given this transaction's category.
- * Silent, on the success path, and invisible in a reconciliation.
- */
-describe('forcing the category never touches another row', () => {
-  it('leaves a row from another day alone, even inside the probe window', async () => {
-    vi.mocked(api.getTransactions)
-      .mockReset()
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'mine', account: 'acc-1', date: '2026-09-21', amount: -5000, category: null },
-        // Arrived between the two reads, from someone else's write.
-        { id: 'theirs', account: 'acc-1', date: '2026-09-07', amount: -31900, category: 'cat-2' },
-      ] as any);
-    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
-    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
-    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
+    vi.mocked(api.runQuery).mockResolvedValue({
+      data: [{ id: 'txn-new', category: 'cat-1', amount: -10000 }],
+    } as any);
 
     await createTransaction({
       account: 'Checking',
-      amount: -50,
-      date: '2026-09-21',
+      amount: -100,
       category: 'Alimentación',
+      date: '2026-06-05',
     });
 
-    const touched = vi.mocked(api.updateTransaction).mock.calls.map((c) => c[0]);
-    expect(touched).toEqual(['mine']);
-    expect(touched).not.toContain('theirs');
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('looks the row up only when a category has to be enforced', async () => {
+    await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
+
+    expect(api.addTransactions).toHaveBeenCalledOnce();
+    expect(api.runQuery).not.toHaveBeenCalled();
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  it('can only ever touch the row it wrote, never one beside it', async () => {
+    // The old code found "rows that were not there before" within a date
+    // range, so another process's transaction could be given this one's
+    // category. A marker lookup returns one row: ours.
+    vi.mocked(api.runQuery).mockResolvedValue({
+      data: [{ id: 'ours', category: 'cat-2', amount: -10000 }],
+    } as any);
+
+    await createTransaction({
+      account: 'Checking',
+      amount: -100,
+      category: 'Alimentación',
+      date: '2026-06-05',
+    });
+
+    expect(vi.mocked(api.updateTransaction).mock.calls.map((c) => c[0])).toEqual(['ours']);
+  });
+
+  it('warns on stderr when the row cannot be found to enforce its category', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [] } as any);
+
+    await createTransaction({
+      account: 'Checking',
+      amount: -100,
+      category: 'Alimentación',
+      date: '2026-06-05',
+    });
+
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/could not find the new transaction/));
+    stderr.mockRestore();
+  });
+});
+
+/**
+ * #79. Actual can apply a write and then fail, so `Error` does not mean "it did
+ * not happen". Six occurrences were collected from two people using the server
+ * daily, every one a transaction already in the budget when the error arrived.
+ *
+ * The row is found by the marker this server writes with it, so these tests
+ * drive `runQuery`, not a date window.
+ */
+describe('a write that fails after it has already been applied', () => {
+  const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
+
+  /** What the marker lookup finds: our row, nothing, or an unreadable budget. */
+  const lookupFinds = (rows: Array<Record<string, unknown>> | null) => {
+    vi.mocked(api.runQuery).mockReset();
+    if (rows === null) {
+      vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
+    } else {
+      vi.mocked(api.runQuery).mockResolvedValue({ data: rows } as any);
+    }
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
+  });
+
+  const attempt = () =>
+    createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+  it('does not report a plain failure when the transaction is there', async () => {
+    lookupFinds([{ id: 'ours', amount: -5000 }]);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/was saved/i);
+  });
+
+  it('tells the caller not to repeat it, which is what duplicates', async () => {
+    lookupFinds([{ id: 'ours', amount: -5000 }]);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/do not repeat it/i);
+  });
+
+  it('says a retry is safe when nothing carries the marker', async () => {
+    lookupFinds([]);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/was not saved.*can be retried/is);
+  });
+
+  it('is not fooled by another row of the same amount on the same day', async () => {
+    // The old probe matched on amount and date, so a second agent reconciling
+    // the same statement could answer "it was saved" about a transaction that
+    // was never written. A marker lookup cannot confuse the two.
+    lookupFinds([]);
+    vi.mocked(api.getTransactions).mockResolvedValue([
+      { id: 'someone-elses', account: 'acc-1', date: '2026-09-21', amount: -5000 },
+    ] as any);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/was not saved/i);
+  });
+
+  it('finds the row even when a rule moved its date and amount', async () => {
+    // Rules run on every insert. Nothing else on the row stays put; the marker
+    // does.
+    lookupFinds([{ id: 'ours', amount: -9999 }]);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/was saved/i);
+  });
+
+  it('admits it cannot tell when the budget will not open again either', async () => {
+    lookupFinds(null);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/could not be.*determined/is);
+  });
+
+  it('covers the sync step too, where the row is in and the sync is not', async () => {
+    lookupFinds([{ id: 'ours', amount: -5000 }]);
+    vi.mocked(api.sync).mockRejectedValue(failure());
+
+    await expect(attempt()).rejects.toThrow(/was saved/i);
+  });
+
+  it('leaves an ordinary refusal unwrapped, not merely quoted inside a verdict', async () => {
+    lookupFinds([]);
+    vi.mocked(api.addTransactions).mockRejectedValue(new Error('amount is required'));
+
+    await expect(attempt()).rejects.toThrow(/^amount is required$/);
+  });
+
+  it('labels every write, since an unlabelled one could not be found again', async () => {
+    lookupFinds([]);
+
+    await attempt();
+
+    const [, [written]] = vi.mocked(api.addTransactions).mock.calls[0] as any;
+    expect(written.imported_id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('gives each write its own label', async () => {
+    lookupFinds([]);
+
+    await attempt();
+    await attempt();
+
+    const first = (vi.mocked(api.addTransactions).mock.calls[0] as any)[1][0].imported_id;
+    const second = (vi.mocked(api.addTransactions).mock.calls[1] as any)[1][0].imported_id;
+    expect(first).not.toBe(second);
   });
 });
 
 /**
  * Through the registered handler, not the inner function: the promise that a
- * saved write is not reported as an error lives in the handler, and mutating
- * all three handlers to ignore it used to break exactly one test.
+ * saved write is not reported as an error lives in the handler.
  */
 describe('create_transaction through its handler', () => {
   const capture = () => {
@@ -295,16 +256,16 @@ describe('create_transaction through its handler', () => {
     return handler as (input: Record<string, unknown>) => Promise<any>;
   };
 
-  it('does not report a saved write as an error', async () => {
-    vi.mocked(api.getTransactions)
-      .mockReset()
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'new', account: 'acc-1', date: '2026-09-21', amount: -5000, cleared: false },
-      ] as any);
+  beforeEach(() => {
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
     vi.mocked(api.addTransactions)
       .mockReset()
       .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+  });
+
+  it('does not report a saved write as an error', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
 
     const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
 
@@ -314,15 +275,7 @@ describe('create_transaction through its handler', () => {
   });
 
   it('still reports an unknown outcome as an error', async () => {
-    vi.mocked(api.getTransactions)
-      .mockReset()
-      .mockResolvedValueOnce([] as any)
-      .mockResolvedValueOnce([
-        { id: 'stranger', account: 'acc-1', date: '2026-09-21', amount: -777 },
-      ] as any);
-    vi.mocked(api.addTransactions)
-      .mockReset()
-      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+    vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
 
     const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
 
