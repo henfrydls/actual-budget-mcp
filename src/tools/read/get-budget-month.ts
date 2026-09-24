@@ -7,6 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
+import { findSpendingDivergences, describeDivergences } from '../../utils/budget-crosscheck.js';
 
 export function registerGetBudgetMonth(server: McpServer): void {
   server.tool(
@@ -65,6 +66,31 @@ export function registerGetBudgetMonth(server: McpServer): void {
             `  ${'Group Total'.padEnd(25)} Budgeted: ${formatMoney(groupBudgeted).padStart(12)}  Spent: ${formatMoney(groupSpent).padStart(12)}  Balance: ${formatMoney(groupBalance).padStart(12)}`,
           );
           lines.push('');
+        }
+
+        // #80: the budget module has reported a month at less than a third of
+        // real spending and said nothing about it. The transactions are right
+        // there and summing them is cheap, so the answer can carry its own
+        // check rather than leaving the reader to discover it three
+        // contradictions later.
+        //
+        // A failure here must never cost the caller the figures they asked
+        // for: the check is an extra, not a precondition.
+        try {
+          const divergences = await findSpendingDivergences(
+            month,
+            budget.categoryGroups as BudgetMonthGroup[],
+          );
+          lines.push(...describeDivergences(divergences));
+        } catch (crossCheckError) {
+          // The reason matters: a check that is permanently broken would
+          // otherwise be invisible, and this note would look like a quirk.
+          lines.push(
+            '',
+            'Note: could not cross-check these figures against the transactions,',
+            'so they are reported as the budget module gave them.',
+            `Reason: ${describeError(crossCheckError)}`,
+          );
         }
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
