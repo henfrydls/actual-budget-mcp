@@ -26,7 +26,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { createSplitTransaction } from '../write/create-split-transaction.js';
+import { createSplitTransaction, registerCreateSplitTransaction } from '../write/create-split-transaction.js';
 
 describe('createSplitTransaction (#28)', () => {
   beforeEach(() => {
@@ -170,5 +170,43 @@ describe('a split that fails after it has already been applied', () => {
     vi.mocked(api.addTransactions).mockRejectedValue(new Error('splits must sum to the total'));
 
     await expect(split()).rejects.toThrow('splits must sum to the total');
+  });
+});
+
+describe('create_split_transaction through its handler', () => {
+  it('does not report a saved split as an error', async () => {
+    let handler: any;
+    registerCreateSplitTransaction({ tool: (...a: unknown[]) => { handler = a.at(-1); } } as never);
+
+    vi.mocked(api.getTransactions)
+      .mockReset()
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        {
+          id: 'parent',
+          account: 'acc-1',
+          date: '2026-09-21',
+          amount: -10000,
+          is_parent: true,
+          subtransactions: [{ id: 'c1', amount: -6000 }, { id: 'c2', amount: -4000 }],
+        },
+      ] as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+
+    const result = await handler({
+      account: 'Checking',
+      amount: -100,
+      date: '2026-09-21',
+      splits: [
+        { amount: -60, category: 'Groceries' },
+        { amount: -40, category: 'Cleaning' },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/was saved/i);
+    expect(result.content[0].text).not.toMatch(/^Error:/);
   });
 });

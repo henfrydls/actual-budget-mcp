@@ -110,7 +110,7 @@ describe('reporting what really happened to a failed write', () => {
 });
 
 describe('the old caution and the new answer do not appear together', () => {
-  it('drops "may already have been applied" once the answer is known', async () => {
+  it('drops the retry caution once the answer is known', async () => {
     // The caution is for tools that cannot tell. Printing it next to "it was
     // saved" would contradict it, and a message that hedges its own conclusion
     // teaches the reader to ignore both halves.
@@ -120,7 +120,10 @@ describe('the old caution and the new answer do not appear together', () => {
     );
 
     expect(message).toMatch(/was saved/i);
-    expect(message).not.toMatch(/may already have been applied/i);
+    // The caution's actual words. An earlier version of this test asserted the
+    // absence of a phrase the constant never contained, so it could not fail:
+    // mutating describeError to ignore the option broke nothing.
+    expect(message).not.toMatch(/check the budget before retrying/i);
   });
 
   it('keeps it for callers that have not checked', async () => {
@@ -185,5 +188,42 @@ describe('the message and the verdict stay consistent', () => {
   it('reads an error that is not an Error instance', async () => {
     // String(error) turned { message } into "[object Object]".
     expect(mayHaveBeenApplied({ message: 'We had an unknown problem opening "x"' })).toBe(true);
+  });
+});
+
+describe('the verdict carries the contention note', () => {
+  it('names another server when one is there', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { claimDataDir, forgetActiveDataDir, LOCK_FILE } = await import('../data-dir-lock.js');
+
+    const root = mkdtempSync(join(tmpdir(), 'verdict-contention-'));
+    const configured = join(root, 'cache');
+    mkdirSync(configured, { recursive: true });
+    const incumbent = process.pid;
+    writeFileSync(
+      join(configured, LOCK_FILE),
+      JSON.stringify({ pid: incumbent, startedAt: '2026-09-24T00:00:00.000Z', version: '0.9.2' }),
+    );
+    process.env.ACTUAL_DATA_DIR = configured;
+
+    const spy = vi.spyOn(process, 'pid', 'get').mockReturnValue(999_200);
+    claimDataDir('0.9.2');
+
+    const { message } = await verifyFailedWrite(
+      new Error('We had an unknown problem opening "x"'),
+      context(present),
+    );
+
+    spy.mockRestore();
+    forgetActiveDataDir();
+    delete process.env.ACTUAL_DATA_DIR;
+    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+
+    // #79 asks that contention be named, so the reader can tell "another
+    // process has the file" from "the file is broken". Dropping it from the
+    // verdict used to break no test at all.
+    expect(message).toMatch(new RegExp(String(incumbent)));
   });
 });

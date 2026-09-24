@@ -27,7 +27,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { createTransaction } from '../write/create-transaction.js';
+import { createTransaction, registerCreateTransaction } from '../write/create-transaction.js';
 
 describe('createTransaction (#26 explicit category must win)', () => {
   beforeEach(() => {
@@ -280,5 +280,53 @@ describe('forcing the category never touches another row', () => {
     const touched = vi.mocked(api.updateTransaction).mock.calls.map((c) => c[0]);
     expect(touched).toEqual(['mine']);
     expect(touched).not.toContain('theirs');
+  });
+});
+
+/**
+ * Through the registered handler, not the inner function: the promise that a
+ * saved write is not reported as an error lives in the handler, and mutating
+ * all three handlers to ignore it used to break exactly one test.
+ */
+describe('create_transaction through its handler', () => {
+  const capture = () => {
+    let handler: any;
+    registerCreateTransaction({ tool: (...a: unknown[]) => { handler = a.at(-1); } } as never);
+    return handler as (input: Record<string, unknown>) => Promise<any>;
+  };
+
+  it('does not report a saved write as an error', async () => {
+    vi.mocked(api.getTransactions)
+      .mockReset()
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        { id: 'new', account: 'acc-1', date: '2026-09-21', amount: -5000, cleared: false },
+      ] as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+
+    const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/was saved/i);
+    expect(result.content[0].text).not.toMatch(/^Error:/);
+  });
+
+  it('still reports an unknown outcome as an error', async () => {
+    vi.mocked(api.getTransactions)
+      .mockReset()
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        { id: 'stranger', account: 'acc-1', date: '2026-09-21', amount: -777 },
+      ] as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+
+    const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not be.*determined/is);
   });
 });

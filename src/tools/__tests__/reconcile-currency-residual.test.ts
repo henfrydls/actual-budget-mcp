@@ -24,7 +24,10 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { reconcileCurrencyResidual } from '../write/reconcile-currency-residual.js';
+import {
+  reconcileCurrencyResidual,
+  registerReconcileCurrencyResidual,
+} from '../write/reconcile-currency-residual.js';
 
 describe('reconcileCurrencyResidual (#30)', () => {
   beforeEach(() => {
@@ -73,5 +76,48 @@ describe('reconcileCurrencyResidual (#30)', () => {
     await reconcileCurrencyResidual({ account: 'Card (USD)', category: 'Cashback', notes: 'Q2 FX cleanup' });
     const txn = (vi.mocked(api.addTransactions).mock.calls[0][1] as any[])[0];
     expect(txn.notes).toBe('Q2 FX cleanup');
+  });
+});
+
+/**
+ * This tool creates its adjustment through createTransaction, so it receives
+ * the same verdicts. Both audits found the handler turning "the transaction was
+ * saved, do not repeat it" into `isError: true` under a line starting "Error:",
+ * which is the contradictory reply the whole change exists to remove.
+ */
+describe('a verdict arriving from createTransaction', () => {
+  it('does not come back as an error when the write was saved', async () => {
+    let handler: any;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => { handler = a.at(-1); },
+    } as never);
+
+    vi.mocked(api.getAccountBalance).mockResolvedValue(-10000 as any);
+    vi.mocked(api.getTransactions)
+      .mockReset()
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValue([
+        {
+          id: 'new',
+          account: 'acc-1',
+          date: '2026-09-21',
+          amount: 5000,
+          cleared: false,
+          notes: 'FX residual adjustment',
+        },
+      ] as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+
+    const result = await handler({
+      account: 'Card (USD)',
+      target_balance: -50,
+      category: 'Cashback',
+      date: '2026-09-21',
+    });
+
+    expect(result.content[0].text).not.toMatch(/^Error:/);
+    expect(result.isError).toBeUndefined();
   });
 });
