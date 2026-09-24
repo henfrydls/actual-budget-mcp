@@ -7,7 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
-import { newWriteMarker, findByMarker } from '../../utils/write-marker.js';
+import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 
 export interface SplitInput {
   category: string;
@@ -86,7 +86,7 @@ export async function createSplitTransaction(
   // by what appeared near a date (#93). A repeated split duplicates a parent
   // and every child under it, so a wrong answer here is expensive.
   const marker = newWriteMarker();
-  parent.imported_id = marker;
+  parent.id = marker;
 
   const accounts = await api.getAccounts();
   const acct = accounts.find((a) => a.id === accountId);
@@ -103,7 +103,11 @@ export async function createSplitTransaction(
     const { verdict, message } = await verifyFailedWrite(error, {
       action: 'The split transaction',
       whereToLook: `${acctName} on ${txnDate}`,
-      probe: { marker, find: findByMarker },
+      probe: {
+            marker,
+            find: findByMarker,
+            corroborate: () => corroborateAbsence(accountId, txnDate, marker),
+          },
     });
     throw new WriteReportedError(message, verdict);
   }

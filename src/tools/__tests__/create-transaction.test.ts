@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fakeQ, lastQuery } from './fake-query.js';
 
 // Mock the external Actual API. addTransactions returns the literal 'ok'
 // (matching the real SDK: api/transactions-add -> Promise<'ok'>), NOT an array
@@ -21,7 +22,7 @@ vi.mock('@actual-app/api', () => ({
   // The write is labelled with an imported_id and found again by querying for
   // it, which is what replaced the date window and the snapshot (#93).
   runQuery: vi.fn().mockResolvedValue({ data: [] }),
-  q: () => ({ filter: () => ({ select: () => ({}) }) }),
+  q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,
@@ -230,7 +231,10 @@ describe('a write that fails after it has already been applied', () => {
     await attempt();
 
     const [, [written]] = vi.mocked(api.addTransactions).mock.calls[0] as any;
-    expect(written.imported_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(written.id).toMatch(/^[0-9a-f-]{36}$/);
+    // Not imported_id: labelling that field stops Actual deduplicating this
+    // row against a later file import.
+    expect(written.imported_id).toBeUndefined();
   });
 
   it('gives each write its own label', async () => {
@@ -239,8 +243,8 @@ describe('a write that fails after it has already been applied', () => {
     await attempt();
     await attempt();
 
-    const first = (vi.mocked(api.addTransactions).mock.calls[0] as any)[1][0].imported_id;
-    const second = (vi.mocked(api.addTransactions).mock.calls[1] as any)[1][0].imported_id;
+    const first = (vi.mocked(api.addTransactions).mock.calls[0] as any)[1][0].id;
+    const second = (vi.mocked(api.addTransactions).mock.calls[1] as any)[1][0].id;
     expect(first).not.toBe(second);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fakeQ, lastQuery } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -16,7 +17,7 @@ vi.mock('@actual-app/api', () => ({
   // The write is labelled with an imported_id and found again by querying for
   // it, which is what replaced the date window and the snapshot (#93).
   runQuery: vi.fn().mockResolvedValue({ data: [] }),
-  q: () => ({ filter: () => ({ select: () => ({}) }) }),
+  q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,

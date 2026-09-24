@@ -7,7 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
-import { newWriteMarker, findByMarker } from '../../utils/write-marker.js';
+import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -62,7 +62,7 @@ export function registerCreateTransfer(server: McpServer): void {
         // identity rather than guessed at (#93). A repeated transfer moves the
         // money twice and leaves two pairs of linked rows to unpick.
         const marker = newWriteMarker();
-        transaction.imported_id = marker;
+        transaction.id = marker;
 
         // Get account names for confirmation
         const accounts = await api.getAccounts();
@@ -79,7 +79,11 @@ export function registerCreateTransfer(server: McpServer): void {
           const { verdict, message } = await verifyFailedWrite(error, {
             action: 'The transfer',
             whereToLook: `${fromAcct?.name || fromId} on ${txnDate}`,
-            probe: { marker, find: findByMarker },
+            probe: {
+            marker,
+            find: findByMarker,
+            corroborate: () => corroborateAbsence(fromId, txnDate, marker),
+          },
           });
           throw new WriteReportedError(message, verdict);
         }

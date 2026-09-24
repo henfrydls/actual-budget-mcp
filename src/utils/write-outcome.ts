@@ -8,7 +8,7 @@ import { describeError, contentionNote, readable } from './errors.js';
  * daily (#79), every one a transaction already in the budget when the error
  * came back.
  */
-export type WriteVerdict = 'applied' | 'not-applied' | 'undetermined';
+export type WriteVerdict = 'applied' | 'not-applied' | 'undetermined' | 'duplicated';
 
 /** Everything this module reads off an error, in one place. */
 function errorText(error: unknown): string {
@@ -46,29 +46,43 @@ export function mayHaveBeenApplied(error: unknown): boolean {
 }
 
 export interface WriteProbe {
-  /** The label written with the transaction, used to find it again. */
+  /** The id written with the transaction, used to find it again. */
   marker: string;
-  /** Where the caller should look, in their own terms. */
+  /** Looks the row up by that id. `null` means the budget could not be read. */
   find: (marker: string) => Promise<Array<{ id: string }> | null>;
+  /**
+   * A second, independent look, consulted only before saying "not saved".
+   *
+   * That verdict is the one that authorises a retry, so it is the only one that
+   * has to be right. The rest of the design has a single point of failure: if
+   * the lookup goes blind it asserts absence rather than doubt, and an audit
+   * found that already happening for splits.
+   */
+  corroborate?: () => Promise<'absent' | 'present' | 'unknown'>;
 }
 
 /**
  * Decide what happened by looking for the row this server labelled.
  *
- * There is no window and no snapshot: either the row carrying our marker is
- * there or it is not. `null` means the budget could not be read, which is a
- * third answer and not a zero — "you can retry" on no evidence is the mistake
- * this whole change exists to stop making.
- *
- * More than one row with the same marker should be impossible, since the marker
- * is generated per write. If it ever happens, something wrote twice and saying
- * so is more useful than picking one.
+ * No window and no snapshot: either the row with our id is there or it is not.
+ * `null` means the budget could not be read, which is a third answer and not a
+ * zero — "you can retry" on no evidence is the mistake this exists to stop.
  */
 export async function probeVerdict(probe: WriteProbe): Promise<WriteVerdict> {
   const rows = await probe.find(probe.marker);
   if (rows === null) return 'undetermined';
   if (rows.length === 1) return 'applied';
-  if (rows.length > 1) return 'undetermined';
+  // More than one row with an id we generated should be impossible. If it ever
+  // happens, something wrote twice, and that is knowledge worth reporting
+  // rather than hiding behind "could not be determined".
+  if (rows.length > 1) return 'duplicated';
+
+  // Nothing found. Before authorising a retry, ask again a different way.
+  if (probe.corroborate) {
+    const second = await probe.corroborate();
+    if (second === 'present') return 'applied';
+    if (second === 'unknown') return 'undetermined';
+  }
   return 'not-applied';
 }
 
@@ -126,6 +140,17 @@ export async function verifyFailedWrite(
         `${context.whereToLook}, or anywhere else: this server labels what it ` +
         `writes and no transaction carries that label. The error was: ` +
         `${reported}${contention}`,
+    };
+  }
+
+  if (verdict === 'duplicated') {
+    return {
+      verdict,
+      message:
+        `${context.action} was saved more than once. Do not repeat it: there is ` +
+        `already a duplicate in ${context.whereToLook} to remove. Saying the ` +
+        `outcome was unknown here would hide something that is known and needs ` +
+        `acting on. The error was: ${reported}${contention}`,
     };
   }
 

@@ -7,7 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
-import { newWriteMarker, findByMarker } from '../../utils/write-marker.js';
+import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 
 export interface CreateTransactionInput {
@@ -29,10 +29,11 @@ export interface CreateTransactionInput {
  * ones), so the caller's explicit category can be silently overridden (#26).
  *
  * `api.addTransactions` resolves to the literal `'ok'` (never the new ids), so
- * we cannot read the created id from its return value. Instead we snapshot the
- * account's transactions for the date, add, then diff to locate the new one and
- * force the caller's category with `updateTransaction` (which does not re-run
- * the learning override, so the correction sticks).
+ * the created row cannot be read from its return value. It is given an id of
+ * our own before the write, looked up by that id afterwards, and corrected with
+ * `updateTransaction` (which does not re-run the learning override, so the
+ * correction sticks). This used to diff the account's transactions for the date
+ * instead, which could reach another process's row.
  *
  * Returns the human-readable confirmation lines.
  */
@@ -89,7 +90,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // rewrite the amount and the date, so nothing else on the row is both stable
   // and ours.
   const marker = newWriteMarker();
-  transaction.imported_id = marker;
+  transaction.id = marker;
 
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
@@ -133,7 +134,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     const { verdict, message } = await verifyFailedWrite(error, {
       action: 'The transaction',
       whereToLook: `${acctName} on ${txnDate}`,
-      probe: { marker, find: findByMarker },
+      probe: {
+            marker,
+            find: findByMarker,
+            corroborate: () => corroborateAbsence(accountId, txnDate, marker),
+          },
     });
     throw new WriteReportedError(message, verdict);
   }
