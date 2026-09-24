@@ -6,6 +6,7 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { mayHaveBeenApplied, verifyFailedWrite } from '../../utils/write-outcome.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 
 export interface CreateTransactionInput {
@@ -84,22 +85,41 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   // Snapshot existing transactions on this date so we can identify the one we
   // are about to create (addTransactions returns 'ok', not ids).
-  let beforeIds: Set<string> | undefined;
-  if (categoryId) {
-    const before = await api.getTransactions(accountId, txnDate, txnDate);
-    beforeIds = new Set(before.map((t) => t.id));
-  }
+  //
+  // Taken unconditionally, not only when a category was given: it is also what
+  // answers "did the write land?" if the call fails afterwards (#79). One extra
+  // read per create is a cheap price for being able to say which happened.
+  const before = await api.getTransactions(accountId, txnDate, txnDate);
+  const beforeIds: Set<string> = new Set((before ?? []).map((t) => t.id));
 
-  await api.addTransactions(accountId, [transaction as any], {
-    learnCategories: false,
-    runTransfers: !!transferPayeeId,
-  });
+  const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
+
+  try {
+    await api.addTransactions(accountId, [transaction as any], {
+      learnCategories: false,
+      runTransfers: !!transferPayeeId,
+    });
+  } catch (error) {
+    if (!mayHaveBeenApplied(error)) throw error;
+
+    // Actual can apply a write and fail afterwards, so "Error" does not mean
+    // "it did not happen". Go and look before saying anything.
+    const { message } = await verifyFailedWrite(error, {
+      action: 'The transaction',
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: async () => {
+        const after = await api.getTransactions(accountId, txnDate, txnDate);
+        return after.some((t) => !beforeIds.has(t.id) && t.amount === amountCents);
+      },
+    });
+    throw new Error(message);
+  }
 
   // Force the explicit category on the newly created transaction(s) if the SDK
   // overrode it with a learned mapping.
-  if (categoryId && beforeIds) {
+  if (categoryId) {
     const after = await api.getTransactions(accountId, txnDate, txnDate);
-    const created = after.filter((t) => !beforeIds!.has(t.id));
+    const created = after.filter((t) => !beforeIds.has(t.id));
     for (const t of created) {
       if (t.category !== categoryId) {
         // #44: pass the amount we already have, so the update can never reset
@@ -117,7 +137,20 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     }
   }
 
-  await api.sync();
+  try {
+    await api.sync();
+  } catch (error) {
+    if (!mayHaveBeenApplied(error)) throw error;
+    const { message } = await verifyFailedWrite(error, {
+      action: 'The transaction',
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: async () => {
+        const after = await api.getTransactions(accountId, txnDate, txnDate);
+        return after.some((t) => !beforeIds.has(t.id) && t.amount === amountCents);
+      },
+    });
+    throw new Error(message);
+  }
 
   const acct = accounts.find((a) => a.id === accountId);
 

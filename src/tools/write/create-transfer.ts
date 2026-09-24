@@ -6,6 +6,7 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { mayHaveBeenApplied, verifyFailedWrite } from '../../utils/write-outcome.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -53,16 +54,36 @@ export function registerCreateTransfer(server: McpServer): void {
           transaction.notes = notes;
         }
 
-        await api.addTransactions(fromId, [transaction as any], {
-          runTransfers: true,
-        });
-
-        await api.sync();
+        // Snapshot first, so a failure afterwards can be answered rather than
+        // guessed at. A repeated transfer moves the money twice and leaves two
+        // pairs of linked rows to unpick (#79).
+        const before = await api.getTransactions(fromId, txnDate, txnDate);
+        const beforeIds = new Set((before ?? []).map((t) => t.id));
 
         // Get account names for confirmation
         const accounts = await api.getAccounts();
         const fromAcct = accounts.find((a) => a.id === fromId);
         const toAcct = accounts.find((a) => a.id === toId);
+
+        try {
+          await api.addTransactions(fromId, [transaction as any], {
+            runTransfers: true,
+          });
+          await api.sync();
+        } catch (error) {
+          if (!mayHaveBeenApplied(error)) throw error;
+          const { message } = await verifyFailedWrite(error, {
+            action: 'The transfer',
+            whereToLook: `${fromAcct?.name || fromId} on ${txnDate}`,
+            probe: async () => {
+              const after = await api.getTransactions(fromId, txnDate, txnDate);
+              return (after ?? []).some(
+                (t) => !beforeIds.has(t.id) && t.amount === -amountCents,
+              );
+            },
+          });
+          throw new Error(message);
+        }
 
         return {
           content: [

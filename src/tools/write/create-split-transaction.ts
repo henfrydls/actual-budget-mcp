@@ -6,6 +6,7 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { mayHaveBeenApplied, verifyFailedWrite } from '../../utils/write-outcome.js';
 
 export interface SplitInput {
   category: string;
@@ -76,15 +77,37 @@ export async function createSplitTransaction(
   if (input.payee) parent.payee_name = input.payee;
   if (input.notes) parent.notes = input.notes;
 
-  await api.addTransactions(accountId, [parent as any], {
-    learnCategories: false,
-    runTransfers: false,
-  });
-
-  await api.sync();
+  // Snapshot first: this is what answers "did the write land?" if the call
+  // fails afterwards. A split that is silently created and then reported as an
+  // error is worse than a plain one, because repeating it duplicates a parent
+  // and every child under it (#79).
+  const before = await api.getTransactions(accountId, txnDate, txnDate);
+  const beforeIds = new Set((before ?? []).map((t) => t.id));
 
   const accounts = await api.getAccounts();
   const acct = accounts.find((a) => a.id === accountId);
+  const acctName = acct?.name || accountId;
+
+  const landed = async () => {
+    const after = await api.getTransactions(accountId, txnDate, txnDate);
+    return (after ?? []).some((t) => !beforeIds.has(t.id) && t.amount === totalCents);
+  };
+
+  try {
+    await api.addTransactions(accountId, [parent as any], {
+      learnCategories: false,
+      runTransfers: false,
+    });
+    await api.sync();
+  } catch (error) {
+    if (!mayHaveBeenApplied(error)) throw error;
+    const { message } = await verifyFailedWrite(error, {
+      action: 'The split transaction',
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: landed,
+    });
+    throw new Error(message);
+  }
 
   const lines = [
     'Split transaction created:',

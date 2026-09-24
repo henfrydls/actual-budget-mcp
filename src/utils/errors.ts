@@ -105,16 +105,29 @@ function haystack(error: unknown): string {
  * Turn any thrown value into a message worth showing the user. Never returns
  * an empty string.
  */
-export function describeError(error: unknown): string {
+export interface DescribeErrorOptions {
+  /**
+   * Leave out the "this may already have been applied" caution.
+   *
+   * Set by a caller that has gone and checked. The caution exists for tools
+   * that cannot tell; repeating it next to a definite answer would contradict
+   * it, and a message that hedges its own conclusion teaches the reader to
+   * ignore both halves.
+   */
+  omitUncertainWriteCaution?: boolean;
+}
+
+export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
   const text = haystack(error);
+  const caution = options.omitUncertainWriteCaution ? '' : MAY_ALREADY_BE_APPLIED;
 
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
-  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + MAY_ALREADY_BE_APPLIED + contentionNote();
+  if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + caution + contentionNote();
 
   const message = readable(error);
   return message.trim() === ''
-    ? EMPTY_ERROR_HINT + MAY_ALREADY_BE_APPLIED + contentionNote()
+    ? EMPTY_ERROR_HINT + caution + contentionNote()
     : message;
 }
