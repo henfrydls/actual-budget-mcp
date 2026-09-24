@@ -78,13 +78,9 @@ export async function createSplitTransaction(
   if (input.payee) parent.payee_name = input.payee;
   if (input.notes) parent.notes = input.notes;
 
-  // Snapshot first: this is what answers "did the write land?" if the call
-  // fails afterwards. A split that is silently created and then reported as an
-  // error is worse than a plain one, because repeating it duplicates a parent
-  // and every child under it (#79).
-  // Labelled before sending, so the row can be found by identity rather than
-  // by what appeared near a date (#93). A repeated split duplicates a parent
-  // and every child under it, so a wrong answer here is expensive.
+  // Given its id before sending, so the row can be found by identity rather
+  // than by what appeared near a date (#79, #93). A repeated split duplicates a
+  // parent and every child under it, so a wrong answer here is expensive.
   const marker = newWriteMarker();
   parent.id = marker;
 

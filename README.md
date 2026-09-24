@@ -106,7 +106,19 @@ the extension started working on its own a few minutes later. The bundle now
 includes Actual's SQLite binary for every platform and Node version it
 supports, and picks the right one when it starts.
 
-#### Updating the extension
+#### Transactions this server writes carry an id it generates
+
+Every transaction, split and transfer created through this server is given a
+UUID before it is sent, and that id is what the server uses to find the row
+again if the write reports an error. It is the transaction's own `id`, not
+`imported_id`, so Actual's deduplication of imported files still works on these
+rows exactly as it does on any other.
+
+Nothing about this is visible in Actual, and it changes nothing for you. It is
+documented because it is a real difference from writing the same transaction by
+hand.
+
+### Updating the extension
 
 Installing a new version over an old one keeps the settings you filled in, with
 one exception seen in practice: the saved server password was cleared when a

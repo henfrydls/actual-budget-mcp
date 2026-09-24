@@ -55,12 +55,9 @@ export function registerCreateTransfer(server: McpServer): void {
           transaction.notes = notes;
         }
 
-        // Snapshot first, so a failure afterwards can be answered rather than
-        // guessed at. A repeated transfer moves the money twice and leaves two
-        // pairs of linked rows to unpick (#79).
-        // Labelled before sending, so a failure afterwards can be answered by
-        // identity rather than guessed at (#93). A repeated transfer moves the
-        // money twice and leaves two pairs of linked rows to unpick.
+        // Given its id before sending, so a failure afterwards can be answered
+        // by identity rather than guessed at (#79, #93). A repeated transfer
+        // moves the money twice and leaves two pairs of linked rows to unpick.
         const marker = newWriteMarker();
         transaction.id = marker;
 

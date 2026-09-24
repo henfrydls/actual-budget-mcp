@@ -130,9 +130,20 @@ export function readable(error: unknown): string {
   return String(error);
 }
 
-function haystack(error: unknown): string {
-  const reason = (error as { reason?: unknown } | null)?.reason;
-  return `${readable(error)} ${String(reason ?? '')}`;
+/**
+ * Everything worth reading off a thrown value, in one place.
+ *
+ * `withErrorCode` writes `code` and `FileDownloadError` writes `reason`, so both
+ * have to be read. Missing `code` is what let the SDK's own wording reach users
+ * once already, and a second reader elsewhere that disagreed with this one made
+ * two parts of the server classify the same error differently.
+ */
+export function haystack(error: unknown): string {
+  const tagged = error as { reason?: unknown; code?: unknown } | null;
+  return [readable(error), tagged?.reason, tagged?.code]
+    .filter((part) => part !== undefined && part !== null && part !== '')
+    .map(String)
+    .join(' ');
 }
 
 /**

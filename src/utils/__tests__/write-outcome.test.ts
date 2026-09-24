@@ -240,3 +240,15 @@ describe('the verdict carries the contention note', () => {
     expect(message).toMatch(new RegExp(String(incumbent)));
   });
 });
+
+describe('one reader for an error, shared with describeError', () => {
+  it('agrees with describeError about the same error', async () => {
+    const { describeError } = await import('../errors.js');
+    const tagged = Object.assign(new Error(''), { code: 'out-of-sync' });
+
+    // Two readers that disagreed made one part of the server call this a sync
+    // failure and another call it a refusal.
+    expect(mayHaveBeenApplied(tagged)).toBe(true);
+    expect(describeError(tagged)).toMatch(/out of sync|sync/i);
+  });
+});

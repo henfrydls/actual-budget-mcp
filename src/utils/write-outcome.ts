@@ -1,4 +1,4 @@
-import { describeError, contentionNote, readable } from './errors.js';
+import { describeError, contentionNote, readable, haystack } from './errors.js';
 
 /**
  * What actually happened to a write that reported failure.
@@ -9,20 +9,6 @@ import { describeError, contentionNote, readable } from './errors.js';
  * came back.
  */
 export type WriteVerdict = 'applied' | 'not-applied' | 'undetermined' | 'duplicated';
-
-/** Everything this module reads off an error, in one place. */
-function errorText(error: unknown): string {
-  // readable() is what describeError uses. Keeping a second reader here made
-  // the two disagree about the same error, and turned `{message: '...'}` into
-  // "[object Object]".
-  const parts: string[] = [readable(error)];
-  const tagged = error as { reason?: unknown; code?: unknown } | null | undefined;
-  if (tagged?.reason) parts.push(String(tagged.reason));
-  // `withErrorCode` writes `code`; missing it is what let the SDK's own wording
-  // reach users once already.
-  if (tagged?.code) parts.push(String(tagged.code));
-  return parts.join(' ');
-}
 
 /**
  * Errors that arrive *after* the write rather than instead of it.
@@ -39,7 +25,8 @@ function errorText(error: unknown): string {
  * doubt and bury the message that actually helps (update Actual).
  */
 export function mayHaveBeenApplied(error: unknown): boolean {
-  const text = errorText(error);
+  // The same reader describeError uses, so the two cannot disagree about one error.
+  const text = haystack(error);
   if (/out-of-sync-(migrations|data)/i.test(text)) return false;
   if (readable(error).trim() === '') return true;
   return /unknown problem opening/i.test(text) || /out-of-sync/i.test(text);
