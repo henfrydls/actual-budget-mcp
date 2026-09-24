@@ -106,7 +106,19 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // silent, on the success path, and invisible in a reconciliation.
     if (categoryId) {
       const ours = await findByMarker(marker);
-      if (ours && ours.length > 0) {
+      // A rule can turn what we sent into a split. Actual ignores the category
+      // on a split parent, so setting it would do nothing and reporting
+      // `Category: X` would be a lie. Before the lookup could see parents at
+      // all this fell through to the warning below by accident; now it has to
+      // be said on purpose.
+      const becameSplit = (ours ?? []).some(
+        (row) => (row as { is_parent?: boolean }).is_parent === true,
+      );
+      if (becameSplit) {
+        console.error(
+          `[create_transaction] warning: a rule turned the new transaction on ${txnDate} into a split, and a split's category lives on its parts, so the category you asked for was not applied.`,
+        );
+      } else if (ours && ours.length > 0) {
         for (const row of ours) {
           if (row.category !== categoryId) {
             // #44: pass the amount we already have, so the update can never
@@ -137,7 +149,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       probe: {
             marker,
             find: findByMarker,
-            corroborate: () => corroborateAbsence(accountId, txnDate, marker),
+            corroborate: () => corroborateAbsence(accountId, marker),
           },
     });
     throw new WriteReportedError(message, verdict);
@@ -196,8 +208,9 @@ export function registerCreateTransaction(server: McpServer): void {
       } catch (error) {
         // A write that landed is not reported as an error, however the
         // operation ended: an agent reading "Error:" has every reason to try
-        // again, and trying again is what duplicates.
-        if (error instanceof WriteReportedError && error.verdict === 'applied') {
+        // again, and trying again is what duplicates. That covers a duplicate
+        // too — it landed twice, so repeating it is the last thing to do.
+        if (error instanceof WriteReportedError && (error.verdict === 'applied' || error.verdict === 'duplicated')) {
           return { content: [{ type: 'text', text: error.message }] };
         }
         const message = describeError(error);

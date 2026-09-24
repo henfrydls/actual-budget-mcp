@@ -59,9 +59,13 @@ export async function probeVerdict(probe: WriteProbe): Promise<WriteVerdict> {
   const rows = await probe.find(probe.marker);
   if (rows === null) return 'undetermined';
   if (rows.length === 1) return 'applied';
-  // More than one row with an id we generated should be impossible. If it ever
-  // happens, something wrote twice, and that is knowledge worth reporting
-  // rather than hiding behind "could not be determined".
+  // Unreachable in practice, and kept because the alternative is to guess.
+  // Two rows cannot share an id: Actual does not reject a colliding id, it
+  // overwrites the existing row in place. So a collision would destroy a
+  // transaction rather than duplicate one — invisible and unrecoverable, which
+  // is worse, and the reason nothing but `randomUUID` may ever generate these.
+  // If this branch is ever reached, something wrote twice and saying so beats
+  // hiding it behind "could not be determined".
   if (rows.length > 1) return 'duplicated';
 
   // Nothing found. Before authorising a retry, ask again a different way.

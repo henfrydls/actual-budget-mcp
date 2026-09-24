@@ -127,7 +127,7 @@ describe.skipIf(skip)('finding a written row by the id we gave it', () => {
     const rows = await api.getTransactions(acctId, '2026-06-05', '2026-06-05');
     const parentId = (rows[0] as Record<string, any>).id as string;
 
-    expect(await corroborateAbsence(acctId, '2026-06-05', parentId)).toBe('present');
-    expect(await corroborateAbsence(acctId, '2026-06-05', newWriteMarker())).toBe('absent');
+    expect(await corroborateAbsence(acctId, parentId)).toBe('present');
+    expect(await corroborateAbsence(acctId, newWriteMarker())).toBe('absent');
   });
 });

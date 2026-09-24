@@ -144,9 +144,9 @@ describe('which errors the gate lets through', () => {
 });
 
 describe('the message and the verdict stay consistent', () => {
-  it('warns about date rules on the verdict that authorises a retry', async () => {
-    // It used to say this only on "unknown", which is the one verdict where
-    // nobody is about to repeat anything. The caveat belongs where the retry is.
+  it('explains, on the verdict that authorises a retry, why it is confident', async () => {
+    // The claim is that the row is labelled and nothing carries the label, so
+    // the reader can judge it instead of taking "not saved" on trust.
     const { message } = await verifyFailedWrite(
       new Error('We had an unknown problem opening "x"'),
       context(absent),

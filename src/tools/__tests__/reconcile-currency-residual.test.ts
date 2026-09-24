@@ -14,8 +14,8 @@ vi.mock('@actual-app/api', () => ({
   addTransactions: vi.fn().mockResolvedValue('ok'),
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
-  // The write is labelled with an imported_id and found again by querying for
-  // it, which is what replaced the date window and the snapshot (#93).
+  // The write is given an id of our own and found again by querying for it,
+  // which is what replaced the date window and the snapshot (#93).
   runQuery: vi.fn().mockResolvedValue({ data: [] }),
   q: (table: string) => fakeQ(table),
   utils: {
@@ -114,5 +114,33 @@ describe('a verdict arriving from createTransaction', () => {
 
     expect(result.content[0].text).not.toMatch(/^Error:/);
     expect(result.isError).toBeUndefined();
+  });
+});
+
+describe('reconcile_currency_residual: verdicts other than "saved"', () => {
+  it('still reports an unknown outcome as an error', async () => {
+    // Only the `applied` path was covered, so exempting every verdict from
+    // isError broke nothing.
+    let handler: any;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => { handler = a.at(-1); },
+    } as never);
+
+    vi.mocked(api.getAccountBalance).mockResolvedValue(-10000 as any);
+    vi.mocked(api.getTransactions).mockReset().mockRejectedValue(new Error('cannot read'));
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+
+    const result = await handler({
+      account: 'Card (USD)',
+      target_balance: -50,
+      category: 'Cashback',
+      date: '2026-09-21',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not be.*determined/is);
   });
 });

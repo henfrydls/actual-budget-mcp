@@ -102,7 +102,7 @@ export async function createSplitTransaction(
       probe: {
             marker,
             find: findByMarker,
-            corroborate: () => corroborateAbsence(accountId, txnDate, marker),
+            corroborate: () => corroborateAbsence(accountId, marker),
           },
     });
     throw new WriteReportedError(message, verdict);
@@ -169,8 +169,9 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
         // A write that landed is not an error the caller should act on by
-        // retrying, whatever the operation did afterwards.
-        if (error instanceof WriteReportedError && error.verdict === 'applied') {
+        // retrying, whatever the operation did afterwards. A duplicate landed
+        // twice, so that applies to it most of all.
+        if (error instanceof WriteReportedError && (error.verdict === 'applied' || error.verdict === 'duplicated')) {
           return { content: [{ type: 'text', text: error.message }] };
         }
         const message = describeError(error);

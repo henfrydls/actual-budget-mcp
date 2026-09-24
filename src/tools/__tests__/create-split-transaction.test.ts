@@ -11,13 +11,12 @@ vi.mock('@actual-app/api', () => ({
     { id: 'cat-2', name: 'Cleaning', group_id: 'g1', hidden: false },
     { id: 'cat-3', name: 'Electronics', group_id: 'g1', hidden: false },
   ]),
-  // Read twice now: once before the write and once after a failure, to
-  // answer whether the split landed (#79).
+  // Read as the second, independent lookup before a retry is authorised (#79).
   getTransactions: vi.fn().mockResolvedValue([]),
   addTransactions: vi.fn().mockResolvedValue('ok'),
   sync: vi.fn().mockResolvedValue(undefined),
-  // The write is labelled with an imported_id and found again by querying for
-  // it, which is what replaced the date window and the snapshot (#93).
+  // The write is given an id of our own and found again by querying for it,
+  // which is what replaced the date window and the snapshot (#93).
   runQuery: vi.fn().mockResolvedValue({ data: [] }),
   q: (table: string) => fakeQ(table),
   utils: {
@@ -212,5 +211,42 @@ describe('create_split_transaction through its handler', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/could not be.*determined/is);
+  });
+});
+
+describe('create_split_transaction: the sync step and the second lookup', () => {
+  const failure = () => new Error('We had an unknown problem opening "x"');
+  const split = () =>
+    createSplitTransaction({
+      account: 'Checking',
+      amount: -100,
+      date: '2026-09-21',
+      splits: [
+        { amount: -60, category: 'Groceries' },
+        { amount: -40, category: 'Cleaning' },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+  });
+
+  it('covers a failure in the sync step, not only in the write', async () => {
+    // create_transaction and create_transfer had this; the split did not, so
+    // swallowing the sync error left the suite green.
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
+    vi.mocked(api.sync).mockRejectedValue(failure());
+
+    await expect(split()).rejects.toThrow(/was saved/i);
+  });
+
+  it('will not say "not saved" when the second lookup cannot run', async () => {
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+    vi.mocked(api.getTransactions).mockRejectedValue(new Error('cannot read'));
+
+    await expect(split()).rejects.toThrow(/could not be.*determined/is);
   });
 });

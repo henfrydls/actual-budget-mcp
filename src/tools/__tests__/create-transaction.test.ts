@@ -14,13 +14,13 @@ vi.mock('@actual-app/api', () => ({
     { id: 'cat-2', name: 'Cashback', group_id: 'grp-2', hidden: false },
   ]),
   getTransactions: vi.fn(),
-  // Resolved after a failed write, to compare the payee of a candidate row.
+  // No longer used to identify the row; kept because the tool reads payees.
   getPayees: vi.fn().mockResolvedValue([]),
   addTransactions: vi.fn().mockResolvedValue('ok'),
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
-  // The write is labelled with an imported_id and found again by querying for
-  // it, which is what replaced the date window and the snapshot (#93).
+  // The write is given an id of our own and found again by querying for it,
+  // which is what replaced the date window and the snapshot (#93).
   runQuery: vi.fn().mockResolvedValue({ data: [] }),
   q: (table: string) => fakeQ(table),
   utils: {
@@ -285,5 +285,83 @@ describe('create_transaction through its handler', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/could not be.*determined/is);
+  });
+});
+
+/**
+ * The safety net, wired. "Not saved" is the only verdict that authorises a
+ * retry, and the promise is that it costs two agreeing lookups. Removing the
+ * corroboration from any of the three tools used to break nothing.
+ */
+describe('the second lookup, through the tool', () => {
+  const failure = () => new Error('We had an unknown problem opening "x"');
+
+  beforeEach(() => {
+    vi.mocked(api.addTransactions).mockReset().mockRejectedValue(failure());
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+  });
+
+  it('believes the second lookup when the first missed the row', async () => {
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([
+      { id: 'the-marker', account: 'acc-1', date: '2026-09-21', amount: -5000 },
+    ] as any);
+
+    // The id the tool generated is the one it looks for, so echo it back.
+    let handler: any;
+    registerCreateTransaction({ tool: (...a: unknown[]) => { handler = a.at(-1); } } as never);
+    vi.mocked(api.addTransactions).mockImplementation(async (_acct, [txn]: any) => {
+      vi.mocked(api.getTransactions).mockResolvedValue([
+        { id: txn.id, account: 'acc-1', date: '2026-09-21', amount: -5000 },
+      ] as any);
+      throw failure();
+    });
+
+    const result = await handler({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/was saved/i);
+  });
+
+  it('will not say "not saved" when the second lookup cannot run', async () => {
+    vi.mocked(api.getTransactions).mockReset().mockRejectedValue(new Error('cannot read'));
+
+    await expect(
+      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
+    ).rejects.toThrow(/could not be.*determined/is);
+  });
+
+  it('says not saved only when both lookups agree', async () => {
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+
+    await expect(
+      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
+    ).rejects.toThrow(/was not saved/i);
+  });
+});
+
+describe('when a rule turns the transaction into a split', () => {
+  it('says the category was not applied instead of printing it', async () => {
+    // Actual ignores the category on a split parent, so setting it does
+    // nothing and reporting it would be a lie.
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({
+      data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }],
+    } as any);
+
+    await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+      category: 'Alimentación',
+    });
+
+    expect(api.updateTransaction).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/turned the new transaction.*into a split/i));
+    stderr.mockRestore();
   });
 });

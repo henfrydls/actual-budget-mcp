@@ -13,8 +13,8 @@ vi.mock('@actual-app/api', () => ({
   getTransactions: vi.fn().mockResolvedValue([]),
   addTransactions: vi.fn().mockResolvedValue('ok'),
   sync: vi.fn().mockResolvedValue(undefined),
-  // The write is labelled with an imported_id and found again by querying for
-  // it, which is what replaced the date window and the snapshot (#93).
+  // The write is given an id of our own and found again by querying for it,
+  // which is what replaced the date window and the snapshot (#93).
   runQuery: vi.fn().mockResolvedValue({ data: [] }),
   q: (table: string) => fakeQ(table),
   utils: {
@@ -168,5 +168,20 @@ describe('a transfer that fails after it has already been applied', () => {
 
     expect(text).toMatch(/amount is required/);
     expect(text).not.toMatch(/was not saved|could not be determined|was saved/);
+  });
+});
+
+describe('create_transfer: the second lookup', () => {
+  it('will not say "not saved" when the second lookup cannot run', async () => {
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+    vi.mocked(api.getTransactions).mockReset().mockRejectedValue(new Error('cannot read'));
+
+    const result = await transfer();
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not be.*determined/is);
   });
 });

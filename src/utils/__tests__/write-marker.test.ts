@@ -81,7 +81,7 @@ describe('the second look, used only before authorising a retry', () => {
   it('finds the row when it is there under its own id', async () => {
     getTransactions.mockResolvedValue([{ id: 'm', amount: -1 }]);
 
-    expect(await corroborateAbsence('acc-1', '2026-09-21', 'm')).toBe('present');
+    expect(await corroborateAbsence('acc-1', 'm')).toBe('present');
   });
 
   it('finds it when it is a child of a split', async () => {
@@ -89,18 +89,28 @@ describe('the second look, used only before authorising a retry', () => {
       { id: 'parent', subtransactions: [{ id: 'm' }] },
     ]);
 
-    expect(await corroborateAbsence('acc-1', '2026-09-21', 'm')).toBe('present');
+    expect(await corroborateAbsence('acc-1', 'm')).toBe('present');
   });
 
   it('says absent when the day holds other transactions but not ours', async () => {
     getTransactions.mockResolvedValue([{ id: 'someone-elses', amount: -5000 }]);
 
-    expect(await corroborateAbsence('acc-1', '2026-09-21', 'm')).toBe('absent');
+    expect(await corroborateAbsence('acc-1', 'm')).toBe('absent');
+  });
+
+  it('looks at the whole account, not the date we asked for', async () => {
+    // Rules rewrite the date. Pinning this to the date we sent would make the
+    // safety net blind in the one case it exists for.
+    getTransactions.mockResolvedValue([]);
+
+    await corroborateAbsence('acc-1', 'm');
+
+    expect(getTransactions).toHaveBeenCalledWith('acc-1');
   });
 
   it('says unknown when it cannot read, rather than absent', async () => {
     getTransactions.mockRejectedValue(new Error('budget will not open'));
 
-    expect(await corroborateAbsence('acc-1', '2026-09-21', 'm')).toBe('unknown');
+    expect(await corroborateAbsence('acc-1', 'm')).toBe('unknown');
   });
 });

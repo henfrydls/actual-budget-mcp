@@ -93,7 +93,7 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         // This calls createTransaction internally, so it can receive a verdict
         // about a write that landed. Reporting that as an error would invite
         // the retry the verdict exists to prevent.
-        if (error instanceof WriteReportedError && error.verdict === 'applied') {
+        if (error instanceof WriteReportedError && (error.verdict === 'applied' || error.verdict === 'duplicated')) {
           return { content: [{ type: 'text', text: error.message }] };
         }
         const message = describeError(error);

@@ -32,6 +32,8 @@ export interface MarkedRow {
   id: string;
   category?: string | null;
   amount?: number;
+  /** True when a rule turned this into a split; its category lives on the parts. */
+  is_parent?: boolean;
 }
 
 /**
@@ -52,7 +54,7 @@ export async function findByMarker(marker: string): Promise<MarkedRow[] | null> 
         .q('transactions')
         .filter({ id: marker })
         .options({ splits: 'all' })
-        .select(['id', 'category', 'amount']),
+        .select(['id', 'category', 'amount', 'is_parent']),
     );
     const data = (result as { data?: MarkedRow[] } | undefined)?.data;
     // A query that answers nothing is not a query that answered "none": the
@@ -76,11 +78,19 @@ export async function findByMarker(marker: string): Promise<MarkedRow[] | null> 
  */
 export async function corroborateAbsence(
   accountId: string,
-  date: string,
   marker: string,
 ): Promise<'absent' | 'present' | 'unknown'> {
   try {
-    const rows = await api.getTransactions(accountId, date, date);
+    // The whole account, not the date we asked for. The premise of this design
+    // is that rules rewrite the date, so pinning the second look to that date
+    // would make the safety net fail in exactly the case it exists for: a rule
+    // moves the row, the net reports "absent", and "absent" is the verdict that
+    // authorises a retry.
+    // The dates are optional at runtime — `transactions-get` only narrows when
+    // they are given — but the published types insist on them.
+    const rows = await (api.getTransactions as unknown as (
+      accountId: string,
+    ) => Promise<unknown[]>)(accountId);
     for (const row of (rows ?? []) as Array<Record<string, any>>) {
       if (row.id === marker) return 'present';
       const subs = row.subtransactions;
