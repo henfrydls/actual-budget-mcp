@@ -105,10 +105,14 @@ describe('cross-checking a month against its own transactions', () => {
     expect(await findSpendingDivergences('2026-09', income)).toEqual([]);
   });
 
-  it('survives an account whose transactions cannot be read', async () => {
-    getTransactions.mockResolvedValue(undefined);
+  it('lets a failed read surface, rather than reporting a false divergence', async () => {
+    // `api/transactions-get` returns an array or throws; it never resolves
+    // undefined, so testing that case proved nothing. A read that fails must
+    // not be counted as "no transactions", which would report every category
+    // as diverging. The caller turns this into "could not cross-check".
+    getTransactions.mockRejectedValue(new Error('could not read transactions'));
 
-    expect(await findSpendingDivergences('2026-09', groups(0))).toEqual([]);
+    await expect(findSpendingDivergences('2026-09', groups(0))).rejects.toThrow();
   });
 });
 
