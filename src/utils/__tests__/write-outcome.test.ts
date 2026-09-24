@@ -252,3 +252,76 @@ describe('one reader for an error, shared with describeError', () => {
     expect(describeError(tagged)).toMatch(/out of sync|sync/i);
   });
 });
+
+/**
+ * The two branches an audit found unprotected: a duplicate reported as a
+ * success, and a failed second look reported as absence.
+ */
+describe('the verdicts that must not be guessed', () => {
+  it('calls a duplicate a duplicate, not a clean save', async () => {
+    // Two rows carrying an id we generated means the write landed twice. That
+    // is knowledge, and the most actionable kind: there is a row to delete.
+    // Reporting it as "saved" would leave the duplicate in place unmentioned.
+    const { verdict, message } = await verifyFailedWrite(
+      new Error('We had an unknown problem opening "x"'),
+      {
+        action: 'The transaction',
+        whereToLook: 'BHD on 2026-09-21',
+        probe: {
+          marker: 'm',
+          find: async () => [{ id: 'm' }, { id: 'm' }],
+        },
+      },
+    );
+
+    expect(verdict).toBe('duplicated');
+    expect(message).toMatch(/more than once/i);
+    expect(message).toMatch(/already a duplicate/i);
+    expect(message).not.toMatch(/could not be determined/i);
+  });
+
+  it('does not turn a failed second look into "you can retry"', async () => {
+    // The second look exists because the first can go blind. If it cannot run
+    // either, there is no evidence at all, and "not saved" on no evidence is
+    // the mistake this whole change exists to stop.
+    const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
+      action: 'The transaction',
+      whereToLook: 'BHD on 2026-09-21',
+      probe: {
+        marker: 'm',
+        find: async () => [],
+        corroborate: async () => 'unknown',
+      },
+    });
+
+    expect(verdict).toBe('undetermined');
+  });
+
+  it('believes the second look when it finds what the first missed', async () => {
+    const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
+      action: 'The split transaction',
+      whereToLook: 'BHD on 2026-09-21',
+      probe: {
+        marker: 'm',
+        find: async () => [],
+        corroborate: async () => 'present',
+      },
+    });
+
+    expect(verdict).toBe('applied');
+  });
+
+  it('says not saved only when both looks agree', async () => {
+    const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
+      action: 'The transaction',
+      whereToLook: 'BHD on 2026-09-21',
+      probe: {
+        marker: 'm',
+        find: async () => [],
+        corroborate: async () => 'absent',
+      },
+    });
+
+    expect(verdict).toBe('not-applied');
+  });
+});
