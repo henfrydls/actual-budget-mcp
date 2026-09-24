@@ -1,11 +1,26 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mayHaveBeenApplied, verifyFailedWrite } from '../write-outcome.js';
 
-const context = (probe: () => Promise<boolean>) => ({
+/**
+ * A probe over a window of rows. `before` is what was there; `read` returns
+ * what is there now; `matches` recognises the row we tried to write.
+ */
+const context = (rows: Array<Record<string, unknown>> | (() => never)) => ({
   action: 'The transaction',
-  probe,
-  whereToLook: 'BHD on 2026-09-21',
+  whereToLook: 'BHD around 2026-09-21',
+  probe: {
+    before: new Set(['old-1']),
+    window: 'searched 2026-08-21 to 2026-10-22',
+    read: async () => {
+      if (typeof rows === 'function') rows();
+      return rows as Array<Record<string, unknown>>;
+    },
+    matches: (row: Record<string, any>) => row.amount === -5000,
+  },
 });
+
+const present = [{ id: 'new-1', amount: -5000 }];
+const absent: Array<Record<string, unknown>> = [{ id: 'old-1', amount: -5000 }];
 
 describe('which failures can have landed anyway', () => {
   it('counts the one people actually hit', () => {
@@ -37,7 +52,7 @@ describe('reporting what really happened to a failed write', () => {
   it('says it was saved, and says not to repeat it', async () => {
     const { verdict, message } = await verifyFailedWrite(
       failure,
-      context(async () => true),
+      context(present),
     );
 
     expect(verdict).toBe('applied');
@@ -48,12 +63,12 @@ describe('reporting what really happened to a failed write', () => {
   it('says it was not saved, and that retrying is safe', async () => {
     const { verdict, message } = await verifyFailedWrite(
       failure,
-      context(async () => false),
+      context(absent),
     );
 
     expect(verdict).toBe('not-applied');
     expect(message).toMatch(/was not saved/i);
-    expect(message).toMatch(/retried safely/i);
+    expect(message).toMatch(/can be retried/i);
   });
 
   it('admits it does not know when the budget cannot be re-read', async () => {
@@ -61,7 +76,7 @@ describe('reporting what really happened to a failed write', () => {
     // the only case where the caller has to go and look.
     const { verdict, message } = await verifyFailedWrite(
       failure,
-      context(async () => {
+      context(() => {
         throw new Error('still broken');
       }),
     );
@@ -72,24 +87,24 @@ describe('reporting what really happened to a failed write', () => {
   });
 
   it('names where to look in every outcome', async () => {
-    for (const probe of [async () => true, async () => false, async () => { throw new Error('x'); }]) {
-      const { message } = await verifyFailedWrite(failure, context(probe));
-      expect(message).toContain('BHD on 2026-09-21');
+    for (const rows of [present, absent, (() => { throw new Error('x'); }) as never]) {
+      const { message } = await verifyFailedWrite(failure, context(rows));
+      expect(message).toContain('BHD around 2026-09-21');
     }
   });
 
   it('keeps the original error visible, so nothing is hidden by the summary', async () => {
-    const { message } = await verifyFailedWrite(failure, context(async () => true));
+    const { message } = await verifyFailedWrite(failure, context(present));
 
     expect(message).toMatch(/unknown problem opening/i);
   });
 
   it('never reports a bare failure for this class of error', async () => {
-    const probes = [async () => true, async () => false, async () => { throw new Error('x'); }];
-    for (const probe of probes) {
-      const { message } = await verifyFailedWrite(failure, context(probe));
+    const cases = [present, absent, (() => { throw new Error('x'); }) as never];
+    for (const rows of cases) {
+      const { message } = await verifyFailedWrite(failure, context(rows));
       // Each outcome must tell the caller what to do next, not just what broke.
-      expect(message).toMatch(/do not repeat it|retried safely|before trying again/i);
+      expect(message).toMatch(/do not repeat it|can be retried|before trying again/i);
     }
   });
 });
@@ -101,7 +116,7 @@ describe('the old caution and the new answer do not appear together', () => {
     // teaches the reader to ignore both halves.
     const { message } = await verifyFailedWrite(
       new Error('out-of-sync'),
-      context(async () => true),
+      context(present),
     );
 
     expect(message).toMatch(/was saved/i);
@@ -112,5 +127,22 @@ describe('the old caution and the new answer do not appear together', () => {
     const { describeError } = await import('../errors.js');
 
     expect(describeError(new Error('out-of-sync'))).toMatch(/check the budget before retrying/i);
+  });
+});
+
+describe('which errors the gate lets through', () => {
+  it('reads the tag Actual sets, not only the message', async () => {
+    // withErrorCode writes `code`; FileDownloadError writes `reason`. Reading
+    // only `message` made this disagree with describeError about the same error.
+    expect(mayHaveBeenApplied(Object.assign(new Error('x'), { reason: 'out-of-sync' }))).toBe(true);
+    expect(mayHaveBeenApplied(Object.assign(new Error('x'), { code: 'out-of-sync' }))).toBe(true);
+  });
+
+  it('excludes a version mismatch, where nothing was written at all', async () => {
+    // out-of-sync-migrations contains "out-of-sync" but means the budget could
+    // not be loaded. Treating it as uncertain invents doubt and buries the
+    // message that actually helps: update Actual.
+    expect(mayHaveBeenApplied(new Error('out-of-sync-migrations'))).toBe(false);
+    expect(mayHaveBeenApplied(new Error('out-of-sync-data'))).toBe(false);
   });
 });

@@ -11,7 +11,7 @@
  * is in practice a sync/load failure, that is the case the fallback speaks to.
  */
 
-import { readDataDirLock, effectiveDataDir } from './data-dir-lock.js';
+import { readDataDirLock, activeDataDir } from './data-dir-lock.js';
 
 /**
  * #47: two servers sharing an ACTUAL_DATA_DIR drive the budget out-of-sync, but
@@ -20,12 +20,24 @@ import { readDataDirLock, effectiveDataDir } from './data-dir-lock.js';
  * the directory, say so — that is the difference between an hour of guessing
  * and one line the user can act on.
  */
-function contentionNote(): string {
-  const holder = readDataDirLock(effectiveDataDir());
+/**
+ * Name the other process when one is sharing this server's cache.
+ *
+ * Reads the directory actually in use, not the configured one: since #71 they
+ * differ whenever this server stepped aside, and naming a directory it is not
+ * touching would be worse than saying nothing.
+ *
+ * Exported so a write that failed can distinguish "another process has the
+ * file" from "the file is broken", which #79 asks for and which the two people
+ * who reported it both guessed at without being able to confirm.
+ */
+export function contentionNote(): string {
+  const dataDir = activeDataDir();
+  const holder = readDataDirLock(dataDir);
   if (!holder || holder.pid === process.pid) return '';
   return (
     ` Another actual-budget-mcp server (pid ${holder.pid}, started ${holder.startedAt}) ` +
-    `is using the same ACTUAL_DATA_DIR (${effectiveDataDir()}). Two servers sharing it ` +
+    `is using the same ACTUAL_DATA_DIR (${dataDir}). Two servers sharing it ` +
     'is what puts the budget out of sync in the first place: give each client its own ' +
     'ACTUAL_DATA_DIR, or close the other one, or the problem will come straight back.'
   );

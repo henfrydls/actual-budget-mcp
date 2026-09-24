@@ -139,7 +139,7 @@ describe('a split that fails after it has already been applied', () => {
   it('says a retry is safe when it is genuinely absent', async () => {
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
-    await expect(split()).rejects.toThrow(/was not saved.*retried safely/is);
+    await expect(split()).rejects.toThrow(/was not saved.*can be retried/is);
   });
 
   it('leaves an ordinary refusal exactly as it was', async () => {

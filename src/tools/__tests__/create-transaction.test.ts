@@ -143,28 +143,48 @@ describe('a write that fails after it has already been applied', () => {
     ).rejects.toThrow(/do not repeat it/i);
   });
 
-  it('says a retry is safe when the transaction is genuinely absent', async () => {
+  it('says a retry is safe only when nothing new appeared at all', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue([] as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     await expect(
       createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/not saved.*retried safely/is);
+    ).rejects.toThrow(/not saved.*can be retried/is);
   });
 
-  it('does not mistake a different transaction on the same day for this one', async () => {
-    // Same account, same date, another amount: not ours, so the write did not
-    // land and saying otherwise would stop a legitimate retry.
+  it('will not say "not saved" when something unrecognised did appear', async () => {
+    // An earlier version answered "not saved, safe to retry" here, reasoning
+    // that a row with a different amount is not ours. Actual runs rules on
+    // every insert and a rule can rewrite the amount or the date, so this row
+    // may well be ours, rewritten. "Not saved" would authorise the retry that
+    // duplicates, which is worse than the plain error this replaced.
     vi.mocked(api.getTransactions)
       .mockResolvedValueOnce([] as any)
       .mockResolvedValueOnce([
-        { id: 'someone-elses', account: 'acc-1', date: '2026-09-21', amount: -999 },
+        { id: 'unrecognised', account: 'acc-1', date: '2026-09-21', amount: -999 },
       ] as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     await expect(
       createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/was not saved/i);
+    ).rejects.toThrow(/could not be.*determined/is);
+  });
+
+  it('will not pick one of two identical-looking rows and call it ours', async () => {
+    // Two agents reconciling the same statement produce the same amount on the
+    // same day in the same account. Guessing which row is ours would say "do
+    // not repeat it" about a transaction the user never got.
+    vi.mocked(api.getTransactions)
+      .mockResolvedValueOnce([] as any)
+      .mockResolvedValueOnce([
+        { id: 'a', account: 'acc-1', date: '2026-09-21', amount: -5000 },
+        { id: 'b', account: 'acc-1', date: '2026-09-21', amount: -5000 },
+      ] as any);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(
+      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
+    ).rejects.toThrow(/could not be.*determined/is);
   });
 
   it('admits it cannot tell when the budget will not open again either', async () => {
@@ -175,7 +195,7 @@ describe('a write that fails after it has already been applied', () => {
 
     await expect(
       createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
-    ).rejects.toThrow(/unknown.*before trying again/is);
+    ).rejects.toThrow(/could not be.*determined/is);
   });
 
   it('covers the sync step too, where the rows are in and the sync is not', async () => {
@@ -198,5 +218,33 @@ describe('a write that fails after it has already been applied', () => {
     await expect(
       createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
     ).rejects.toThrow('amount is required');
+  });
+});
+
+describe('when the check itself cannot run', () => {
+  const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
+
+  it('still writes when the snapshot fails, and says the outcome is unknown', async () => {
+    // A diagnostic must not block the operation it was added to describe.
+    vi.mocked(api.getTransactions).mockReset().mockRejectedValue(new Error('read failed'));
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+
+    const lines = await createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+    expect(api.addTransactions).toHaveBeenCalledOnce();
+    expect(lines.join('\n')).toMatch(/Transaction created/);
+  });
+
+  it('reports unknown rather than guessing when there is no baseline', async () => {
+    vi.mocked(api.getTransactions)
+      .mockReset()
+      .mockRejectedValueOnce(new Error('read failed'))
+      .mockResolvedValue([{ id: 'x', account: 'acc-1', date: '2026-09-21', amount: -5000 }] as any);
+    vi.mocked(api.addTransactions).mockReset().mockRejectedValue(failure());
+
+    await expect(
+      createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' }),
+    ).rejects.toThrow(/could not be.*determined/is);
   });
 });

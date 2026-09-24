@@ -31,9 +31,28 @@ function platformDataDir(): string {
   return join(process.env.XDG_DATA_HOME || join(home, '.local', 'share'), APP_DIR);
 }
 
-/** The directory the server will actually open. */
+/** The directory the configuration asks for. */
 export function effectiveDataDir(): string {
   return readEnv('ACTUAL_DATA_DIR') || platformDataDir();
+}
+
+/**
+ * The directory this process actually holds, which is not always the
+ * configured one: #71 has it step aside when a live server already holds that.
+ *
+ * Kept here rather than in the caller because the error messages need it too.
+ * Reporting contention on the configured directory after stepping away from it
+ * would name a directory this process is not touching, which is a confident
+ * wrong answer of exactly the kind these messages exist to prevent.
+ */
+let activeDir: string | null = null;
+
+export function activeDataDir(): string {
+  return activeDir ?? effectiveDataDir();
+}
+
+export function forgetActiveDataDir(): void {
+  activeDir = null;
 }
 
 /**
@@ -228,6 +247,7 @@ export function claimDataDir(version: string): ClaimedDataDir {
     ensureDataDirExists(candidate);
     const lock = acquireDataDirLock(candidate, version);
     if (lock.acquired) {
+      activeDir = candidate;
       return n === 1
         ? { dataDir: candidate }
         : { dataDir: candidate, contended: configured, heldBy: readDataDirLock(configured) ?? undefined };
@@ -236,6 +256,7 @@ export function claimDataDir(version: string): ClaimedDataDir {
 
   // Everything is taken. Sharing is wrong, and not starting is worse.
   ensureDataDirExists(configured);
+  activeDir = configured;
   return {
     dataDir: configured,
     contended: configured,

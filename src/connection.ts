@@ -2,6 +2,7 @@ import * as api from '@actual-app/api';
 import type { ConnectionConfig } from './types.js';
 import {
   claimDataDir,
+  forgetActiveDataDir,
   releaseDataDirLock,
   effectiveDataDir,
   ensureDataDirExists,
@@ -331,6 +332,7 @@ export async function shutdown(): Promise<void> {
   // else's.
   releaseDataDirLock(claimedDataDir ?? effectiveDataDir());
   claimedDataDir = null;
+  forgetActiveDataDir();
   initialized = false;
   initializing = null;
   internal = null;

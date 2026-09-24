@@ -6,7 +6,8 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
-import { mayHaveBeenApplied, verifyFailedWrite } from '../../utils/write-outcome.js';
+import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
+import { probeWindow } from '../../utils/write-window.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -57,8 +58,14 @@ export function registerCreateTransfer(server: McpServer): void {
         // Snapshot first, so a failure afterwards can be answered rather than
         // guessed at. A repeated transfer moves the money twice and leaves two
         // pairs of linked rows to unpick (#79).
-        const before = await api.getTransactions(fromId, txnDate, txnDate);
-        const beforeIds = new Set((before ?? []).map((t) => t.id));
+        const window = probeWindow(txnDate);
+        let beforeIds: Set<string> | null = null;
+        try {
+          const before = await api.getTransactions(fromId, window.start, window.end);
+          beforeIds = new Set((before ?? []).map((t) => t.id));
+        } catch {
+          beforeIds = null;
+        }
 
         // Get account names for confirmation
         const accounts = await api.getAccounts();
@@ -72,17 +79,18 @@ export function registerCreateTransfer(server: McpServer): void {
           await api.sync();
         } catch (error) {
           if (!mayHaveBeenApplied(error)) throw error;
-          const { message } = await verifyFailedWrite(error, {
+          const { verdict, message } = await verifyFailedWrite(error, {
             action: 'The transfer',
-            whereToLook: `${fromAcct?.name || fromId} on ${txnDate}`,
-            probe: async () => {
-              const after = await api.getTransactions(fromId, txnDate, txnDate);
-              return (after ?? []).some(
-                (t) => !beforeIds.has(t.id) && t.amount === -amountCents,
-              );
+            whereToLook: `${fromAcct?.name || fromId} around ${txnDate}`,
+            probe: {
+              before: beforeIds,
+              window: window.label,
+              read: () => api.getTransactions(fromId, window.start, window.end),
+              matches: (row: Record<string, any>) =>
+                row.amount === -amountCents && row.payee === transferPayee.id,
             },
           });
-          throw new Error(message);
+          throw new WriteReportedError(message, verdict);
         }
 
         return {
@@ -103,6 +111,11 @@ export function registerCreateTransfer(server: McpServer): void {
           ],
         };
       } catch (error) {
+        // A write that landed is not an error the caller should act on by
+        // retrying, whatever the operation did afterwards.
+        if (error instanceof WriteReportedError && error.verdict === 'applied') {
+          return { content: [{ type: 'text', text: error.message }] };
+        }
         const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],

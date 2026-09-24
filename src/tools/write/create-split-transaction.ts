@@ -6,7 +6,8 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
-import { mayHaveBeenApplied, verifyFailedWrite } from '../../utils/write-outcome.js';
+import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
+import { probeWindow } from '../../utils/write-window.js';
 
 export interface SplitInput {
   category: string;
@@ -81,16 +82,28 @@ export async function createSplitTransaction(
   // fails afterwards. A split that is silently created and then reported as an
   // error is worse than a plain one, because repeating it duplicates a parent
   // and every child under it (#79).
-  const before = await api.getTransactions(accountId, txnDate, txnDate);
-  const beforeIds = new Set((before ?? []).map((t) => t.id));
+  // Over a window, not the single day: Actual's rules run on every insert and
+  // can move the date, and a "not saved" that is wrong about a split authorises
+  // a retry that duplicates a parent and every child under it.
+  const window = probeWindow(txnDate);
+  let beforeIds: Set<string> | null = null;
+  try {
+    const before = await api.getTransactions(accountId, window.start, window.end);
+    beforeIds = new Set((before ?? []).map((t) => t.id));
+  } catch {
+    beforeIds = null;
+  }
 
   const accounts = await api.getAccounts();
   const acct = accounts.find((a) => a.id === accountId);
   const acctName = acct?.name || accountId;
 
-  const landed = async () => {
-    const after = await api.getTransactions(accountId, txnDate, txnDate);
-    return (after ?? []).some((t) => !beforeIds.has(t.id) && t.amount === totalCents);
+  const probe = {
+    before: beforeIds,
+    window: window.label,
+    read: () => api.getTransactions(accountId, window.start, window.end),
+    matches: (row: Record<string, any>) =>
+      row.amount === totalCents && (input.notes === undefined || row.notes === input.notes),
   };
 
   try {
@@ -101,12 +114,12 @@ export async function createSplitTransaction(
     await api.sync();
   } catch (error) {
     if (!mayHaveBeenApplied(error)) throw error;
-    const { message } = await verifyFailedWrite(error, {
+    const { verdict, message } = await verifyFailedWrite(error, {
       action: 'The split transaction',
-      whereToLook: `${acctName} on ${txnDate}`,
-      probe: landed,
+      whereToLook: `${acctName} around ${txnDate}`,
+      probe,
     });
-    throw new Error(message);
+    throw new WriteReportedError(message, verdict);
   }
 
   const lines = [
@@ -169,6 +182,11 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         const lines = await createSplitTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
+        // A write that landed is not an error the caller should act on by
+        // retrying, whatever the operation did afterwards.
+        if (error instanceof WriteReportedError && error.verdict === 'applied') {
+          return { content: [{ type: 'text', text: error.message }] };
+        }
         const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
