@@ -6,7 +6,16 @@ const calls: string[] = [];
 vi.mock('@actual-app/api', () => ({
   default: {},
   q: (table: string) => fakeQ(table),
-  sync: vi.fn().mockImplementation(async () => { calls.push('sync'); }),
+  // Two marks, not one. A pull that is started and not awaited still gets its
+  // call in first, so recording only the start cannot tell `await pull()` from
+  // `void pull()` — and the second is the regression that leaves the check
+  // reading a stale copy while every test stays green.
+  sync: vi.fn().mockImplementation(async () => {
+    calls.push('sync:start');
+    await Promise.resolve();
+    await Promise.resolve();
+    calls.push('sync:done');
+  }),
   runQuery: vi.fn().mockImplementation(async () => { calls.push('runQuery'); return { data: [] }; }),
   getPayees: vi.fn().mockResolvedValue([
     { id: 'p-1', name: 'Farmacia Carol' },
@@ -99,20 +108,29 @@ describe('describePossibleDuplicates: the text the caller acts on', () => {
 describe('findPossibleDuplicates: the question it asks', () => {
   beforeEach(() => {
     calls.length = 0;
-    vi.mocked(api.sync).mockClear().mockImplementation(async () => { calls.push('sync'); });
+    vi.mocked(api.sync).mockClear().mockImplementation(async () => {
+      calls.push('sync:start');
+      await Promise.resolve();
+      await Promise.resolve();
+      calls.push('sync:done');
+    });
     vi.mocked(api.runQuery)
       .mockClear()
       .mockImplementation(async () => { calls.push('runQuery'); return { data: [] } as never; });
   });
 
-  it('syncs before it looks, or it cannot see the other agent at all', async () => {
+  it('waits for the pull to finish before it looks', async () => {
     // The whole of #88 is two agents against one budget. Everything this
     // server syncs, it syncs after writing, to push. This one pulls first: a
     // lookup against the local copy cannot contain the row another process
     // wrote, so the motivating case would be the one case it never caught.
+    //
+    // Asserting the finish and not just the start: `void pullBeforeReading()`
+    // still issues the sync first and would satisfy an order-of-start check,
+    // while the query races the pull it was supposed to wait for.
     await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
 
-    expect(calls).toEqual(['sync', 'runQuery']);
+    expect(calls).toEqual(['sync:start', 'sync:done', 'runQuery']);
   });
 
   it('excludes split children, which are not transactions anyone records twice', async () => {

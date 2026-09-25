@@ -381,3 +381,85 @@ describe('when a rule turns the transaction into a split', () => {
     stderr.mockRestore();
   });
 });
+
+/**
+ * The wiring, not the util. `duplicate-check.test.ts` covers the lookup and the
+ * text; none of it covered what `create_transaction` does with either, so with
+ * `SKIP_ACTUAL_INTEGRATION=1` the threshold that decides whether to refuse at
+ * all could be moved and nothing failed.
+ */
+describe('create_transaction: what it does with the duplicate check', () => {
+  const anExisting = {
+    data: [{ id: 'existing-1', date: '2026-09-21', amount: -5000, payee: null, notes: 'ALREADY-HERE' }],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+  });
+
+  it('refuses on a single match, not only on several', async () => {
+    // A `> 1` threshold would let the ordinary case straight through: one
+    // existing transaction is exactly what recording a payment twice looks like.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: anExisting }) as never,
+    );
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+    });
+
+    expect(lines.join('\n')).toMatch(/already exists/i);
+    expect(lines.join('\n')).toContain('ALREADY-HERE');
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('asks the lookup before writing, never after', async () => {
+    const order: string[] = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'account' in lastQuery.filter) order.push('lookup');
+      return { data: [] } as never;
+    });
+    vi.mocked(api.addTransactions).mockImplementation(async () => {
+      order.push('write');
+      return 'ok' as never;
+    });
+
+    await createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+    expect(order).toEqual(['lookup', 'write']);
+  });
+
+  it('skips the pull and the lookup entirely when the flag is set', async () => {
+    // Not merely "creates anyway": the flag is what lets a caller avoid the
+    // extra round trip, so doing the work and discarding the answer would be a
+    // silent cost with no behavioural difference to catch it.
+    // Recorded inside the mock, at the moment of each call. Filtering
+    // `mock.calls` afterwards would read whatever `lastQuery` ended up holding
+    // and could not fail.
+    const lookups: unknown[] = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'account' in lastQuery.filter) {
+        lookups.push(lastQuery.filter);
+        return anExisting as never;
+      }
+      return { data: [] } as never;
+    });
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+      allow_duplicate: true,
+    });
+
+    expect(lines.join('\n')).toMatch(/Transaction created/);
+    expect(lookups).toHaveLength(0);
+    // One sync only: the one after the write. A pre-check pull would make two.
+    expect(api.sync).toHaveBeenCalledTimes(1);
+  });
+});

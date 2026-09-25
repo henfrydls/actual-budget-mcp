@@ -4,7 +4,9 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { amountToCents, centsToAmount, formatMoney } from '../../utils/money.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
+import { resolveDate } from '../../utils/dates.js';
 import { createTransaction } from './create-transaction.js';
+import { pullBeforeReading, isDuplicatePreview } from '../../utils/duplicate-check.js';
 import { describeError } from '../../utils/errors.js';
 import { WriteReportedError } from '../../utils/write-outcome.js';
 
@@ -15,6 +17,8 @@ export interface ReconcileResidualInput {
   notes?: string;
   date?: string;
   payee?: string;
+  /** Book the adjustment even though a transaction of that amount is already on that day. */
+  allow_duplicate?: boolean;
 }
 
 /**
@@ -30,7 +34,28 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   await ensureConnection();
 
   const accountId = await resolveAccountId(input.account);
-  const currentCents = await api.getAccountBalance(accountId);
+
+  // Before reading the balance, not after. Two agents reconciling the same
+  // drift both read a stale balance and both book an adjustment, which is the
+  // #88 scenario reappearing on the one path that computes what it writes.
+  await pullBeforeReading('reading the balance to reconcile');
+
+  // `getAccountBalance` defaults its cutoff to now, and the query behind it is
+  // `date <= cutoff`. An adjustment booked with a future date therefore never
+  // counts towards the balance, so every run computed the same delta and wrote
+  // another adjustment: two runs, two adjustments, and an account left at +200
+  // while the balance still read -100. Counting up to the adjustment's own date
+  // makes the second run see the first one and stop at "No adjustment needed".
+  //
+  // The later of the two, so a past or same-day adjustment keeps the previous
+  // meaning exactly: today's balance, not the balance as of some date in the
+  // past.
+  const txnDate = resolveDate(input.date);
+  const today = new Date();
+  const asOf = new Date(`${txnDate}T00:00:00`);
+  const cutoff = asOf > today ? asOf : today;
+
+  const currentCents = await api.getAccountBalance(accountId, cutoff);
   const targetCents = amountToCents(input.target_balance ?? 0);
   const deltaCents = targetCents - currentCents;
 
@@ -43,14 +68,15 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     ];
   }
 
-  // This adjustment cannot duplicate itself, so the #88 check must not be
-  // allowed to refuse it. The amount is derived from the balance: once an
-  // adjustment lands, the balance equals the target and a second run computes a
-  // delta of zero and stops above, at "No adjustment needed". What the check
-  // would catch here is a coincidence — an unrelated transaction of the same
-  // amount on the same day — and refusing on that produced a reply that
-  // contradicted itself, announcing the reconciliation and then reporting that
-  // nothing had been created, while advising a flag this tool does not accept.
+  // The #88 check stays on. An earlier attempt passed `allow_duplicate` here,
+  // reasoning that this cannot duplicate itself because a second run computes a
+  // delta of zero; that was wrong on two measured paths, a future-dated
+  // adjustment and two agents reconciling at once, and turning the check off
+  // made this the only write in the server that neither synced nor looked. The
+  // delta is computed above from a synced balance that counts the adjustment's
+  // own date, so a genuine repeat now stops before reaching here, and what the
+  // check catches is what it should: an unrelated transaction that happens to
+  // match, which is worth pausing on rather than silently double-booking.
   const lines = await createTransaction({
     account: accountId,
     amount: centsToAmount(deltaCents),
@@ -58,8 +84,21 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     notes: input.notes || 'FX residual adjustment',
     date: input.date,
     payee: input.payee,
-    allow_duplicate: true,
+    allow_duplicate: input.allow_duplicate,
   });
+
+  // Nothing was written, so nothing may be announced. The header used to print
+  // regardless, so the reply stated the adjustment, then stated that nothing
+  // had been created, then advised a flag this tool did not accept, while the
+  // balance sat unchanged.
+  if (isDuplicatePreview(lines)) {
+    return [
+      `No adjustment was booked for ${acctName}.`,
+      `It would have been ${formatMoney(deltaCents)} on ${txnDate}.`,
+      '',
+      ...lines,
+    ];
+  }
 
   return [
     'Currency residual reconciled:',
@@ -92,6 +131,12 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         .optional()
         .describe('Date for the adjustment (YYYY-MM-DD or "today"). Defaults to today.'),
       payee: z.string().optional().describe('Optional payee for the adjustment'),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Book the adjustment even though a transaction with the same account, date and amount already exists. Without this, such a call reports the existing one and books nothing.',
+        ),
     },
     { title: 'Reconcile currency residual', readOnlyHint: false },
     async (input) => {

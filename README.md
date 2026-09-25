@@ -469,14 +469,40 @@ the second call created a second row without saying anything.
 
 The check syncs first, so it sees what another client wrote and not only what
 this one did. That is the case it is for: two agents against one budget, neither
-able to see the other. If the sync fails the check still runs against the local
-copy and the write is not blocked, so an offline session keeps working with a
-weaker check rather than no writes.
+able to see the other. `reconcile_currency_residual` takes the same flag, for
+the same reason, and syncs before reading the balance it computes from.
 
-What it does not catch: a rule that rewrites the **amount or the date** of the
-row as it is stored, since the stored row then no longer matches what was asked.
-Renaming rules, the common kind, make no difference to it. `create_transfer` and
-`create_split_transaction` do not run this check yet.
+**It is not returned as an error.** The delete tools set `isError` on their
+preview so that a repeated call cannot destroy anything by accident. This one
+does the opposite, deliberately: a repeated call creates nothing at all, and an
+agent that reads `isError` treats being asked as being refused and retries,
+which is what duplicates. Deletes flag; this one does not.
+
+**What it costs.** One extra round trip per `create_transaction`, whether or not
+a duplicate is found. Against a server on the same machine that is not
+measurable. Against a remote server it roughly doubles the time per write:
+measured at 80 ms of round-trip latency, 87 ms becomes 171 ms for a single
+create, and 22 creates in a row go from 1.9 s to 3.8 s. Passing
+`allow_duplicate: true` skips the sync as well as the check, so a bulk import
+that has already been deduplicated elsewhere pays nothing.
+
+**Offline and hung servers.** If the sync fails the check still runs against the
+local copy and the write is not blocked, so an offline session keeps working
+with a weaker check rather than no writes. A server that accepts the connection
+and then never answers is worse: the underlying Actual library sets no timeout,
+so the call waits, and this adds a second place where that can happen, now
+before the write rather than after it.
+
+What it does not catch:
+
+- A rule that rewrites the **amount or the date** of the row as it is stored,
+  since the stored row then no longer matches what was asked. Renaming rules,
+  the common kind, make no difference to it.
+- A transaction that arrives **between the check and the write**. The sync
+  narrows that window; it does not close it. This looks before it writes, which
+  is not the same as doing both at once.
+- `create_transfer` and `create_split_transaction`, which do not run the check
+  yet, and an opening balance from `create_account`. Tracked in #98.
 
 ### Read-only mode
 
@@ -577,7 +603,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **create_split_transaction** - `account` (required) | `amount` (required): total, must equal the sum of the splits | `splits` (required): two or more `{category, amount, notes}` | `payee`, `date`, `notes`, `cleared` (all optional)
 
-**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `date`, `notes` (all optional)
+**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `date`, `notes` (all optional) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day
 
 **run_bank_sync** - `account` (optional): sync specific account or all if omitted
 

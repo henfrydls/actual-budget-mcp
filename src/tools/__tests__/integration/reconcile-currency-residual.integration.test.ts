@@ -59,49 +59,138 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
     expect((adjustment as any).category).toBe(cashbackId);
   }, 60_000);
 
-  it('reconciles even when a transaction of the same amount is already on that day', async () => {
-    // #88 put a duplicate check in front of every create, and this tool creates
-    // through it. An unrelated transaction of the same amount on the same day
-    // made it announce the reconciliation and then report that nothing had been
-    // created, advising a flag it does not accept, while the balance sat
-    // unchanged. It cannot duplicate itself: a second run computes a delta of
-    // zero and stops before writing.
+  /**
+   * Fixture shared by the collision cases: -200 of drift against +100 of
+   * unrelated refund leaves the account at -100, so the adjustment is +100,
+   * exactly the refund's amount on exactly the refund's day.
+   */
+  async function budgetWithACollision(name: string) {
     let acctId = '';
     const budgetId = await createFreshBudget(async () => {
-      acctId = await api.createAccount({ name: 'Card (EUR)', type: 'credit' } as any, 0);
-      const g = await api.createCategoryGroup({ name: 'G2' } as any);
-      await api.createCategory({ name: 'Cashback2', group_id: g } as any);
+      acctId = await api.createAccount({ name, type: 'credit' } as any, 0);
+      const g = await api.createCategoryGroup({ name: `G-${name}` } as any);
+      await api.createCategory({ name: `Cash-${name}`, group_id: g } as any);
       await api.addTransactions(
         acctId,
         [
-          // -200 of drift against +100 of unrelated refund leaves the account
-          // at -100, so the adjustment is +100: exactly the refund's amount,
-          // on exactly the refund's day.
           { date: '2026-05-01', amount: -20000, payee_name: 'FX drift' },
           { date: '2026-06-05', amount: 10000, payee_name: 'Unrelated refund' },
         ] as any,
         { learnCategories: false, runTransfers: false },
       );
     });
+    return { acctId, budgetId, category: `Cash-${name}` };
+  }
 
-    const lines = await reconcileCurrencyResidual({
-      account: 'Card (EUR)',
-      target_balance: 0,
-      category: 'Cashback2',
-      date: '2026-06-05',
-    });
-    const text = lines.join('\n');
+  it('does not announce a reconciliation it did not perform', async () => {
+    // The whole of the original defect: the header printed regardless, so the
+    // reply stated the adjustment, then stated that nothing had been created,
+    // then advised a flag the tool did not accept, with the balance unchanged.
+    const { acctId, budgetId, category } = await budgetWithACollision('Card (EUR)');
 
-    // The reply must not claim a reconciliation it did not perform.
-    expect(text).not.toMatch(/nothing was created/i);
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (EUR)',
+        target_balance: 0,
+        category,
+        date: '2026-06-05',
+      })
+    ).join('\n');
+
+    expect(text).not.toMatch(/Currency residual reconciled/);
+    expect(text).toMatch(/No adjustment was booked/);
+    expect(text).toMatch(/allow_duplicate/);
+
+    await api.loadBudget(budgetId);
+    // Refused means refused: the balance is untouched and no third row exists.
+    expect(await api.getAccountBalance(acctId)).toBe(-10000);
+    expect((await api.getTransactions(acctId, '2026-06-05', '2026-06-05')).length).toBe(1);
+  }, 60_000);
+
+  it('books the adjustment when the caller says the match is not it', async () => {
+    const { acctId, budgetId, category } = await budgetWithACollision('Card (GBP)');
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (GBP)',
+        target_balance: 0,
+        category,
+        date: '2026-06-05',
+        allow_duplicate: true,
+      })
+    ).join('\n');
+
     expect(text).toMatch(/Currency residual reconciled/);
 
     await api.loadBudget(budgetId);
-    // -100 drift, +100 unrelated refund, and the adjustment must still close
-    // the remaining gap: the balance reaches the target either way only if the
-    // adjustment was actually written.
     expect(await api.getAccountBalance(acctId)).toBe(0);
-    const onTheDay = await api.getTransactions(acctId, '2026-06-05', '2026-06-05');
-    expect(onTheDay.length).toBe(2);
+    expect((await api.getTransactions(acctId, '2026-06-05', '2026-06-05')).length).toBe(2);
+  }, 60_000);
+
+  it('does not book a second adjustment when the first one is dated ahead', async () => {
+    // getAccountBalance counts `date <= cutoff` and defaults the cutoff to now,
+    // so a future-dated adjustment never entered the balance: every run
+    // computed the same delta and wrote another one. Two runs left the account
+    // at +200 while the balance still read -100.
+    let acctId = '';
+    const budgetId = await createFreshBudget(async () => {
+      acctId = await api.createAccount({ name: 'Card (CHF)', type: 'credit' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G-CHF' } as any);
+      await api.createCategory({ name: 'Cash-CHF', group_id: g } as any);
+      await api.addTransactions(
+        acctId,
+        [{ date: '2026-05-01', amount: -10000, payee_name: 'FX drift' }] as any,
+        { learnCategories: false, runTransfers: false },
+      );
+    });
+
+    const args = {
+      account: 'Card (CHF)',
+      target_balance: 0,
+      category: 'Cash-CHF',
+      date: '2027-06-05',
+    };
+    await reconcileCurrencyResidual(args);
+    const second = (await reconcileCurrencyResidual(args)).join('\n');
+
+    expect(second).toMatch(/No adjustment needed/);
+
+    await api.loadBudget(budgetId);
+    const all = await api.getTransactions(acctId, '1900-01-01', '2099-12-31');
+    expect(all.filter((t: any) => t.amount === 10000)).toHaveLength(1);
+    // The true sum of the account, which is what a second adjustment corrupts.
+    expect(all.reduce((sum: number, t: any) => sum + t.amount, 0)).toBe(0);
+  }, 60_000);
+
+  it('pulls before reading the balance, not merely at some point', async () => {
+    // Reconcile computes what it writes from the balance, so a stale balance
+    // is a wrong adjustment, not merely a missed warning.
+    //
+    // Asserting the order, because `createTransaction` syncs too, both before
+    // its own check and after its write: "sync was called" is true even with
+    // reconcile's own pull deleted, so it cannot fail.
+    const { category } = await budgetWithACollision('Card (JPY)');
+
+    const order: string[] = [];
+    vi.mocked(api.sync).mockClear().mockImplementation(async () => {
+      order.push('sync');
+    });
+    const balanceSpy = vi
+      .spyOn(api, 'getAccountBalance')
+      .mockImplementation(async () => {
+        order.push('balance');
+        return -10000;
+      });
+
+    await reconcileCurrencyResidual({
+      account: 'Card (JPY)',
+      target_balance: 0,
+      category,
+      date: '2026-06-07',
+    });
+
+    balanceSpy.mockRestore();
+    expect(order[0]).toBe('sync');
+    expect(order).toContain('balance');
   }, 60_000);
 });

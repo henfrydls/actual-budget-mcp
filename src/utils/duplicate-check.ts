@@ -39,7 +39,7 @@ export interface ExistingTransaction {
 }
 
 /**
- * Pull what other processes have written, then look.
+ * Pull what other processes have written, then read.
  *
  * Every other `api.sync()` in this server runs *after* a write, to push. This
  * one runs before a read, to pull, and it is the difference between a check
@@ -49,21 +49,29 @@ export interface ExistingTransaction {
  * hold the row it is looking for — the motivating case would be the one case it
  * could never catch.
  *
+ * **It has to be awaited.** Starting the pull and reading anyway leaves exactly
+ * the behaviour this replaced, while looking like the fix: a test that only
+ * checks which call was made first cannot tell the two apart, so the one here
+ * checks that the pull has *finished*.
+ *
  * A sync that fails must not stop anyone recording a transaction, so it is
- * reported on stderr and the local check runs regardless. That check is weaker,
- * not wrong: it still sees everything this process wrote. The caller is not
- * left guessing either, because the write's own sync is still to come and
- * reports its own failure.
+ * reported on stderr and the read happens regardless. The result is weaker, not
+ * wrong: it still sees everything this process wrote. The caller is not left
+ * guessing either, because a write's own sync is still to come and reports its
+ * own failure.
+ *
+ * The prefix names the package rather than a tool: this is shared, and #98 will
+ * give it more callers than `create_transaction`.
  */
-async function pullBeforeLooking(): Promise<void> {
+export async function pullBeforeReading(what: string): Promise<void> {
   try {
     await api.sync();
   } catch (error) {
     // stderr: stdout carries JSON-RPC.
     console.error(
-      '[create_transaction] warning: could not sync before checking for an existing ' +
-        'transaction, so the check saw only this machine\'s copy of the budget. A ' +
-        'duplicate created by another client may not be reported. Reason: ' +
+      `[actual-budget-mcp] warning: could not sync before ${what}, so it saw only ` +
+        "this machine's copy of the budget and may have missed what another client " +
+        'wrote. Reason: ' +
         String((error as Error)?.message ?? error),
     );
   }
@@ -74,7 +82,7 @@ export async function findPossibleDuplicates(
   date: string,
   amountCents: number,
 ): Promise<ExistingTransaction[]> {
-  await pullBeforeLooking();
+  await pullBeforeReading('checking whether this transaction already exists');
 
   const result = await api.runQuery(
     transactionsQuery('all')
@@ -123,14 +131,29 @@ export async function findPossibleDuplicates(
  * Two identical coffees on one card on one day are a real thing, so the way
  * through is one flag and one more call, not an argument.
  */
+const NOTHING_CREATED = 'so nothing was created:';
+
+/**
+ * Did this come back instead of a transaction?
+ *
+ * A tool that creates *through* `create_transaction` has to know, or it
+ * announces work it did not do. `reconcile_currency_residual` printed
+ * "Currency residual reconciled" above this very text, with the balance
+ * unchanged. The predicate sits next to the sentence it matches so the two
+ * cannot drift apart.
+ */
+export function isDuplicatePreview(lines: string[]): boolean {
+  return lines.length > 0 && lines[0].endsWith(NOTHING_CREATED);
+}
+
 export function describePossibleDuplicates(
   existing: ExistingTransaction[],
   accountName: string,
 ): string[] {
   const lines = [
     existing.length === 1
-      ? 'A transaction like this one already exists, so nothing was created:'
-      : `${existing.length} transactions like this one already exist, so nothing was created:`,
+      ? `A transaction like this one already exists, ${NOTHING_CREATED}`
+      : `${existing.length} transactions like this one already exist, ${NOTHING_CREATED}`,
     '',
   ];
 
