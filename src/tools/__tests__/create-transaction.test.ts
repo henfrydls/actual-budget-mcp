@@ -35,6 +35,7 @@ vi.mock('../../connection.js', () => ({
 
 import * as api from '@actual-app/api';
 import { createTransaction, registerCreateTransaction } from '../write/create-transaction.js';
+import { resolveDate } from '../../utils/dates.js';
 
 describe('createTransaction (#26 explicit category must win)', () => {
   beforeEach(() => {
@@ -440,6 +441,25 @@ describe('create_transaction: what it does with the duplicate check', () => {
     expect(lines.join('\n')).toMatch(/already exists/i);
     expect(lines.join('\n')).toContain('ALREADY-HERE');
     expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('asks the lookup with the resolved date, not the word it was given', async () => {
+    // The check must ask the question the write will answer. Passing the raw
+    // input through means looking for a row dated "today", which matches
+    // nothing, so every call with a relative date silently skips the check.
+    // Only the real engine caught this, because the mocks did not care what
+    // the date was.
+    const filters: Array<Record<string, unknown>> = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'account' in lastQuery.filter) filters.push(lastQuery.filter);
+      return { data: [] } as never;
+    });
+
+    await createTransaction({ account: 'Checking', amount: -50, date: 'today' });
+
+    expect(filters).toHaveLength(1);
+    expect(filters[0].date).toBe(resolveDate('today'));
+    expect(filters[0].date).not.toBe('today');
   });
 
   it('asks the lookup before writing, never after', async () => {

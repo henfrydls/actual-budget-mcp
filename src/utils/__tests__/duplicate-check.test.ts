@@ -243,7 +243,14 @@ describe('findPossibleDuplicates: the question it asks', () => {
     expect(found.map((f) => f.isTransfer)).toEqual([true, false]);
   });
 
-  it('finds nothing when nothing matches', async () => {
-    expect(await findPossibleDuplicates('acc-1', '2026-06-05', -5000)).toEqual([]);
+  it('survives a result that is not the shape it expects', async () => {
+    // This replaced "finds nothing when nothing matches", which no mutation
+    // could turn red: with the default mock the function returns [] whether
+    // or not its empty-result guard is there at all. What the guard actually
+    // protects against is a malformed answer, and that does fail without it.
+    for (const bad of [undefined, null, {}, { data: null }, { data: 'nope' }]) {
+      vi.mocked(api.runQuery).mockResolvedValue(bad as never);
+      expect(await findPossibleDuplicates('acc-1', '2026-06-05', -5000)).toEqual([]);
+    }
   });
 });
