@@ -150,7 +150,10 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
             // made it searchable, so `notes_contains: 'split'` returned parts
             // whose notes contain no such word. Presentation text must not sit
             // in a field the search reads.
-            splitOf: (t as any).notes || null,
+            // Trimmed before the fallback: Actual stores a whitespace-only
+            // note as it was given, and a truthy blank would print an empty
+            // cell with no marker — the exact case the marker exists for.
+            splitOf: ((t as any).notes ?? '').trim() || null,
             isSplitPart: true,
           });
         }

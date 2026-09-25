@@ -153,6 +153,37 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     expect(report.match(/part of a split/g)?.length).toBe(2);
   });
 
+  it('marks a split part whose parent note is only whitespace', async () => {
+    // Actual stores such a note as given. A truthy blank fell through the
+    // fallback and printed an empty cell with no marker — indistinguishable
+    // from an ordinary transaction, which is the case the marker exists for.
+    let checking = '';
+    let cat = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G' } as any);
+      cat = await api.createCategory({ name: 'Comida', group_id: g } as any);
+    });
+    await api.addTransactions(checking, [
+      {
+        date: '2026-06-09',
+        amount: -500,
+        notes: '   ',
+        subtransactions: [
+          { amount: -300, category: cat },
+          { amount: -200, category: cat },
+        ],
+      },
+    ] as any);
+
+    const report = await getTransactionsReport({
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
+    });
+
+    expect(report.match(/part of a split/g)?.length).toBe(2);
+  });
+
   it('keeps the new column after the existing ones', async () => {
     // Appended, so nothing reading this table by position moves. Only the
     // order of the two adjacent columns fixes that.
@@ -215,8 +246,11 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     for (const blank of ['', '   ']) {
       const report = await getTransactionsReport({ notes_contains: blank });
 
+      // The window is the assertion. The alternative that used to sit here
+      // could not be reached with this fixture — June rows, September now — so
+      // it suggested a check it never made.
       expect(report).not.toMatch(/1900-01-01/);
-      expect(report).toMatch(/No transactions found|Transactions: 20\d\d-\d\d-01/);
+      expect(report).toMatch(/No transactions found for the specified filters/);
     }
   });
 
@@ -279,6 +313,12 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     expect(report).not.toMatch(/RP-1234/);
     expect(report).not.toMatch(/otra cuenta/);
     expect(report).not.toMatch(/Cena/);
+    // Inside the window and inside the account, and without the tag. Removing
+    // this left the note filter unprotected in the one combination only this
+    // test covers: skipping it whenever an account is named passed everything.
+    // The comment above describes the same defect from the other side, which
+    // is how it survived a third round here.
+    expect(report).not.toMatch(/nada que ver/);
   });
 
   it('searches the payee by partial name, which already worked', async () => {

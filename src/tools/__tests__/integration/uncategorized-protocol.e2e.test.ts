@@ -142,5 +142,7 @@ describe.skipIf(skip)('get_transactions through the MCP protocol (#81)', () => {
 
     expect(props.notes_contains.description).toMatch(/every date/i);
     expect(props.start_date.description).toMatch(/notes_contains/);
+    // Both ends: only one of them was asserted, so the other could be reverted.
+    expect(props.end_date.description).toMatch(/notes_contains/);
   });
 });
