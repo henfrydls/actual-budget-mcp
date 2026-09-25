@@ -58,4 +58,50 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
     expect(adjustment, 'adjustment transaction should exist').toBeTruthy();
     expect((adjustment as any).category).toBe(cashbackId);
   }, 60_000);
+
+  it('reconciles even when a transaction of the same amount is already on that day', async () => {
+    // #88 put a duplicate check in front of every create, and this tool creates
+    // through it. An unrelated transaction of the same amount on the same day
+    // made it announce the reconciliation and then report that nothing had been
+    // created, advising a flag it does not accept, while the balance sat
+    // unchanged. It cannot duplicate itself: a second run computes a delta of
+    // zero and stops before writing.
+    let acctId = '';
+    const budgetId = await createFreshBudget(async () => {
+      acctId = await api.createAccount({ name: 'Card (EUR)', type: 'credit' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G2' } as any);
+      await api.createCategory({ name: 'Cashback2', group_id: g } as any);
+      await api.addTransactions(
+        acctId,
+        [
+          // -200 of drift against +100 of unrelated refund leaves the account
+          // at -100, so the adjustment is +100: exactly the refund's amount,
+          // on exactly the refund's day.
+          { date: '2026-05-01', amount: -20000, payee_name: 'FX drift' },
+          { date: '2026-06-05', amount: 10000, payee_name: 'Unrelated refund' },
+        ] as any,
+        { learnCategories: false, runTransfers: false },
+      );
+    });
+
+    const lines = await reconcileCurrencyResidual({
+      account: 'Card (EUR)',
+      target_balance: 0,
+      category: 'Cashback2',
+      date: '2026-06-05',
+    });
+    const text = lines.join('\n');
+
+    // The reply must not claim a reconciliation it did not perform.
+    expect(text).not.toMatch(/nothing was created/i);
+    expect(text).toMatch(/Currency residual reconciled/);
+
+    await api.loadBudget(budgetId);
+    // -100 drift, +100 unrelated refund, and the adjustment must still close
+    // the remaining gap: the balance reaches the target either way only if the
+    // adjustment was actually written.
+    expect(await api.getAccountBalance(acctId)).toBe(0);
+    const onTheDay = await api.getTransactions(acctId, '2026-06-05', '2026-06-05');
+    expect(onTheDay.length).toBe(2);
+  }, 60_000);
 });
