@@ -189,7 +189,11 @@ describe.skipIf(skip)('searching notes (#82)', () => {
   it('ignores surrounding spaces in the search term', async () => {
     await budget();
 
-    expect(await search(' #Soventix ')).toMatch(/RP-1234/);
+    // The note ends with this word, so a trailing space decides the result. A
+    // term surrounded by spaces inside the note would match either way, which
+    // is how the first version of this test passed without the trimming.
+    expect(await search('minúscula ')).toMatch(/minúscula/);
+    expect(await search(' Reembolso')).toMatch(/RP-1234/);
   });
 
   it('treats a blank search as no search at all', async () => {
