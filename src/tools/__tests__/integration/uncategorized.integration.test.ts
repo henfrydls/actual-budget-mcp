@@ -208,4 +208,59 @@ describe.skipIf(skip)('listing transactions that have no category (#81)', () => 
 
     expect(report).toMatch(/No transactions found/i);
   });
+
+  /**
+   * The window has two ends. Moving only the start claimed "searches all
+   * dates" in the schema, the README and the commit message while still
+   * stopping at today, so a future-dated transaction stayed invisible behind a
+   * header reading `1900-01-01 to ...` that looked exhaustive. Future dates are
+   * ordinary in Actual: a scheduled transaction that has landed, a card charge
+   * past the statement date.
+   */
+  it('reaches transactions dated in the future as well as the past', async () => {
+    let checking = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+    });
+    await api.addTransactions(checking, [
+      { date: '2019-03-02', amount: -100, notes: 'LONG-AGO' },
+      { date: '2027-11-30', amount: -200, notes: 'STILL-TO-COME' },
+    ] as any);
+
+    const report = await getTransactionsReport({ uncategorized: true });
+
+    expect(report).toMatch(/LONG-AGO/);
+    expect(report).toMatch(/STILL-TO-COME/);
+  });
+
+  it('still stops at today when the flag is off', async () => {
+    let checking = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+    });
+    await api.addTransactions(checking, [
+      { date: '2027-11-30', amount: -200, notes: 'STILL-TO-COME' },
+    ] as any);
+
+    const report = await getTransactionsReport({});
+
+    expect(report).not.toMatch(/STILL-TO-COME/);
+  });
+
+  it('puts the oldest first, since those are the ones that get forgotten', async () => {
+    let checking = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+    });
+    await api.addTransactions(checking, [
+      { date: '2026-08-01', amount: -100, notes: 'RECENT' },
+      { date: '2019-03-02', amount: -200, notes: 'FORGOTTEN' },
+    ] as any);
+
+    const report = await getTransactionsReport({ uncategorized: true });
+
+    // With a backlog and a limit of 50, newest-first would push the oldest past
+    // the end of the answer — the rows this flag exists to surface.
+    expect(report.indexOf('FORGOTTEN')).toBeLessThan(report.indexOf('RECENT'));
+  });
 });

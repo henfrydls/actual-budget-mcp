@@ -42,8 +42,13 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // answers it with "nothing" while transactions from March sit unsorted. With
   // the flag on and no dates given, look at everything and let `limit` bound
   // the answer; the report states the window it used.
+  // Both ends, or the promise is false. Moving only the start said "searches
+  // all dates" in three places while still stopping at today, and a
+  // future-dated transaction — a scheduled one that has landed, a card charge
+  // past the statement date — stayed invisible. Worse than before the change,
+  // because the header now reads `1900-01-01 to ...` and looks exhaustive.
   const startDate = resolveDate(start_date || (uncategorized ? '1900-01-01' : 'start of month'));
-  const endDate = resolveDate(end_date);
+  const endDate = uncategorized && !end_date ? '2099-12-31' : resolveDate(end_date);
 
   // Get accounts to query
   const allAccounts = await api.getAccounts();
@@ -125,8 +130,13 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     }
   }
 
-  // Sort by date descending
-  allTransactions.sort((a, b) => b.date.localeCompare(a.date));
+  // Newest first, except when listing what still needs a category: there the
+  // oldest are the ones most likely to be forgotten, and with `limit` at 50 a
+  // backlog would push them past the end of the answer. The tool that exists to
+  // surface what was overlooked should not start by hiding it.
+  allTransactions.sort((a, b) =>
+    uncategorized ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date),
+  );
 
   // Apply filters
   if (uncategorized) {
@@ -169,9 +179,10 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     //   - the parent of a split                      -> not wanted, its
     //     categories live on its parts, and the loop above has already
     //     replaced it with them
-    //   - a transfer                                 -> not wanted, money
-    //     moving between your own accounts is not spending and never takes a
-    //     category
+    //   - a transfer between two accounts on the same side of the budget
+    //     -> not wanted; Actual clears the category on those. A transfer that
+    //     crosses the budget boundary keeps its category, so an empty one
+    //     there is a real gap and is listed
     //
     // Without the last two this would answer a question about tidying up with
     // a list of rows that are already exactly as they should be.
@@ -266,12 +277,12 @@ export function registerGetTransactions(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          'Start date (YYYY-MM-DD or natural language like "start of month", "30 days ago"). Defaults to start of current month.',
+          'Start date (YYYY-MM-DD or natural language like "start of month", "30 days ago"). Defaults to the start of the current month, or to every date when uncategorized is set.',
         ),
       end_date: z
         .string()
         .optional()
-        .describe('End date (YYYY-MM-DD or natural language). Defaults to today.'),
+        .describe('End date (YYYY-MM-DD or natural language). Defaults to today, or to every date when uncategorized is set.'),
       category: z
         .string()
         .optional()
