@@ -459,7 +459,11 @@ describe('create_transaction: what it does with the duplicate check', () => {
 
     expect(filters).toHaveLength(1);
     expect(filters[0].date).toBe(resolveDate('today'));
-    expect(filters[0].date).not.toBe('today');
+    // There used to be a `.not.toBe('today')` under that line. It could not
+    // fail: `resolveDate('today')` returns YYYY-MM-DD and never the word, so
+    // the line above passing makes it pass, and the line above failing aborts
+    // the test before it runs. It was written in the fix for the round before,
+    // which is where this shape keeps coming back.
   });
 
   it('asks the lookup before writing, never after', async () => {

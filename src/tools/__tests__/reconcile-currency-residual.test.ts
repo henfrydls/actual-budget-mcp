@@ -352,6 +352,47 @@ describe('reconcile_currency_residual: what #88 added', () => {
     expect(api.addTransactions).not.toHaveBeenCalled();
   });
 
+  it('follows the clock rather than a date decided when the code was written', async () => {
+    // `accepts today` and `refuses tomorrow` between them force any constant C
+    // to satisfy today <= C < tomorrow, which is to say C must equal today.
+    // That holds on every day except the one where a hardcoded C happens to be
+    // today's date, and on that day the only thing catching it is another test
+    // by coincidence. So the clock is anchored on purpose here: two simulated
+    // days, years apart, each with its own boundary. No single constant, and
+    // no expression that is not a real clock, satisfies both.
+    const realTZ = process.env.TZ;
+    try {
+      process.env.TZ = 'UTC';
+      for (const [day, nextDay] of [
+        ['2027-03-04', '2027-03-05'],
+        ['2031-11-30', '2031-12-01'],
+      ]) {
+        vi.setSystemTime(new Date(`${day}T12:00:00Z`));
+
+        const lines = await reconcileCurrencyResidual({
+          account: 'Card (USD)',
+          target_balance: 0,
+          category: 'Cashback',
+          date: day,
+        });
+        expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+
+        await expect(
+          reconcileCurrencyResidual({
+            account: 'Card (USD)',
+            target_balance: 0,
+            category: 'Cashback',
+            date: nextDay,
+          }),
+        ).rejects.toThrow(/after this server's today/);
+      }
+    } finally {
+      vi.useRealTimers();
+      if (realTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = realTZ;
+    }
+  });
+
   it('takes today from the same clock as the rest of the server, in any timezone', async () => {
     // Two notions of today in one process drift apart across a timezone, and
     // the drift is invisible to a suite running in UTC — which is why this was
