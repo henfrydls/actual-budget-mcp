@@ -422,7 +422,7 @@ hand.
 
 ## Safety
 
-Two things protect your budget from an agent acting on a vague instruction.
+Three things protect your budget from an agent acting on a vague instruction.
 
 ### Deletes preview before they delete
 
@@ -442,6 +442,41 @@ Tools that find their target **by name** (`delete_account`, `delete_category`,
 exact name. That is where deleting the wrong thing actually happens: asking for
 "Adicionales" can resolve to "Ingresos Adicionales". Tools that take an exact id
 (`delete_transaction`, `delete_rule`) need only `confirm: true`.
+
+### A transaction that already exists is not created twice
+
+`create_transaction` looks before it writes. If the account, the date and the
+amount all match something already in the budget, it creates nothing and shows
+you what is there:
+
+```
+create_transaction(account: "Checking", amount: -50, date: "2026-06-05")
+  → A transaction like this one already exists, so nothing was created:
+
+      2026-06-05  -50.00  Checking  Claro
+        id: 0b6d516e-...
+
+    Same account, same date, same amount. If this is a second, genuine payment
+    rather than the same one recorded twice, call again with allow_duplicate: true.
+
+create_transaction(account: "Checking", amount: -50, date: "2026-06-05", allow_duplicate: true)
+  → Transaction created
+```
+
+Two identical coffees on one card on one day are a real thing, so the flag
+exists and one extra call is the whole cost. This is a change from 0.9.x, where
+the second call created a second row without saying anything.
+
+The check syncs first, so it sees what another client wrote and not only what
+this one did. That is the case it is for: two agents against one budget, neither
+able to see the other. If the sync fails the check still runs against the local
+copy and the write is not blocked, so an offline session keeps working with a
+weaker check rather than no writes.
+
+What it does not catch: a rule that rewrites the **amount or the date** of the
+row as it is stored, since the stored row then no longer matches what was asked.
+Renaming rules, the common kind, make no difference to it. `create_transfer` and
+`create_split_transaction` do not run this check yet.
 
 ### Read-only mode
 
@@ -528,7 +563,7 @@ Writes are enabled by default. Read-only is opt-in.
 <details>
 <summary>Parameters</summary>
 
-**create_transaction** - `account` (required): account name | `amount` (required): negative for expenses, positive for income | `payee` (optional) | `category` (optional) | `date` (optional) | `notes` (optional) | `cleared` (optional)
+**create_transaction** - `account` (required): account name | `amount` (required): negative for expenses, positive for income | `payee` (optional) | `category` (optional) | `date` (optional) | `notes` (optional) | `cleared` (optional) | `allow_duplicate` (optional): create it even though one with the same account, date and amount exists
 
 **update_transaction** - `transaction_id` (required) | `amount`, `payee`, `category`, `date`, `notes`, `cleared` (all optional)
 

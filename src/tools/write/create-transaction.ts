@@ -103,7 +103,12 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     if (existing.length > 0) {
       // Nothing is created. A warning that warns after creating leaves the
       // duplicate behind, which is the harm this exists to prevent; the caller
-      // decides first, as the destructive tools already do.
+      // decides first, the way the destructive tools already ask.
+      //
+      // Unlike those, this is not returned with `isError`. Theirs is set so a
+      // repeated call cannot destroy anything by accident; here a repeated
+      // call creates nothing at all, and flagging an error would push an agent
+      // towards the retry that duplicates.
       return describePossibleDuplicates(existing, acctNameForCheck);
     }
   }
@@ -200,7 +205,9 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 export function registerCreateTransaction(server: McpServer): void {
   server.tool(
     'create_transaction',
-    'Add a new transaction to an account. Use negative amounts for expenses, positive for income.',
+    'Add a new transaction to an account. Use negative amounts for expenses, positive for income. ' +
+      'If a transaction with the same account, date and amount already exists, this creates nothing ' +
+      'and returns the existing one instead; pass allow_duplicate to go ahead anyway.',
     {
       account: z.string().describe('Account name or ID'),
       amount: z

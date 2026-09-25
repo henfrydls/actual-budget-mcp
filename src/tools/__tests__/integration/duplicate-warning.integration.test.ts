@@ -55,7 +55,7 @@ describe.skipIf(skip)('warning about a transaction that already exists (#88)', (
     });
     const text = lines.join('\n');
 
-    expect(text).toMatch(/already exists/i);
+    expect(text).toMatch(/already exists?/i);
     expect(text).toMatch(/EXISTING-ONE/);
     expect(text).toMatch(/allow_duplicate/);
     expect(text).not.toMatch(/Transaction created/);
@@ -145,7 +145,7 @@ describe.skipIf(skip)('warning about a transaction that already exists (#88)', (
       await createTransaction({ account: 'Checking', amount: -70, date: '2026-06-05' })
     ).join('\n');
 
-    expect(text).toMatch(/already exists/i);
+    expect(text).toMatch(/already exists?/i);
     expect(text).toMatch(/SPLIT-PARENT/);
   });
 
@@ -159,5 +159,73 @@ describe.skipIf(skip)('warning about a transaction that already exists (#88)', (
     expect(text).toMatch(/2 transactions like this one/);
     expect(text).toMatch(/EXISTING-ONE/);
     expect(text).toMatch(/EXISTING-TWO/);
+  });
+
+  it('does not refuse a purchase that matches one share of a split', async () => {
+    // Asking for splits returns the children as well as the parent, and a
+    // child is not something anyone records twice: it is an internal share,
+    // it inherits the parent's payee, and it carries no mark of being part of
+    // anything. Reporting one refuses a real purchase and names a row the user
+    // cannot find: a -40 chemist's bill refused for matching the -40 share of
+    // a -70 supermarket split, under the supermarket's name.
+    const { checking } = await budgetWith();
+    await api.addTransactions(checking, [
+      {
+        date: '2026-06-05',
+        amount: -7000,
+        payee_name: 'PARENTPAYEE-UNIQUE',
+        subtransactions: [{ amount: -4000 }, { amount: -3000 }],
+      },
+    ] as never);
+
+    const text = (
+      await createTransaction({
+        account: 'Checking',
+        amount: -40,
+        date: '2026-06-05',
+        payee: 'Farmacia',
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/Transaction created/);
+    expect(text).not.toContain('PARENTPAYEE-UNIQUE');
+  });
+
+  it('says when the match is the far leg of a transfer', async () => {
+    // The other half of a movement is an ordinary row in this account and
+    // reads as income already recorded. Reporting it is right; leaving the
+    // caller to work out what it is, is not.
+    await budgetWith();
+    await createTransaction({
+      account: 'Checking',
+      amount: -500,
+      date: '2026-06-05',
+      payee: 'Savings',
+    });
+
+    const text = (
+      await createTransaction({ account: 'Savings', amount: 500, date: '2026-06-05' })
+    ).join('\n');
+
+    expect(text).toMatch(/already exists?/i);
+    expect(text).toMatch(/transfer/i);
+  });
+
+  it('checks against the date it resolved, not the word it was given', async () => {
+    // Computed here rather than taken from resolveDate, so the test measures
+    // the resolution instead of restating it.
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+
+    await budgetWith([{ date: today, amount: -5000, notes: 'EXISTING-TODAY' }]);
+
+    const text = (
+      await createTransaction({ account: 'Checking', amount: -50, date: 'today' })
+    ).join('\n');
+
+    expect(text).toMatch(/already exists?/i);
+    expect(text).toMatch(/EXISTING-TODAY/);
   });
 });

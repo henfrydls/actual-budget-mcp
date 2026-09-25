@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, lastQuery, answerByFilter } from './fake-query.js';
+import { fakeQ, lastQuery } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -17,7 +17,7 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn().mockResolvedValue(undefined),
   // The write is given an id of our own and found again by querying for it,
   // which is what replaced the date window and the snapshot (#93).
-  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
+  runQuery: vi.fn().mockResolvedValue({ data: [] }),
   q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -130,7 +130,7 @@ describe('a split that fails after it has already been applied', () => {
   });
 
   it('does not report a plain failure when the split is there', async () => {
-    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'parent' }] } }) as any);
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     await expect(split()).rejects.toThrow(/was saved.*do not repeat it/is);
@@ -195,7 +195,7 @@ describe('create_split_transaction through its handler', () => {
   });
 
   it('does not report a saved split as an error', async () => {
-    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'parent' }] } }) as any);
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
 
     const result = await capture()(input);
 
@@ -237,7 +237,7 @@ describe('create_split_transaction: the sync step and the second lookup', () => 
   it('covers a failure in the sync step, not only in the write', async () => {
     // create_transaction and create_transfer had this; the split did not, so
     // swallowing the sync error left the suite green.
-    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'parent' }] } }) as any);
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
     vi.mocked(api.sync).mockRejectedValue(failure());
 
     await expect(split()).rejects.toThrow(/was saved/i);

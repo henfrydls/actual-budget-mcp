@@ -17,9 +17,16 @@ import { formatMoney } from './money.js';
  * one payment often differ in exactly those fields — one typed by hand, one
  * imported. Matching on them would miss the case this exists for.
  *
- * `splits: 'all'` and not the default. AQL's default adds `WHERE is_parent = 0`,
- * so a duplicated split would be invisible to this check, which is the failure
- * #91 spent four rounds on.
+ * ## What it cannot catch
+ *
+ * The same argument that rules out payee and notes applies, in a weaker form,
+ * to the three fields it does use. The lookup asks with the values the caller
+ * gave; a rule that rewrites the amount or the date rewrites them *after* the
+ * row is stored, so the stored row no longer matches what was asked and the
+ * duplicate goes through. There is no way around it from this side — the values
+ * after the rule are not knowable until something has been written — so it is
+ * written down rather than papered over. Renaming rules, which are the common
+ * kind, are unaffected.
  */
 export interface ExistingTransaction {
   id: string;
@@ -27,6 +34,39 @@ export interface ExistingTransaction {
   amount: number;
   payeeName?: string;
   notes?: string | null;
+  /** One leg of a transfer, which reads as ordinary income or spending unless said. */
+  isTransfer: boolean;
+}
+
+/**
+ * Pull what other processes have written, then look.
+ *
+ * Every other `api.sync()` in this server runs *after* a write, to push. This
+ * one runs before a read, to pull, and it is the difference between a check
+ * that works and one that only looks like it does: #88 is about two agents
+ * against one budget, and neither sees the other's rows until it syncs. Without
+ * this the lookup would interrogate a local copy that, by construction, cannot
+ * hold the row it is looking for — the motivating case would be the one case it
+ * could never catch.
+ *
+ * A sync that fails must not stop anyone recording a transaction, so it is
+ * reported on stderr and the local check runs regardless. That check is weaker,
+ * not wrong: it still sees everything this process wrote. The caller is not
+ * left guessing either, because the write's own sync is still to come and
+ * reports its own failure.
+ */
+async function pullBeforeLooking(): Promise<void> {
+  try {
+    await api.sync();
+  } catch (error) {
+    // stderr: stdout carries JSON-RPC.
+    console.error(
+      '[create_transaction] warning: could not sync before checking for an existing ' +
+        'transaction, so the check saw only this machine\'s copy of the budget. A ' +
+        'duplicate created by another client may not be reported. Reason: ' +
+        String((error as Error)?.message ?? error),
+    );
+  }
 }
 
 export async function findPossibleDuplicates(
@@ -34,10 +74,24 @@ export async function findPossibleDuplicates(
   date: string,
   amountCents: number,
 ): Promise<ExistingTransaction[]> {
+  await pullBeforeLooking();
+
   const result = await api.runQuery(
     transactionsQuery('all')
-      .filter({ account: accountId, date, amount: amountCents })
-      .select(['id', 'date', 'amount', 'notes', 'payee']),
+      // `splits: 'all'` and not the default. AQL's default adds
+      // `WHERE is_parent = 0`, so a duplicated split parent would be invisible
+      // here, which is the failure #91 spent four rounds on.
+      //
+      // `all` also returns the children, and they must be excluded. A child is
+      // not a transaction anyone can record twice: it is an internal share of
+      // its parent, it inherits the parent's payee, and it carries no mark of
+      // being part of anything. Reporting one rejects a legitimate purchase and
+      // names a row the user cannot find — a -40 chemist's bill refused for
+      // matching the -40 share of a -70 supermarket split, under the name
+      // "Super". The parent is still matched, at the full amount, which is the
+      // row a duplicate would actually collide with.
+      .filter({ account: accountId, date, amount: amountCents, is_child: false })
+      .select(['id', 'date', 'amount', 'notes', 'payee', 'transfer_id']),
   );
   const rows = (result as { data?: Array<Record<string, unknown>> } | undefined)?.data;
   if (!Array.isArray(rows) || rows.length === 0) return [];
@@ -53,6 +107,7 @@ export async function findPossibleDuplicates(
     amount: Number(row.amount),
     payeeName: row.payee ? names.get(String(row.payee)) : undefined,
     notes: (row.notes as string | null) ?? null,
+    isTransfer: row.transfer_id != null,
   }));
 }
 
@@ -61,7 +116,9 @@ export async function findPossibleDuplicates(
  *
  * A warning that only warns leaves the duplicate created, which is the harm.
  * This returns a preview instead, so the caller decides before anything is
- * written — the same shape the destructive tools use, for the same reason.
+ * written — the same shape the destructive tools use, though without their
+ * `isError`, deliberately: calling those again repeats the destruction, while
+ * calling this again creates nothing at all.
  *
  * Two identical coffees on one card on one day are a real thing, so the way
  * through is one flag and one more call, not an argument.
@@ -81,6 +138,11 @@ export function describePossibleDuplicates(
     const bits = [t.date, formatMoney(t.amount), accountName];
     if (t.payeeName) bits.push(t.payeeName);
     if (t.notes) bits.push(t.notes);
+    // Said, not left to be inferred: the far leg of a transfer is an ordinary
+    // row in this account and reads as income or spending that was already
+    // recorded. Knowing it is a transfer is what tells the caller whether
+    // their own entry is the duplicate or the other half of a movement.
+    if (t.isTransfer) bits.push('(one leg of a transfer)');
     lines.push(`  ${bits.join('  ')}`);
     lines.push(`    id: ${t.id}`);
   }

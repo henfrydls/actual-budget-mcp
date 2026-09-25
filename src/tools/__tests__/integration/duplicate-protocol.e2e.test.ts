@@ -70,7 +70,7 @@ describe.skipIf(skip)('create_transaction duplicate warning through the protocol
 
     const res = await call({ account: 'Checking', amount: -50, date: '2026-06-05' });
 
-    expect(res.content[0].text).toMatch(/already exists/i);
+    expect(res.content[0].text).toMatch(/already exists?/i);
     expect(res.content[0].text).toMatch(/EXISTING-ONE/);
     expect(res.content[0].text).toMatch(/allow_duplicate/);
   });

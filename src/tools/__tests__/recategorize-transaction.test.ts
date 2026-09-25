@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, answerByFilter } from './fake-query.js';
+import { fakeQ } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -44,7 +44,9 @@ describe('recategorize_transaction (#44: must not zero a split child)', () => {
   // updateTransaction resets a sub-transaction's amount to 0 when the update
   // omits `amount` (#25), which silently unbalances the parent split.
   it('re-sends the current amount when the target is a split child', async () => {
-    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'sub-1', amount: -81599, is_child: true }] } }) as any);
+    vi.mocked(api.runQuery).mockResolvedValue({
+      data: [{ id: 'sub-1', amount: -81599, is_child: true }],
+    } as any);
     const handler = captureHandler(registerRecategorizeTransaction);
 
     await handler({ transaction_id: 'sub-1', category: 'cat-1' });
@@ -56,7 +58,9 @@ describe('recategorize_transaction (#44: must not zero a split child)', () => {
   });
 
   it('does not inject an amount for an ordinary transaction', async () => {
-    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 't-1', amount: -500, is_child: false }] } }) as any);
+    vi.mocked(api.runQuery).mockResolvedValue({
+      data: [{ id: 't-1', amount: -500, is_child: false }],
+    } as any);
     const handler = captureHandler(registerRecategorizeTransaction);
 
     await handler({ transaction_id: 't-1', category: 'cat-1' });

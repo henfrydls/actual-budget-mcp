@@ -43,6 +43,14 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     ];
   }
 
+  // This adjustment cannot duplicate itself, so the #88 check must not be
+  // allowed to refuse it. The amount is derived from the balance: once an
+  // adjustment lands, the balance equals the target and a second run computes a
+  // delta of zero and stops above, at "No adjustment needed". What the check
+  // would catch here is a coincidence — an unrelated transaction of the same
+  // amount on the same day — and refusing on that produced a reply that
+  // contradicted itself, announcing the reconciliation and then reporting that
+  // nothing had been created, while advising a flag this tool does not accept.
   const lines = await createTransaction({
     account: accountId,
     amount: centsToAmount(deltaCents),
@@ -50,6 +58,7 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     notes: input.notes || 'FX residual adjustment',
     date: input.date,
     payee: input.payee,
+    allow_duplicate: true,
   });
 
   return [
