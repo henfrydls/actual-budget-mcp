@@ -38,7 +38,11 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
 
   await ensureConnection();
 
-  const startDate = resolveDate(start_date || 'start of month');
+  // "What still needs a category?" carries no date, and a month-wide default
+  // answers it with "nothing" while transactions from March sit unsorted. With
+  // the flag on and no dates given, look at everything and let `limit` bound
+  // the answer; the report states the window it used.
+  const startDate = resolveDate(start_date || (uncategorized ? '1900-01-01' : 'start of month'));
   const endDate = resolveDate(end_date);
 
   // Get accounts to query
@@ -47,6 +51,17 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
 
   if (account) {
     const id = await resolveAccountId(account);
+    const named = allAccounts.find((a) => a.id === id);
+    if (uncategorized && named?.offbudget) {
+      // The engine forces `category = null` on every transaction of an
+      // off-budget account, so all of them look unsorted and none of them can
+      // ever be sorted: recategorising one succeeds and changes nothing.
+      // Listing them would hand over work that cannot be finished.
+      return (
+        `"${named.name}" is an off-budget account, so its transactions do not take ` +
+        'categories: Actual clears them. There is nothing here to categorise.'
+      );
+    }
     accountIds = [id];
   } else if (uncategorized) {
     // Off-budget accounts are left out unless one was asked for by name. Their
@@ -91,7 +106,11 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
         for (const sub of (t as any).subtransactions) {
           allTransactions.push({
             ...sub,
-            id: `${t.id} → ${sub.id}`,
+            // The child's own id, not a composite. A composite reads well and
+            // is useless: passing it to recategorize_transaction succeeds,
+            // changes nothing, and reports success. A listed task that cannot
+            // be completed is worse than one never listed.
+            id: sub.id,
             date: t.date,
             payee: sub.payee || t.payee,
             // Cleared status is a property of the parent (bank-facing) transaction
@@ -111,8 +130,39 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
 
   // Apply filters
   if (uncategorized) {
+    // A transfer only loses its category when both sides sit on the same side
+    // of the budget. Actual's rule, in `clearCategory`, is
+    // `if (fromOffBudget === toOffBudget) { category: null }`, so a transfer
+    // from a budgeted account to an off-budget one *keeps* its category and an
+    // empty one there is a real gap.
+    //
+    // Treating every transfer as categoryless was wrong in the direction that
+    // hides work: a monthly contribution from a budgeted account to an
+    // off-budget investment account has exactly this shape, and a month where
+    // it lost its category would have been reported as "nothing pending".
+    const offBudgetById = new Map(allAccounts.map((a) => [a.id, Boolean(a.offbudget)]));
+    const transferTargetByPayee = new Map(
+      payees
+        .filter((p) => (p as { transfer_acct?: string | null }).transfer_acct)
+        .map((p) => [p.id, (p as { transfer_acct?: string | null }).transfer_acct as string]),
+    );
+
+    const isCategorylessTransfer = (t: {
+      transfer_id?: string | null;
+      payee?: string | null;
+      account: string;
+    }) => {
+      if (!t.transfer_id) return false;
+      const target = t.payee ? transferTargetByPayee.get(t.payee) : undefined;
+      // Without the counterpart the engine's rule cannot be applied. Keeping
+      // the row is the safe direction: one shown that needed nothing is
+      // dismissed in a second; one hidden that needed sorting is never seen.
+      if (!target) return false;
+      return offBudgetById.get(target) === offBudgetById.get(t.account);
+    };
+
     // What counts as "no category" was measured against the real engine rather
-    // than assumed, because three different kinds of row report a null one:
+    // than assumed, because four different kinds of row report a null one:
     //
     //   - a plain transaction nobody has sorted yet  -> wanted
     //   - a split child with no category of its own  -> wanted
@@ -126,7 +176,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     // Without the last two this would answer a question about tidying up with
     // a list of rows that are already exactly as they should be.
     allTransactions = allTransactions.filter(
-      (t) => !t.category && !t.is_parent && !t.transfer_id,
+      (t) => !t.category && !t.is_parent && !isCategorylessTransfer(t),
     );
   }
 
@@ -242,7 +292,7 @@ export function registerGetTransactions(server: McpServer): void {
         .boolean()
         .optional()
         .describe(
-          'Only transactions with no category. Transfers and split parents are left out: they have no category because none belongs there.',
+          'Only transactions with no category. Left out: split parents (their categories live on their parts), transfers between accounts on the same side of the budget (Actual clears those), and off-budget accounts (they take no categories at all). Searches all dates unless you give a range.',
         ),
       limit: z
         .number()

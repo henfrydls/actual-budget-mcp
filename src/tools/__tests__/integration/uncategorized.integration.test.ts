@@ -37,22 +37,26 @@ describe.skipIf(skip)('listing transactions that have no category (#81)', () => 
 
     const payees = await api.getPayees();
     const toSavings = payees.find((p: any) => p.transfer_acct === savings);
+    const toBroker = payees.find((p: any) => p.transfer_acct === broker);
 
     await api.addTransactions(
       checking,
       [
         { date: '2026-06-05', amount: -100, category: cat, notes: 'sorted' },
-        { date: '2026-06-05', amount: -200, notes: 'needs a category' },
+        { date: '2026-06-05', amount: -200, notes: 'PLAIN-UNSORTED' },
         {
           date: '2026-06-05',
           amount: -300,
           notes: 'a split',
           subtransactions: [
             { amount: -200, category: cat },
-            { amount: -100, notes: 'part needs a category' },
+            { amount: -100, notes: 'SPLIT-PART-UNSORTED' },
           ],
         },
         { date: '2026-06-05', amount: -400, payee: toSavings?.id, notes: 'moving my own money' },
+        // On-budget to off-budget: Actual keeps the category on this side, so
+        // an empty one is a real gap. This is the monthly-contribution shape.
+        { date: '2026-06-05', amount: -600, payee: toBroker?.id, notes: 'contribution needing a category' },
       ] as any,
       { runTransfers: true },
     );
@@ -72,10 +76,13 @@ describe.skipIf(skip)('listing transactions that have no category (#81)', () => 
       uncategorized: true,
     });
 
-    expect(report).toMatch(/needs a category/);
-    expect(report).toMatch(/part needs a category/);
+    expect(report).toMatch(/PLAIN-UNSORTED/);
+    expect(report).toMatch(/SPLIT-PART-UNSORTED/);
+    // A transfer to an off-budget account keeps its category slot, so an empty
+    // one is work. Excluding every transfer hid exactly this.
+    expect(report).toMatch(/contribution needing a category/);
 
-    expect(report).not.toMatch(/sorted/);
+    expect(report).not.toMatch(/sorted\b/);
     // A transfer between your own accounts is not spending and never takes a
     // category, so listing it as work to do is noise.
     expect(report).not.toMatch(/moving my own money/);
@@ -110,24 +117,75 @@ describe.skipIf(skip)('listing transactions that have no category (#81)', () => 
       uncategorized: true,
     });
 
-    expect(june).toMatch(/needs a category/);
+    expect(june).toMatch(/PLAIN-UNSORTED/);
     expect(june).not.toMatch(/july/);
+    // Without this the test passed with the filter switched off entirely.
+    expect(june).not.toMatch(/sorted\b/);
   });
 
-  it('composes with an account, and honours one named explicitly', async () => {
-    const { broker } = await budgetWithEverything();
+  it('composes with an account, filtering inside it', async () => {
+    // On-budget, so the filter has something to do: an earlier version of this
+    // test used the off-budget account, where every row lacks a category
+    // anyway, so turning the filter off entirely changed nothing and the test
+    // still passed.
+    await budgetWithEverything();
 
-    const onlyBroker = await getTransactionsReport({
-      account: 'Broker',
+    const report = await getTransactionsReport({
+      account: 'Checking',
       start_date: '2026-06-01',
       end_date: '2026-06-30',
       uncategorized: true,
     });
 
-    // Off-budget accounts are skipped when scanning everything, but asking for
-    // one by name is a deliberate choice and is answered.
-    expect(broker).toBeTruthy();
-    expect(onlyBroker).toMatch(/off budget/);
+    expect(report).toMatch(/PLAIN-UNSORTED/);
+    expect(report).not.toMatch(/sorted\b/);
+    expect(report).not.toMatch(/moving my own money/);
+  });
+
+  it('says an off-budget account has nothing to categorise, rather than listing it all', async () => {
+    // The engine forces `category = null` on every off-budget transaction, so
+    // all of them look unsorted and none can be sorted: recategorising one
+    // succeeds and changes nothing.
+    await budgetWithEverything();
+
+    const report = await getTransactionsReport({
+      account: 'Broker',
+      uncategorized: true,
+    });
+
+    expect(report).toMatch(/off-budget/i);
+    expect(report).toMatch(/nothing here to categorise/i);
+    expect(report).not.toMatch(/off budget, needs nothing/);
+  });
+
+  it('looks at every date when none is given, since the question carries no date', async () => {
+    const { checking } = await budgetWithEverything();
+    await api.addTransactions(checking, [
+      { date: '2019-03-02', amount: -900, notes: 'old and still unsorted' },
+    ] as any);
+
+    const report = await getTransactionsReport({ uncategorized: true });
+
+    // A month-wide default answered "nothing pending" while this sat there.
+    expect(report).toMatch(/old and still unsorted/);
+  });
+
+  it('gives a split part an id that can actually be recategorised', async () => {
+    // The id used to be `parent → child`, which recategorize_transaction
+    // accepts, silently does nothing with, and reports as done.
+    const { checking } = await budgetWithEverything();
+
+    const report = await getTransactionsReport({
+      account: 'Checking',
+      uncategorized: true,
+    });
+
+    const rows = await api.getTransactions(checking, '2026-06-01', '2026-06-30');
+    const parent = (rows as any[]).find((r) => r.is_parent);
+    const child = parent.subtransactions.find((s: any) => !s.category);
+
+    expect(report).toContain(child.id);
+    expect(report).not.toContain(`${parent.id} →`);
   });
 
   it('says so plainly when there is nothing to sort', async () => {
