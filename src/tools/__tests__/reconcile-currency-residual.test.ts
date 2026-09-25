@@ -30,7 +30,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { resolveDate } from '../../utils/dates.js';
+import { resolveDate, formatDate } from '../../utils/dates.js';
 import {
   reconcileCurrencyResidual,
   registerReconcileCurrencyResidual,
@@ -324,31 +324,64 @@ describe('reconcile_currency_residual: what #88 added', () => {
       date: '2026-06-05',
     });
 
-    expect(api.getAccountBalance).toHaveBeenCalledWith('acc-1');
+    expect(api.getAccountBalance).toHaveBeenCalledExactlyOnceWith('acc-1');
   });
 
-  it('measures today with the same clock as every other date in the server', async () => {
-    // Not a second formatting of `new Date()` here. Two notions of today in
-    // one process drift across a timezone or a DST boundary, and a UTC runner
-    // cannot see the drift, so this is held by construction rather than by a
-    // test that could not fail where it runs.
-    const lines = await reconcileCurrencyResidual({
-      account: 'Card (USD)',
-      target_balance: 0,
-      category: 'Cashback',
-      date: resolveDate('today'),
-    });
-
-    expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+  it('refuses tomorrow, the first date that is actually in the future', async () => {
+    // The boundary was pinned from below by "accepts today" and from above by
+    // 2099, leaving everything between tomorrow and 2098 unheld. Moving the
+    // line to the end of the month, or an off-by-one that lets exactly
+    // tomorrow through, passed all 536 tests in both modes.
+    //
+    // It is not cosmetic. An adjustment dated tomorrow never enters a balance
+    // that counts up to today, so the next run recomputes the same delta and
+    // books another: the "attempt one" defect this refusal exists to close.
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    const tomorrow = formatDate(t);
 
     await expect(
       reconcileCurrencyResidual({
         account: 'Card (USD)',
         target_balance: 0,
         category: 'Cashback',
-        date: '2099-01-01',
+        date: tomorrow,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/after this server's today/);
+
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('takes today from the same clock as the rest of the server, in any timezone', async () => {
+    // Two notions of today in one process drift apart across a timezone, and
+    // the drift is invisible to a suite running in UTC — which is why this was
+    // once dismissed as untestable. It is not: Node honours `TZ` changed at
+    // runtime, so the timezone can be chosen here rather than inherited from
+    // whoever runs it, and this fails under the mutation even with the runner
+    // forced to UTC.
+    //
+    // Kiritimati is UTC+14, so at this instant the local day is already the
+    // 26th while UTC is still on the 25th. `resolveDate('today')` says the
+    // 26th; `toISOString().slice(0, 10)`, the common idiom, says the 25th and
+    // would refuse the caller's own today.
+    const realTZ = process.env.TZ;
+    try {
+      process.env.TZ = 'Pacific/Kiritimati';
+      vi.setSystemTime(new Date('2026-09-25T12:00:00Z'));
+
+      const lines = await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: 'today',
+      });
+
+      expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+    } finally {
+      vi.useRealTimers();
+      if (realTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = realTZ;
+    }
   });
 
   it('tells a client what the flag is for, in the text a client reads', () => {
@@ -361,7 +394,11 @@ describe('reconcile_currency_residual: what #88 added', () => {
       tool: (...a: unknown[]) => { description = a[1] as string; },
     } as never);
 
+    // Not just the word: naming the flag and then saying the opposite of what
+    // it does would pass a bare `/allow_duplicate/`.
     expect(description).toMatch(/allow_duplicate/);
+    expect(description).toMatch(/already exists/i);
+    expect(description).toMatch(/today or earlier/i);
   });
 
   it('accepts today, which is the boundary the refusal must not eat', async () => {
