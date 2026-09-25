@@ -408,6 +408,18 @@ that directory, which you can remove.
 https://github.com/henfrydls/actual-budget-mcp/issues. The full policy is also
 published at https://actual-mcp.henfrydls.com/privacy/.
 
+### Transactions this server writes carry an id it generates
+
+Every transaction, split and transfer created through this server is given a
+UUID before it is sent, and that id is what the server uses to find the row
+again if the write reports an error. It is the transaction's own `id`, not
+`imported_id`, so Actual's deduplication of imported files still works on these
+rows exactly as it does on any other.
+
+Nothing about this is visible in Actual, and it changes nothing for you. It is
+documented because it is a real difference from writing the same transaction by
+hand.
+
 ## Safety
 
 Two things protect your budget from an agent acting on a vague instruction.

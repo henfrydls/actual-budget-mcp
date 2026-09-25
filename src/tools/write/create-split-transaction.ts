@@ -6,6 +6,8 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
+import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 
 export interface SplitInput {
   category: string;
@@ -76,15 +78,35 @@ export async function createSplitTransaction(
   if (input.payee) parent.payee_name = input.payee;
   if (input.notes) parent.notes = input.notes;
 
-  await api.addTransactions(accountId, [parent as any], {
-    learnCategories: false,
-    runTransfers: false,
-  });
-
-  await api.sync();
+  // Given its id before sending, so the row can be found by identity rather
+  // than by what appeared near a date (#79, #93). A repeated split duplicates a
+  // parent and every child under it, so a wrong answer here is expensive.
+  const marker = newWriteMarker();
+  parent.id = marker;
 
   const accounts = await api.getAccounts();
   const acct = accounts.find((a) => a.id === accountId);
+  const acctName = acct?.name || accountId;
+
+  try {
+    await api.addTransactions(accountId, [parent as any], {
+      learnCategories: false,
+      runTransfers: false,
+    });
+    await api.sync();
+  } catch (error) {
+    if (!mayHaveBeenApplied(error)) throw error;
+    const { verdict, message } = await verifyFailedWrite(error, {
+      action: 'The split transaction',
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: {
+            marker,
+            find: findByMarker,
+            corroborate: () => corroborateAbsence(accountId, marker),
+          },
+    });
+    throw new WriteReportedError(message, verdict);
+  }
 
   const lines = [
     'Split transaction created:',
@@ -146,6 +168,12 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         const lines = await createSplitTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
+        // A write that landed is not an error the caller should act on by
+        // retrying, whatever the operation did afterwards. A duplicate landed
+        // twice, so that applies to it most of all.
+        if (error instanceof WriteReportedError && (error.verdict === 'applied' || error.verdict === 'duplicated')) {
+          return { content: [{ type: 'text', text: error.message }] };
+        }
         const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],

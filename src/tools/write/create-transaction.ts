@@ -6,6 +6,8 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
+import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 
 export interface CreateTransactionInput {
@@ -27,10 +29,11 @@ export interface CreateTransactionInput {
  * ones), so the caller's explicit category can be silently overridden (#26).
  *
  * `api.addTransactions` resolves to the literal `'ok'` (never the new ids), so
- * we cannot read the created id from its return value. Instead we snapshot the
- * account's transactions for the date, add, then diff to locate the new one and
- * force the caller's category with `updateTransaction` (which does not re-run
- * the learning override, so the correction sticks).
+ * the created row cannot be read from its return value. It is given an id of
+ * our own before the write, looked up by that id afterwards, and corrected with
+ * `updateTransaction` (which does not re-run the learning override, so the
+ * correction sticks). This used to diff the account's transactions for the date
+ * instead, which could reach another process's row.
  *
  * Returns the human-readable confirmation lines.
  */
@@ -82,42 +85,75 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   if (categoryId) transaction.category = categoryId;
   if (input.notes) transaction.notes = input.notes;
 
-  // Snapshot existing transactions on this date so we can identify the one we
-  // are about to create (addTransactions returns 'ok', not ids).
-  let beforeIds: Set<string> | undefined;
-  if (categoryId) {
-    const before = await api.getTransactions(accountId, txnDate, txnDate);
-    beforeIds = new Set(before.map((t) => t.id));
-  }
+  // Label the write before sending it. This is what identifies the row
+  // afterwards, instead of a snapshot and a date window (#93): rules can
+  // rewrite the amount and the date, so nothing else on the row is both stable
+  // and ours.
+  const marker = newWriteMarker();
+  transaction.id = marker;
 
-  await api.addTransactions(accountId, [transaction as any], {
-    learnCategories: false,
-    runTransfers: !!transferPayeeId,
-  });
+  const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
-  // Force the explicit category on the newly created transaction(s) if the SDK
-  // overrode it with a learned mapping.
-  if (categoryId && beforeIds) {
-    const after = await api.getTransactions(accountId, txnDate, txnDate);
-    const created = after.filter((t) => !beforeIds!.has(t.id));
-    for (const t of created) {
-      if (t.category !== categoryId) {
-        // #44: pass the amount we already have, so the update can never reset
-        // it (no extra lookup needed — these rows come from getTransactions).
-        await updatePreservingChildAmount(t.id, { category: categoryId, amount: t.amount });
+  try {
+    await api.addTransactions(accountId, [transaction as any], {
+      learnCategories: false,
+      runTransfers: !!transferPayeeId,
+    });
+
+    // Force the explicit category on the transaction we just created, found by
+    // its marker rather than by "new rows around this date". The old diff could
+    // reach another process's row and give it this transaction's category:
+    // silent, on the success path, and invisible in a reconciliation.
+    if (categoryId) {
+      const ours = await findByMarker(marker);
+      // A rule can turn what we sent into a split. Actual ignores the category
+      // on a split parent, so setting it would do nothing and reporting
+      // `Category: X` would be a lie. Before the lookup could see parents at
+      // all this fell through to the warning below by accident; now it has to
+      // be said on purpose.
+      const becameSplit = (ours ?? []).some(
+        (row) => (row as { is_parent?: boolean }).is_parent === true,
+      );
+      if (becameSplit) {
+        console.error(
+          `[create_transaction] warning: a rule turned the new transaction on ${txnDate} into a split, and a split's category lives on its parts, so the category you asked for was not applied.`,
+        );
+      } else if (ours && ours.length > 0) {
+        for (const row of ours) {
+          if (row.category !== categoryId) {
+            // #44: pass the amount we already have, so the update can never
+            // reset it.
+            await updatePreservingChildAmount(row.id, {
+              category: categoryId,
+              amount: row.amount,
+            });
+          }
+        }
+      } else {
+        // Warn on stderr — never stdout, which is the MCP protocol channel.
+        console.error(
+          `[create_transaction] warning: could not find the new transaction on ${txnDate} to enforce its category; it may have been overridden by a learned mapping.`,
+        );
       }
     }
-    if (created.length === 0) {
-      // Could not locate the created transaction (e.g. the SDK normalized the
-      // date outside the queried window), so we could not enforce the category.
-      // Warn on stderr — never stdout, which is the MCP protocol channel.
-      console.error(
-        `[create_transaction] warning: could not verify explicit category for the new transaction on ${txnDate}; it may have been overridden by a learned mapping.`,
-      );
-    }
-  }
 
-  await api.sync();
+    await api.sync();
+  } catch (error) {
+    if (!mayHaveBeenApplied(error)) throw error;
+
+    // Actual can apply a write and fail afterwards, so "Error" does not mean
+    // "it did not happen". Go and look before saying anything.
+    const { verdict, message } = await verifyFailedWrite(error, {
+      action: 'The transaction',
+      whereToLook: `${acctName} on ${txnDate}`,
+      probe: {
+            marker,
+            find: findByMarker,
+            corroborate: () => corroborateAbsence(accountId, marker),
+          },
+    });
+    throw new WriteReportedError(message, verdict);
+  }
 
   const acct = accounts.find((a) => a.id === accountId);
 
@@ -170,6 +206,13 @@ export function registerCreateTransaction(server: McpServer): void {
         const lines = await createTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
+        // A write that landed is not reported as an error, however the
+        // operation ended: an agent reading "Error:" has every reason to try
+        // again, and trying again is what duplicates. That covers a duplicate
+        // too — it landed twice, so repeating it is the last thing to do.
+        if (error instanceof WriteReportedError && (error.verdict === 'applied' || error.verdict === 'duplicated')) {
+          return { content: [{ type: 'text', text: error.message }] };
+        }
         const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],

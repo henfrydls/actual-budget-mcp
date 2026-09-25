@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fakeQ, lastQuery } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -10,8 +11,14 @@ vi.mock('@actual-app/api', () => ({
     { id: 'cat-2', name: 'Cleaning', group_id: 'g1', hidden: false },
     { id: 'cat-3', name: 'Electronics', group_id: 'g1', hidden: false },
   ]),
+  // Read as the second, independent lookup before a retry is authorised (#79).
+  getTransactions: vi.fn().mockResolvedValue([]),
   addTransactions: vi.fn().mockResolvedValue('ok'),
   sync: vi.fn().mockResolvedValue(undefined),
+  // The write is given an id of our own and found again by querying for it,
+  // which is what replaced the date window and the snapshot (#93).
+  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,
@@ -23,7 +30,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { createSplitTransaction } from '../write/create-split-transaction.js';
+import { createSplitTransaction, registerCreateSplitTransaction } from '../write/create-split-transaction.js';
 
 describe('createSplitTransaction (#28)', () => {
   beforeEach(() => {
@@ -93,5 +100,153 @@ describe('createSplitTransaction (#28)', () => {
     const parent = vi.mocked(api.addTransactions).mock.calls[0][1][0] as any;
     expect(parent.subtransactions[0]).toEqual({ amount: -6000, category: 'cat-1', notes: 'food' });
     expect(parent.subtransactions[1]).toEqual({ amount: -4000, category: 'cat-2' });
+  });
+});
+
+/**
+ * #79 for splits. A repeated split duplicates a parent and every child under
+ * it, so a wrong answer costs more here than anywhere else. The parent is
+ * found by the marker written with it.
+ */
+describe('a split that fails after it has already been applied', () => {
+  const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
+
+  const split = () =>
+    createSplitTransaction({
+      account: 'Checking',
+      amount: -100,
+      date: '2026-09-21',
+      splits: [
+        { amount: -60, category: 'Groceries' },
+        { amount: -40, category: 'Cleaning' },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+  });
+
+  it('does not report a plain failure when the split is there', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(split()).rejects.toThrow(/was saved.*do not repeat it/is);
+  });
+
+  it('says a retry is safe when nothing carries the marker', async () => {
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(split()).rejects.toThrow(/was not saved.*can be retried/is);
+  });
+
+  it('is not fooled by an ordinary transaction of the same total', async () => {
+    // The old probe compared the amount and whether the row had children. A
+    // marker lookup cannot mistake one row for another at all.
+    vi.mocked(api.getTransactions).mockResolvedValue([
+      { id: 'ordinary', account: 'acc-1', date: '2026-09-21', amount: -10000 },
+    ] as any);
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+
+    await expect(split()).rejects.toThrow(/was not saved/i);
+  });
+
+  it('labels the parent, since that is what gets found again', async () => {
+    await split();
+
+    const [, [written]] = vi.mocked(api.addTransactions).mock.calls[0] as any;
+    expect(written.id).toMatch(/^[0-9a-f-]{36}$/);
+    // Not imported_id: labelling that field stops Actual deduplicating this
+    // row against a later file import.
+    expect(written.imported_id).toBeUndefined();
+  });
+
+  it('leaves an ordinary refusal unwrapped, not merely quoted inside a verdict', async () => {
+    vi.mocked(api.addTransactions).mockRejectedValue(new Error('splits must sum to the total'));
+
+    await expect(split()).rejects.toThrow(/^splits must sum to the total$/);
+  });
+});
+
+describe('create_split_transaction through its handler', () => {
+  const capture = () => {
+    let handler: any;
+    registerCreateSplitTransaction({ tool: (...a: unknown[]) => { handler = a.at(-1); } } as never);
+    return handler;
+  };
+
+  const input = {
+    account: 'Checking',
+    amount: -100,
+    date: '2026-09-21',
+    splits: [
+      { amount: -60, category: 'Groceries' },
+      { amount: -40, category: 'Cleaning' },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.addTransactions)
+      .mockReset()
+      .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
+  });
+
+  it('does not report a saved split as an error', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
+
+    const result = await capture()(input);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toMatch(/was saved/i);
+    expect(result.content[0].text).not.toMatch(/^Error:/);
+  });
+
+  it('still reports an unknown outcome as an error', async () => {
+    vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
+
+    const result = await capture()(input);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/could not be.*determined/is);
+  });
+});
+
+describe('create_split_transaction: the sync step and the second lookup', () => {
+  const failure = () => new Error('We had an unknown problem opening "x"');
+  const split = () =>
+    createSplitTransaction({
+      account: 'Checking',
+      amount: -100,
+      date: '2026-09-21',
+      splits: [
+        { amount: -60, category: 'Groceries' },
+        { amount: -40, category: 'Cleaning' },
+      ],
+    });
+
+  beforeEach(() => {
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
+  });
+
+  it('covers a failure in the sync step, not only in the write', async () => {
+    // create_transaction and create_transfer had this; the split did not, so
+    // swallowing the sync error left the suite green.
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
+    vi.mocked(api.sync).mockRejectedValue(failure());
+
+    await expect(split()).rejects.toThrow(/was saved/i);
+  });
+
+  it('will not say "not saved" when the second lookup cannot run', async () => {
+    vi.mocked(api.addTransactions).mockRejectedValue(failure());
+    vi.mocked(api.getTransactions).mockRejectedValue(new Error('cannot read'));
+
+    await expect(split()).rejects.toThrow(/could not be.*determined/is);
   });
 });

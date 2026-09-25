@@ -6,6 +6,8 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
+import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -53,16 +55,35 @@ export function registerCreateTransfer(server: McpServer): void {
           transaction.notes = notes;
         }
 
-        await api.addTransactions(fromId, [transaction as any], {
-          runTransfers: true,
-        });
-
-        await api.sync();
+        // Given its id before sending, so a failure afterwards can be answered
+        // by identity rather than guessed at (#79, #93). A repeated transfer
+        // moves the money twice and leaves two pairs of linked rows to unpick.
+        const marker = newWriteMarker();
+        transaction.id = marker;
 
         // Get account names for confirmation
         const accounts = await api.getAccounts();
         const fromAcct = accounts.find((a) => a.id === fromId);
         const toAcct = accounts.find((a) => a.id === toId);
+
+        try {
+          await api.addTransactions(fromId, [transaction as any], {
+            runTransfers: true,
+          });
+          await api.sync();
+        } catch (error) {
+          if (!mayHaveBeenApplied(error)) throw error;
+          const { verdict, message } = await verifyFailedWrite(error, {
+            action: 'The transfer',
+            whereToLook: `${fromAcct?.name || fromId} on ${txnDate}`,
+            probe: {
+            marker,
+            find: findByMarker,
+            corroborate: () => corroborateAbsence(fromId, marker),
+          },
+          });
+          throw new WriteReportedError(message, verdict);
+        }
 
         return {
           content: [
@@ -82,6 +103,12 @@ export function registerCreateTransfer(server: McpServer): void {
           ],
         };
       } catch (error) {
+        // A write that landed is not an error the caller should act on by
+        // retrying, whatever the operation did afterwards. A duplicate landed
+        // twice, so that applies to it most of all.
+        if (error instanceof WriteReportedError && (error.verdict === 'applied' || error.verdict === 'duplicated')) {
+          return { content: [{ type: 'text', text: error.message }] };
+        }
         const message = describeError(error);
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
