@@ -30,6 +30,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
+import { resolveDate } from '../../utils/dates.js';
 import {
   reconcileCurrencyResidual,
   registerReconcileCurrencyResidual,
@@ -307,6 +308,60 @@ describe('reconcile_currency_residual: what #88 added', () => {
     ).rejects.toThrow(/not a real calendar date/);
 
     expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('asks for the account balance without imposing a cutoff of its own', async () => {
+    // Both wrong versions of this line are a second argument: the adjustment's
+    // own date, which was attempt two, and any fixed date. Asserting the shape
+    // of the call catches both, and says something about this code rather than
+    // about which transactions the SDK should count, which is #100's question
+    // and not settled here. Matching is arity-strict, so a second argument
+    // fails whatever it holds.
+    await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: '2026-06-05',
+    });
+
+    expect(api.getAccountBalance).toHaveBeenCalledWith('acc-1');
+  });
+
+  it('measures today with the same clock as every other date in the server', async () => {
+    // Not a second formatting of `new Date()` here. Two notions of today in
+    // one process drift across a timezone or a DST boundary, and a UTC runner
+    // cannot see the drift, so this is held by construction rather than by a
+    // test that could not fail where it runs.
+    const lines = await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: resolveDate('today'),
+    });
+
+    expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('tells a client what the flag is for, in the text a client reads', () => {
+    // The description is as much the wire as the schema: it is the only place
+    // an agent learns that the flag exists and that "already exists" is a
+    // question rather than a refusal. Without it the agent retries, which is
+    // what the whole PR exists to stop.
+    let description: string | undefined;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => { description = a[1] as string; },
+    } as never);
+
+    expect(description).toMatch(/allow_duplicate/);
   });
 
   it('accepts today, which is the boundary the refusal must not eat', async () => {

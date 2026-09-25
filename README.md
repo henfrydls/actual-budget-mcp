@@ -531,6 +531,10 @@ reporting -100.00, produces an adjustment of -100.00 and leaves the account at
 -200.00. Until that is decided, check for future-dated rows in an account before
 reconciling it.
 
+It also refuses a date that does not exist, such as `2026-09-31` or
+`2026-02-30`, rather than calling it a future one. Other tools still accept an
+impossible date and store it verbatim; that is older than this and unchanged.
+
 It also syncs three times on the happy path: once before reading the balance,
 once inside the create it delegates to, and once to push. Two of those are
 consecutive pulls, so a remote server pays a redundant round trip.

@@ -560,9 +560,26 @@ describe('create_transaction: the duplicate warning as a client meets it', () =>
     const res = await capture().handler({ account: 'Checking', amount: -50, date: '2026-09-21' });
     const text = res.content[0].text;
 
-    expect(text).toContain('FIRST-MATCH');
+    // Two assertions, each with a mutation that fails it alone: truncating the
+    // loop fails the first, dropping the id line fails the second. An earlier
+    // version listed four `toContain`s, and the last of them could never be
+    // the one to fail, because anything that removed the second id had already
+    // failed on the first.
     expect(text).toContain('SECOND-MATCH');
-    expect(text).toContain('id: dup-one');
-    expect(text).toContain('id: dup-two');
+    expect(text.match(/^ {4}id: /gm) ?? []).toHaveLength(2);
+  });
+
+  it('tells a client what the flag is for, in the text a client reads', () => {
+    // The description is as much the wire as the schema: it is the only place
+    // an agent learns the flag exists and that "already exists" is a question
+    // rather than a refusal. Without it the agent retries, and retrying is
+    // what duplicates.
+    let description: string | undefined;
+    registerCreateTransaction({
+      tool: (...a: unknown[]) => { description = a[1] as string; },
+    } as never);
+
+    expect(description).toMatch(/allow_duplicate/);
+    expect(description).toMatch(/already exists/i);
   });
 });

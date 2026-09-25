@@ -35,31 +35,6 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
 
   const accountId = await resolveAccountId(input.account);
 
-  // An adjustment dated ahead cannot do what this tool is for. The promise is
-  // "bring the account to the balance the bank reports"; a row that takes
-  // effect next year leaves the account not matching the bank today, so the
-  // reply would state a reconciliation that has not happened.
-  //
-  // It was also unsound. `getAccountBalance` counts `date <= cutoff` with the
-  // cutoff defaulting to now, so a future-dated adjustment never enters the
-  // balance: every run computed the same delta and wrote another one. An
-  // earlier attempt moved the cutoff to the adjustment's own date instead,
-  // which stopped the identical repeat but bought two worse problems. It made
-  // `Was:` mean the balance as of a future date, so with any pre-existing
-  // future row the figure stopped matching the statement the user is comparing
-  // against (measured: the bank says -100.00, the tool said -150.00 and booked
-  // +150.00). And it did not even close the hole, because a second run with no
-  // date measures at today, does not count the future adjustment, and books a
-  // second one (measured: two adjustments, account left at +100.00).
-  //
-  // Refusing is the whole fix: the cutoff goes back to today, `Was:` means what
-  // the bank means, and a repeat at the same date is caught by the duplicate
-  // check that #88 put in front of every create.
-  //
-  // Compared as strings. Both sides are `YYYY-MM-DD`, so this is exact and has
-  // no timezone or DST behaviour to get wrong, unlike parsing to `Date` (which
-  // also silently rolls an impossible date like 2026-02-30 into March while
-  // the stored transaction keeps the original string).
   const txnDate = resolveDate(input.date);
 
   // `resolveDate` only checks the shape, so an impossible day reaches here
@@ -89,10 +64,18 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   // Compared as strings. Both sides are `YYYY-MM-DD`, so this is exact and has
   // no timezone or DST behaviour of its own.
   //
-  // "Today" is this server's today. A client in a timezone ahead of the server
-  // can be told its own date is in the future; omitting `date`, or passing
-  // "today", uses the same clock as this check and always works.
-  const today = formatDate(new Date());
+  // "Today" comes from `resolveDate`, the same source that turns a caller's
+  // "today" into a date everywhere else in this server, rather than from a
+  // second formatting of `new Date()` here. Two notions of today in one
+  // process drift apart across a timezone or a DST boundary, and the drift is
+  // invisible to a suite running in UTC: swapping this line for the common
+  // `toISOString().slice(0, 10)` idiom passes every test on a UTC runner and
+  // rejects a client's own date for part of the day anywhere east of it.
+  //
+  // It remains this server's today, not the client's. A client ahead of the
+  // server can still be told its date is in the future; omitting `date`, or
+  // passing "today", goes through this same call and always works.
+  const today = resolveDate('today');
   if (txnDate > today) {
     throw new Error(
       `Cannot book a reconciliation adjustment on ${txnDate}, which is after this ` +
@@ -180,7 +163,9 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
 export function registerReconcileCurrencyResidual(server: McpServer): void {
   server.tool(
     'reconcile_currency_residual',
-    'Book an adjustment transaction to bring a multi-currency account to the balance the bank reports, clearing accumulated FX-rate residual.',
+    'Book an adjustment transaction to bring a multi-currency account to the balance the bank reports, clearing accumulated FX-rate residual. ' +
+      'The date must be today or earlier. If a transaction with the same account, date and amount already exists this books nothing and ' +
+      'reports it instead; run it again to recompute, or pass allow_duplicate if the match is unrelated.',
     {
       account: z.string().describe('Account name or ID to reconcile'),
       category: z.string().describe('Category to book the adjustment under (name or ID)'),

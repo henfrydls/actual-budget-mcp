@@ -151,9 +151,11 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
         account: 'Card (CHF)',
         target_balance: 0,
         category: 'Cash-CHF',
-        date: '2027-06-05',
+        // Far enough ahead that the test does not become a time bomb: dated
+        // 2027, it would have started failing on 6 June 2027.
+        date: '2099-06-05',
       }),
-    ).rejects.toThrow(/2027-06-05.*after this server's today/s);
+    ).rejects.toThrow(/2099-06-05.*after this server's today/s);
 
     // Refused means nothing written.
     expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(1);
