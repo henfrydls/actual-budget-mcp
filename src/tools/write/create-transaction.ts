@@ -8,9 +8,15 @@ import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
 import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
+import {
+  findPossibleDuplicates,
+  describePossibleDuplicates,
+} from '../../utils/duplicate-check.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 
 export interface CreateTransactionInput {
+  /** Go ahead even though a transaction with the same account, date and amount exists. */
+  allow_duplicate?: boolean;
   account: string;
   amount: number;
   payee?: string;
@@ -84,6 +90,23 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
   if (categoryId) transaction.category = categoryId;
   if (input.notes) transaction.notes = input.notes;
+
+  const acctNameForCheck = accounts.find((a) => a.id === accountId)?.name || accountId;
+
+  // Asked before writing, and asked with the same values the write will use:
+  // `accountId`, `txnDate` and `amountCents` are the ones assembled above, not
+  // a second reading of the input. A check that asks a different question from
+  // the write it guards lies at the edges, which is the shape that produced two
+  // regressions in #96.
+  if (!input.allow_duplicate) {
+    const existing = await findPossibleDuplicates(accountId, txnDate, amountCents);
+    if (existing.length > 0) {
+      // Nothing is created. A warning that warns after creating leaves the
+      // duplicate behind, which is the harm this exists to prevent; the caller
+      // decides first, as the destructive tools already do.
+      return describePossibleDuplicates(existing, acctNameForCheck);
+    }
+  }
 
   // Label the write before sending it. This is what identifies the row
   // afterwards, instead of a snapshot and a date window (#93): rules can
@@ -199,6 +222,12 @@ export function registerCreateTransaction(server: McpServer): void {
         .optional()
         .default(false)
         .describe('Whether the transaction is cleared'),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Create it even though a transaction with the same account, date and amount already exists. Without this, such a call returns the existing one and creates nothing.',
+        ),
     },
     { title: 'Add transaction', readOnlyHint: false },
     async (input) => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, lastQuery } from './fake-query.js';
+import { fakeQ, lastQuery, answerByFilter } from './fake-query.js';
 
 // Mock the external Actual API. addTransactions returns the literal 'ok'
 // (matching the real SDK: api/transactions-add -> Promise<'ok'>), NOT an array
@@ -21,7 +21,7 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn().mockResolvedValue(undefined),
   // The write is given an id of our own and found again by querying for it,
   // which is what replaced the date window and the snapshot (#93).
-  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
   q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -48,9 +48,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
   it('forces the explicit category when the SDK overrides it with a learned one', async () => {
     // The created row, found by its marker, came back with the wrong (learned)
     // category.
-    vi.mocked(api.runQuery).mockResolvedValue({
-      data: [{ id: 'txn-new', category: 'cat-2', amount: -10000 }],
-    } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'txn-new', category: 'cat-2', amount: -10000 }] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -73,9 +71,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
   });
 
   it('does not call updateTransaction when the stored category already matches', async () => {
-    vi.mocked(api.runQuery).mockResolvedValue({
-      data: [{ id: 'txn-new', category: 'cat-1', amount: -10000 }],
-    } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'txn-new', category: 'cat-1', amount: -10000 }] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -91,7 +87,12 @@ describe('createTransaction (#26 explicit category must win)', () => {
     await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
 
     expect(api.addTransactions).toHaveBeenCalledOnce();
-    expect(api.runQuery).not.toHaveBeenCalled();
+    // The duplicate check queries before writing; what must not happen is the
+    // marker lookup, which only runs when a category has to be enforced.
+    const byId = vi
+      .mocked(api.runQuery)
+      .mock.calls.length > 0 && lastQuery.filter && 'id' in lastQuery.filter;
+    expect(byId).toBeFalsy();
     expect(api.updateTransaction).not.toHaveBeenCalled();
   });
 
@@ -99,9 +100,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
     // The old code found "rows that were not there before" within a date
     // range, so another process's transaction could be given this one's
     // category. A marker lookup returns one row: ours.
-    vi.mocked(api.runQuery).mockResolvedValue({
-      data: [{ id: 'ours', category: 'cat-2', amount: -10000 }],
-    } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'ours', category: 'cat-2', amount: -10000 }] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -115,7 +114,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
 
   it('warns on stderr when the row cannot be found to enforce its category', async () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(api.runQuery).mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -142,12 +141,22 @@ describe('a write that fails after it has already been applied', () => {
   const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
 
   /** What the marker lookup finds: our row, nothing, or an unreadable budget. */
+  /**
+   * Answers the marker lookup only. The duplicate check runs the other query
+   * on the same mock, and handing it these rows would make every write look
+   * like a duplicate and return before writing at all.
+   */
   const lookupFinds = (rows: Array<Record<string, unknown>> | null) => {
     vi.mocked(api.runQuery).mockReset();
     if (rows === null) {
-      vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
+      vi.mocked(api.runQuery).mockImplementation(async () => {
+        if ('id' in (lastQuery.filter ?? {})) throw new Error('budget will not open');
+        return { data: [] } as never;
+      });
     } else {
-      vi.mocked(api.runQuery).mockResolvedValue({ data: rows } as any);
+      vi.mocked(api.runQuery).mockImplementation(
+        answerByFilter({ byId: { data: rows } }) as never,
+      );
     }
   };
 
@@ -269,7 +278,7 @@ describe('create_transaction through its handler', () => {
   });
 
   it('does not report a saved write as an error', async () => {
-    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'ours' }] } }) as any);
 
     const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
 
@@ -279,7 +288,10 @@ describe('create_transaction through its handler', () => {
   });
 
   it('still reports an unknown outcome as an error', async () => {
-    vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if ('id' in (lastQuery.filter ?? {})) throw new Error('budget will not open');
+      return { data: [] } as never;
+    });
 
     const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
 
@@ -349,9 +361,13 @@ describe('when a rule turns the transaction into a split', () => {
     vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
     vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
     vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
-    vi.mocked(api.runQuery).mockReset().mockResolvedValue({
-      data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }],
-    } as any);
+    vi.mocked(api.runQuery)
+      .mockReset()
+      .mockImplementation(
+        answerByFilter({
+          byId: { data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }] },
+        }) as never,
+      );
 
     await createTransaction({
       account: 'Checking',

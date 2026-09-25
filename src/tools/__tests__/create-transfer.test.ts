@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, lastQuery } from './fake-query.js';
+import { fakeQ, lastQuery, answerByFilter } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -15,7 +15,7 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn().mockResolvedValue(undefined),
   // The write is given an id of our own and found again by querying for it,
   // which is what replaced the date window and the snapshot (#93).
-  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
   q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -103,7 +103,7 @@ describe('a transfer that fails after it has already been applied', () => {
   });
 
   it('does not report a plain failure when the transfer is there', async () => {
-    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'ours' }] } }) as any);
     vi.mocked(api.addTransactions).mockRejectedValue(failure());
 
     const result = await transfer();
@@ -145,7 +145,7 @@ describe('a transfer that fails after it has already been applied', () => {
   });
 
   it('covers the sync step, where the rows are in and the sync is not', async () => {
-    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'ours' }] } }) as any);
     vi.mocked(api.sync).mockRejectedValue(failure());
 
     expect((await transfer()).content[0].text).toMatch(/was saved/i);

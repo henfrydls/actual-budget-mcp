@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, lastQuery } from './fake-query.js';
+import { fakeQ, lastQuery, answerByFilter } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -16,7 +16,7 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn().mockResolvedValue(undefined),
   // The write is given an id of our own and found again by querying for it,
   // which is what replaced the date window and the snapshot (#93).
-  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
   q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -100,7 +100,9 @@ describe('a verdict arriving from createTransaction', () => {
     vi.mocked(api.getAccountBalance).mockResolvedValue(-10000 as any);
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
     // Found by the marker written with it, not by scanning a date range.
-    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [{ id: 'new' }] } as any);
+    vi.mocked(api.runQuery)
+      .mockReset()
+      .mockImplementation(answerByFilter({ byId: { data: [{ id: 'new' }] } }) as never);
     vi.mocked(api.addTransactions)
       .mockReset()
       .mockRejectedValue(new Error('We had an unknown problem opening "x"'));

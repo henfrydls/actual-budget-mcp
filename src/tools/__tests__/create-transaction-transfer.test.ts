@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fakeQ } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -18,6 +19,9 @@ vi.mock('@actual-app/api', () => ({
   addTransactions: vi.fn().mockResolvedValue('ok'),
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
+  // The duplicate check queries before writing (#88).
+  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
+  q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,

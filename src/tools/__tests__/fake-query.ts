@@ -41,3 +41,26 @@ export function fakeQ(table: string) {
   };
   return builder;
 }
+
+/**
+ * Answer a query by what it asked for.
+ *
+ * `create_transaction` now runs two different queries: the duplicate check
+ * before writing (by account, date and amount) and the marker lookup after a
+ * failure (by id). A single `runQuery` mock cannot serve both — it would hand
+ * the marker's row to the duplicate check and make every test look like a
+ * duplicate — and telling them apart is exactly what recording the query is
+ * for.
+ */
+export function answerByFilter(answers: {
+  byId?: unknown;
+  byAccountDateAmount?: unknown;
+  fallback?: unknown;
+}) {
+  return async () => {
+    const filter = lastQuery.filter ?? {};
+    if ('id' in filter) return answers.byId ?? { data: [] };
+    if ('account' in filter) return answers.byAccountDateAmount ?? { data: [] };
+    return answers.fallback ?? { data: [] };
+  };
+}
