@@ -487,3 +487,82 @@ describe('create_transaction: what it does with the duplicate check', () => {
     expect(api.sync).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * The promises that live on the wire, tested under the wire.
+ *
+ * Three mutations survived a full run with `SKIP_ACTUAL_INTEGRATION=1` and were
+ * caught only by the real engine: dropping `allow_duplicate` from the schema,
+ * returning the preview as an error, and listing one match out of several. The
+ * same asymmetry was fixed for `reconcile_currency_residual` two rounds ago and
+ * not carried back to the tool the whole PR is about. Integration is a second
+ * net here, never the only one.
+ */
+describe('create_transaction: the duplicate warning as a client meets it', () => {
+  const capture = () => {
+    let handler: unknown;
+    let schema: Record<string, unknown> | undefined;
+    registerCreateTransaction({
+      tool: (...a: unknown[]) => {
+        schema = a[2] as Record<string, unknown>;
+        handler = a.at(-1);
+      },
+    } as never);
+    return { handler: handler as (i: Record<string, unknown>) => Promise<any>, schema };
+  };
+
+  const twoExisting = {
+    data: [
+      { id: 'dup-one', date: '2026-09-21', amount: -5000, payee: null, notes: 'FIRST-MATCH' },
+      { id: 'dup-two', date: '2026-09-21', amount: -5000, payee: null, notes: 'SECOND-MATCH' },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+  });
+
+  it('advertises allow_duplicate on its schema, or the flag never arrives', () => {
+    // Unknown keys are dropped silently over the wire, so an interface field
+    // with no schema field is a parameter nobody can pass. The warning would
+    // then be a wall rather than a question.
+    expect(Object.keys(capture().schema ?? {})).toContain('allow_duplicate');
+  });
+
+  it('does not come back as an error, which is what invites the retry', () => {
+    // The code comments promise this and only the e2e checked it. An agent
+    // reading `isError` treats being asked as being refused, and retries, and
+    // retrying is what duplicates.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: twoExisting }) as never,
+    );
+
+    return capture()
+      .handler({ account: 'Checking', amount: -50, date: '2026-09-21' })
+      .then((res) => {
+        expect(res.isError).toBeUndefined();
+        expect(res.content[0].text).toMatch(/already exist/i);
+        expect(res.content[0].text).not.toMatch(/^Error:/);
+      });
+  });
+
+  it('lists every match in the body, not only in the count', async () => {
+    // The header test reads the first line only, so truncating the loop to one
+    // row was invisible to it. The ids are what a caller acts on, and being
+    // told "2 transactions" while shown one is worse than being told nothing.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: twoExisting }) as never,
+    );
+
+    const res = await capture().handler({ account: 'Checking', amount: -50, date: '2026-09-21' });
+    const text = res.content[0].text;
+
+    expect(text).toContain('FIRST-MATCH');
+    expect(text).toContain('SECOND-MATCH');
+    expect(text).toContain('id: dup-one');
+    expect(text).toContain('id: dup-two');
+  });
+});

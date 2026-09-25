@@ -217,6 +217,59 @@ describe('reconcile_currency_residual: what #88 added', () => {
     expect(api.sync).not.toHaveBeenCalled();
   });
 
+  it('explains why, not just that it refused', async () => {
+    // The remedy and the reason were the only parts a reader can act on and
+    // the only parts nothing pinned: the whole explanation could be deleted
+    // with the suite green, leaving a bare refusal.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/would not take effect/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/balance the bank reports now/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/Use today or a past date/);
+  });
+
+  it('refuses through the handler as an error, not as a result', async () => {
+    // The two refusal tests call the function directly, so nothing watched the
+    // wire. Returning the refusal without `isError` would let its text read as
+    // a reconciliation that happened.
+    let handler: any;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => { handler = a.at(-1); },
+    } as never);
+
+    const res = await handler({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: '2099-01-01',
+    });
+
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/^Error:/);
+    expect(res.content[0].text).toMatch(/after this server's today/);
+  });
+
   it('points at the tool that does record a date ahead', async () => {
     // Recording a purchase before the bank posts it is ordinary, and it is
     // create_transaction's job. Saying only "use a past date" sends someone

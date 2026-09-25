@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fakeQ, lastQuery } from '../../tools/__tests__/fake-query.js';
 
 const calls: string[] = [];
+const asked: Array<Record<string, unknown>> = [];
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -16,7 +17,14 @@ vi.mock('@actual-app/api', () => ({
     await Promise.resolve();
     calls.push('sync:done');
   }),
-  runQuery: vi.fn().mockImplementation(async () => { calls.push('runQuery'); return { data: [] }; }),
+  // Recorded at the moment of the call. Reading `lastQuery` after the fact
+  // describes whichever query ran last, which happens to be the only one here
+  // and would quietly stop meaning anything the day this path issues a second.
+  runQuery: vi.fn().mockImplementation(async () => {
+    calls.push('runQuery');
+    asked.push({ ...lastQuery });
+    return { data: [] };
+  }),
   getPayees: vi.fn().mockResolvedValue([
     { id: 'p-1', name: 'Farmacia Carol' },
     { id: 'p-2', name: 'Supermercado Nacional' },
@@ -108,6 +116,7 @@ describe('describePossibleDuplicates: the text the caller acts on', () => {
 describe('findPossibleDuplicates: the question it asks', () => {
   beforeEach(() => {
     calls.length = 0;
+    asked.length = 0;
     vi.mocked(api.sync).mockClear().mockImplementation(async () => {
       calls.push('sync:start');
       await Promise.resolve();
@@ -116,7 +125,11 @@ describe('findPossibleDuplicates: the question it asks', () => {
     });
     vi.mocked(api.runQuery)
       .mockClear()
-      .mockImplementation(async () => { calls.push('runQuery'); return { data: [] } as never; });
+      .mockImplementation(async () => {
+        calls.push('runQuery');
+        asked.push({ ...lastQuery });
+        return { data: [] } as never;
+      });
   });
 
   it('waits for the pull to finish before it looks', async () => {
@@ -139,7 +152,7 @@ describe('findPossibleDuplicates: the question it asks', () => {
     // the user cannot find.
     await findPossibleDuplicates('acc-1', '2026-06-05', -4000);
 
-    expect(lastQuery.filter).toEqual({
+    expect(asked[0].filter).toEqual({
       account: 'acc-1',
       date: '2026-06-05',
       amount: -4000,
@@ -150,14 +163,14 @@ describe('findPossibleDuplicates: the question it asks', () => {
   it('asks for splits, so a duplicated split parent is visible', async () => {
     await findPossibleDuplicates('acc-1', '2026-06-05', -7000);
 
-    expect(lastQuery.options).toEqual({ splits: 'all' });
+    expect(asked[0].options).toEqual({ splits: 'all' });
   });
 
   it('selects the transfer marker, or a transfer cannot be named as one', async () => {
     await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
 
-    expect(lastQuery.select).toContain('transfer_id');
-    expect(lastQuery.select).toContain('id');
+    expect(asked[0].select).toContain('transfer_id');
+    expect(asked[0].select).toContain('id');
   });
 
   it('says on stderr that the check was weakened when the pull fails', async () => {
