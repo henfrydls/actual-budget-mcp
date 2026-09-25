@@ -488,10 +488,14 @@ that has already been deduplicated elsewhere pays nothing.
 
 **Offline and hung servers.** If the sync fails the check still runs against the
 local copy and the write is not blocked, so an offline session keeps working
-with a weaker check rather than no writes. A server that accepts the connection
-and then never answers is worse: the underlying Actual library sets no timeout,
-so the call waits, and this adds a second place where that can happen, now
-before the write rather than after it.
+with a weaker check rather than no writes. It says so on stderr, with the
+reason, so a weakened check is never silent.
+
+A server that accepts the connection and then never answers is the slow case:
+the Actual library sets no timeout of its own, so the call falls back to Node's
+own five-minute header timeout before failing. This PR adds a second place
+where that can happen, now before the write rather than after it, so a hung
+server can cost twice as long as it used to. Tracked in #99.
 
 What it does not catch:
 
@@ -503,6 +507,12 @@ What it does not catch:
   is not the same as doing both at once.
 - `create_transfer` and `create_split_transaction`, which do not run the check
   yet, and an opening balance from `create_account`. Tracked in #98.
+
+`reconcile_currency_residual` refuses a date in the future. Its whole promise is
+to bring the account to the balance the bank reports now, and an adjustment that
+takes effect later does not do that. It also could not be made to behave: the
+balance counts transactions up to today, so a future-dated adjustment never
+entered it and every run booked another one.
 
 ### Read-only mode
 
@@ -603,7 +613,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **create_split_transaction** - `account` (required) | `amount` (required): total, must equal the sum of the splits | `splits` (required): two or more `{category, amount, notes}` | `payee`, `date`, `notes`, `cleared` (all optional)
 
-**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `date`, `notes` (all optional) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day
+**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day
 
 **run_bank_sync** - `account` (optional): sync specific account or all if omitted
 

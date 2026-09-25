@@ -160,6 +160,39 @@ describe('findPossibleDuplicates: the question it asks', () => {
     expect(lastQuery.select).toContain('id');
   });
 
+  it('says on stderr that the check was weakened when the pull fails', async () => {
+    // Silently falling back leaves no trace anywhere: the caller gets an
+    // ordinary answer computed from a copy that may be missing exactly the row
+    // it was asked about. The whole branch could be deleted and only the
+    // fallback behaviour was covered, not the telling.
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.sync).mockRejectedValue(new Error('server offline or unreachable'));
+
+    await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
+
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringMatching(/could not sync.*only this machine/is),
+    );
+    // And it carries the reason, or the note is unactionable.
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining('server offline or unreachable'));
+    stderr.mockRestore();
+  });
+
+  it('does not name one tool in a warning this module shares', async () => {
+    // It said `[create_transaction]` from inside a shared module. #98 gives it
+    // create_transfer and create_split_transaction as callers, at which point
+    // the prefix states something false.
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.sync).mockRejectedValue(new Error('offline'));
+
+    await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
+
+    const said = stderr.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(said).toContain('[actual-budget-mcp]');
+    expect(said).not.toContain('create_transaction');
+    stderr.mockRestore();
+  });
+
   it('still answers from the local copy when the sync fails', async () => {
     // Being unable to reach the server must not stop anyone recording a
     // transaction. The check gets weaker, not fatal.

@@ -7,6 +7,7 @@ vi.mock('@actual-app/api', () => ({
     { id: 'acc-1', name: 'Card (USD)', closed: false, offbudget: false },
   ]),
   getAccountBalance: vi.fn(),
+  getPayees: vi.fn().mockResolvedValue([]),
   getCategories: vi.fn().mockResolvedValue([
     { id: 'cat-1', name: 'Cashback', group_id: 'g1', hidden: false },
   ]),
@@ -144,5 +145,155 @@ describe('reconcile_currency_residual: verdicts other than "saved"', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/could not be.*determined/is);
+  });
+});
+
+/**
+ * Everything #88 added to this tool, covered here and not only in the
+ * integration file. That file is `describe.skipIf(SKIP_ACTUAL_INTEGRATION)`,
+ * so with the engine skipped the pull, the refusal, the flag and the
+ * conditional header all had no net at all.
+ */
+describe('reconcile_currency_residual: what #88 added', () => {
+  const order: string[] = [];
+
+  beforeEach(() => {
+    order.length = 0;
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+    vi.mocked(api.sync).mockReset().mockImplementation(async () => {
+      order.push('sync:start');
+      await Promise.resolve();
+      await Promise.resolve();
+      order.push('sync:done');
+    });
+    vi.mocked(api.getAccountBalance).mockReset().mockImplementation(async () => {
+      order.push('balance');
+      return -10000;
+    });
+  });
+
+  it('waits for the pull to finish before reading the balance', async () => {
+    // Start and finish, because a promise started without being awaited still
+    // gets its call in first.
+    await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: '2026-06-05',
+    });
+
+    expect(order.slice(0, 3)).toEqual(['sync:start', 'sync:done', 'balance']);
+  });
+
+  it('refuses a date in the future and writes nothing', async () => {
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/2099-01-01.*in the future/s);
+
+    expect(api.addTransactions).not.toHaveBeenCalled();
+    // Refused before reading anything, so it costs nothing either.
+    expect(api.getAccountBalance).not.toHaveBeenCalled();
+  });
+
+  it('accepts today, which is the boundary the refusal must not eat', async () => {
+    const lines = await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: 'today',
+    });
+
+    expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+  });
+
+  it('does not announce a reconciliation when the create found a duplicate', async () => {
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({
+        byAccountDateAmount: {
+          data: [{ id: 'other-1', date: '2026-06-05', amount: 10000, payee: null, notes: 'UNRELATED' }],
+        },
+      }) as never,
+    );
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-06-05',
+      })
+    ).join('\n');
+
+    expect(text).not.toMatch(/Currency residual reconciled/);
+    expect(text).toMatch(/No adjustment was booked/);
+    expect(text).toContain('UNRELATED');
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('tells the caller to run it again, not to force the write past the check', async () => {
+    // The generic advice is "pass allow_duplicate", which for this tool is its
+    // least safe move: it writes an amount computed from an earlier balance.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({
+        byAccountDateAmount: {
+          data: [{ id: 'other-1', date: '2026-06-05', amount: 10000, payee: null, notes: 'X' }],
+        },
+      }) as never,
+    );
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-06-05',
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/run this again/i);
+    expect(text).toMatch(/recompute/i);
+  });
+
+  it('passes the flag through, so the caller can overrule the match', async () => {
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({
+        byAccountDateAmount: {
+          data: [{ id: 'other-1', date: '2026-06-05', amount: 10000, payee: null, notes: 'X' }],
+        },
+      }) as never,
+    );
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-06-05',
+        allow_duplicate: true,
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/Currency residual reconciled/);
+    expect(api.addTransactions).toHaveBeenCalled();
+  });
+
+  it('advertises allow_duplicate on its schema, or the flag never arrives', async () => {
+    // Unknown keys are dropped silently over the wire, so an interface field
+    // without a schema field is a parameter nobody can pass.
+    let schema: Record<string, unknown> | undefined;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => {
+        schema = a[2] as Record<string, unknown>;
+      },
+    } as never);
+
+    expect(Object.keys(schema ?? {})).toContain('allow_duplicate');
   });
 });

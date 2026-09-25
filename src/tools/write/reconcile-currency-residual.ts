@@ -4,7 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { amountToCents, centsToAmount, formatMoney } from '../../utils/money.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
-import { resolveDate } from '../../utils/dates.js';
+import { resolveDate, formatDate } from '../../utils/dates.js';
 import { createTransaction } from './create-transaction.js';
 import { pullBeforeReading, isDuplicatePreview } from '../../utils/duplicate-check.js';
 import { describeError } from '../../utils/errors.js';
@@ -40,22 +40,42 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   // #88 scenario reappearing on the one path that computes what it writes.
   await pullBeforeReading('reading the balance to reconcile');
 
-  // `getAccountBalance` defaults its cutoff to now, and the query behind it is
-  // `date <= cutoff`. An adjustment booked with a future date therefore never
-  // counts towards the balance, so every run computed the same delta and wrote
-  // another adjustment: two runs, two adjustments, and an account left at +200
-  // while the balance still read -100. Counting up to the adjustment's own date
-  // makes the second run see the first one and stop at "No adjustment needed".
+  // An adjustment dated ahead cannot do what this tool is for. The promise is
+  // "bring the account to the balance the bank reports"; a row that takes
+  // effect next year leaves the account not matching the bank today, so the
+  // reply would state a reconciliation that has not happened.
   //
-  // The later of the two, so a past or same-day adjustment keeps the previous
-  // meaning exactly: today's balance, not the balance as of some date in the
-  // past.
+  // It was also unsound. `getAccountBalance` counts `date <= cutoff` with the
+  // cutoff defaulting to now, so a future-dated adjustment never enters the
+  // balance: every run computed the same delta and wrote another one. An
+  // earlier attempt moved the cutoff to the adjustment's own date instead,
+  // which stopped the identical repeat but bought two worse problems. It made
+  // `Was:` mean the balance as of a future date, so with any pre-existing
+  // future row the figure stopped matching the statement the user is comparing
+  // against (measured: the bank says -100.00, the tool said -150.00 and booked
+  // +150.00). And it did not even close the hole, because a second run with no
+  // date measures at today, does not count the future adjustment, and books a
+  // second one (measured: two adjustments, account left at +100.00).
+  //
+  // Refusing is the whole fix: the cutoff goes back to today, `Was:` means what
+  // the bank means, and a repeat at the same date is caught by the duplicate
+  // check that #88 put in front of every create.
+  //
+  // Compared as strings. Both sides are `YYYY-MM-DD`, so this is exact and has
+  // no timezone or DST behaviour to get wrong, unlike parsing to `Date` (which
+  // also silently rolls an impossible date like 2026-02-30 into March while
+  // the stored transaction keeps the original string).
   const txnDate = resolveDate(input.date);
-  const today = new Date();
-  const asOf = new Date(`${txnDate}T00:00:00`);
-  const cutoff = asOf > today ? asOf : today;
+  const today = formatDate(new Date());
+  if (txnDate > today) {
+    throw new Error(
+      `Cannot book a reconciliation adjustment on ${txnDate}, which is in the future. ` +
+        'The adjustment would not take effect until that date, so the account would not ' +
+        'match the balance the bank reports now. Use today or a past date.',
+    );
+  }
 
-  const currentCents = await api.getAccountBalance(accountId, cutoff);
+  const currentCents = await api.getAccountBalance(accountId);
   const targetCents = amountToCents(input.target_balance ?? 0);
   const deltaCents = targetCents - currentCents;
 
@@ -85,6 +105,15 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     date: input.date,
     payee: input.payee,
     allow_duplicate: input.allow_duplicate,
+    // Not "pass allow_duplicate", which is this tool's least safe move: it
+    // forces the write past the check while the delta was computed from a
+    // balance read moments earlier. Running again recomputes from a fresh
+    // balance and stops by itself if the adjustment is already there.
+    duplicateAdvice: [
+      'Same account, same date, same amount. If that row is this adjustment,',
+      'already booked, run this again and it will recompute from the balance',
+      'and stop. Only pass allow_duplicate: true if the match is unrelated.',
+    ],
   });
 
   // Nothing was written, so nothing may be announced. The header used to print

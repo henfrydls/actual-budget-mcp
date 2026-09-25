@@ -17,6 +17,12 @@ import { updatePreservingChildAmount } from '../../utils/transactions.js';
 export interface CreateTransactionInput {
   /** Go ahead even though a transaction with the same account, date and amount exists. */
   allow_duplicate?: boolean;
+  /**
+   * What to tell the caller instead of the default "pass allow_duplicate".
+   * Internal: set by tools that create through this one and whose safe way
+   * forward is different. Not part of the tool's own schema.
+   */
+  duplicateAdvice?: string[];
   account: string;
   amount: number;
   payee?: string;
@@ -109,7 +115,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       // repeated call cannot destroy anything by accident; here a repeated
       // call creates nothing at all, and flagging an error would push an agent
       // towards the retry that duplicates.
-      return describePossibleDuplicates(existing, acctNameForCheck);
+      return describePossibleDuplicates(existing, acctNameForCheck, input.duplicateAdvice);
     }
   }
 

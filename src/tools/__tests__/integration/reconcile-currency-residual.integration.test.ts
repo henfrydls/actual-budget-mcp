@@ -127,13 +127,15 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
     expect((await api.getTransactions(acctId, '2026-06-05', '2026-06-05')).length).toBe(2);
   }, 60_000);
 
-  it('does not book a second adjustment when the first one is dated ahead', async () => {
-    // getAccountBalance counts `date <= cutoff` and defaults the cutoff to now,
-    // so a future-dated adjustment never entered the balance: every run
-    // computed the same delta and wrote another one. Two runs left the account
-    // at +200 while the balance still read -100.
+  it('refuses a future date rather than booking something that cannot reconcile', async () => {
+    // Measured, both ways round, before this became a refusal: the balance
+    // counts `date <= today`, so an adjustment dated ahead never entered it.
+    // Two runs at the same future date wrote two adjustments; and moving the
+    // cutoff to the adjustment's own date instead made `Was:` disagree with
+    // the bank statement and still left a second run with no date free to book
+    // again.
     let acctId = '';
-    const budgetId = await createFreshBudget(async () => {
+    await createFreshBudget(async () => {
       acctId = await api.createAccount({ name: 'Card (CHF)', type: 'credit' } as any, 0);
       const g = await api.createCategoryGroup({ name: 'G-CHF' } as any);
       await api.createCategory({ name: 'Cash-CHF', group_id: g } as any);
@@ -144,43 +146,98 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
       );
     });
 
-    const args = {
-      account: 'Card (CHF)',
-      target_balance: 0,
-      category: 'Cash-CHF',
-      date: '2027-06-05',
-    };
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (CHF)',
+        target_balance: 0,
+        category: 'Cash-CHF',
+        date: '2027-06-05',
+      }),
+    ).rejects.toThrow(/2027-06-05.*in the future/s);
+
+    // Refused means nothing written.
+    expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(1);
+  }, 60_000);
+
+  it('reports the balance the bank would report, not one as of some other day', async () => {
+    // A pre-existing future row must not move the figure the user compares
+    // against their statement. The cutoff that briefly lived here made this
+    // say -150.00 where the bank says -100.00, and book +150.00.
+    let acctId = '';
+    await createFreshBudget(async () => {
+      acctId = await api.createAccount({ name: 'Card (NOK)', type: 'credit' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G-NOK' } as any);
+      await api.createCategory({ name: 'Cash-NOK', group_id: g } as any);
+      await api.addTransactions(
+        acctId,
+        [
+          { date: '2026-05-01', amount: -10000, payee_name: 'FX drift' },
+          { date: '2099-01-01', amount: -5000, payee_name: 'Scheduled, far ahead' },
+        ] as any,
+        { learnCategories: false, runTransfers: false },
+      );
+    });
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (NOK)',
+        target_balance: 0,
+        category: 'Cash-NOK',
+      })
+    ).join('\n');
+
+    expect(text).toContain('Was:        -100.00');
+    expect(text).toContain('Adjustment: 100.00');
+    // And it agrees with what the SDK reports for the account today.
+    expect(await api.getAccountBalance(acctId)).toBe(0);
+  }, 60_000);
+
+  it('stops by itself on a second run at the same date', async () => {
+    // The guarantee that replaced the cutoff: once the adjustment is in, the
+    // balance equals the target and the second run never reaches the write.
+    let acctId = '';
+    await createFreshBudget(async () => {
+      acctId = await api.createAccount({ name: 'Card (SEK)', type: 'credit' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G-SEK' } as any);
+      await api.createCategory({ name: 'Cash-SEK', group_id: g } as any);
+      await api.addTransactions(
+        acctId,
+        [{ date: '2026-05-01', amount: -10000, payee_name: 'FX drift' }] as any,
+        { learnCategories: false, runTransfers: false },
+      );
+    });
+
+    const args = { account: 'Card (SEK)', target_balance: 0, category: 'Cash-SEK' };
     await reconcileCurrencyResidual(args);
     const second = (await reconcileCurrencyResidual(args)).join('\n');
 
     expect(second).toMatch(/No adjustment needed/);
-
-    await api.loadBudget(budgetId);
     const all = await api.getTransactions(acctId, '1900-01-01', '2099-12-31');
     expect(all.filter((t: any) => t.amount === 10000)).toHaveLength(1);
-    // The true sum of the account, which is what a second adjustment corrupts.
-    expect(all.reduce((sum: number, t: any) => sum + t.amount, 0)).toBe(0);
   }, 60_000);
 
-  it('pulls before reading the balance, not merely at some point', async () => {
+  it('waits for the pull to finish before reading the balance', async () => {
     // Reconcile computes what it writes from the balance, so a stale balance
     // is a wrong adjustment, not merely a missed warning.
     //
-    // Asserting the order, because `createTransaction` syncs too, both before
-    // its own check and after its write: "sync was called" is true even with
-    // reconcile's own pull deleted, so it cannot fail.
+    // Start AND finish, not just which call came first. A promise started and
+    // not awaited still gets its call in first, so `void pullBeforeReading()`
+    // satisfied an order-of-start check while the balance was read against the
+    // copy the pull was meant to refresh. That is the same hole this round
+    // closed in the util and then reproduced here.
     const { category } = await budgetWithACollision('Card (JPY)');
 
     const order: string[] = [];
     vi.mocked(api.sync).mockClear().mockImplementation(async () => {
-      order.push('sync');
+      order.push('sync:start');
+      await Promise.resolve();
+      await Promise.resolve();
+      order.push('sync:done');
     });
-    const balanceSpy = vi
-      .spyOn(api, 'getAccountBalance')
-      .mockImplementation(async () => {
-        order.push('balance');
-        return -10000;
-      });
+    const balanceSpy = vi.spyOn(api, 'getAccountBalance').mockImplementation(async () => {
+      order.push('balance');
+      return -10000;
+    });
 
     await reconcileCurrencyResidual({
       account: 'Card (JPY)',
@@ -190,7 +247,6 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
     });
 
     balanceSpy.mockRestore();
-    expect(order[0]).toBe('sync');
-    expect(order).toContain('balance');
+    expect(order.slice(0, 3)).toEqual(['sync:start', 'sync:done', 'balance']);
   }, 60_000);
 });

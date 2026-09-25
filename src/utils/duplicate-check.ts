@@ -149,6 +149,10 @@ export function isDuplicatePreview(lines: string[]): boolean {
 export function describePossibleDuplicates(
   existing: ExistingTransaction[],
   accountName: string,
+  advice: string[] = [
+    'Same account, same date, same amount. If this is a second, genuine payment',
+    'rather than the same one recorded twice, call again with allow_duplicate: true.',
+  ],
 ): string[] {
   const lines = [
     existing.length === 1
@@ -170,10 +174,10 @@ export function describePossibleDuplicates(
     lines.push(`    id: ${t.id}`);
   }
 
-  lines.push(
-    '',
-    'Same account, same date, same amount. If this is a second, genuine payment',
-    'rather than the same one recorded twice, call again with allow_duplicate: true.',
-  );
+  // The way through is the caller's to choose, and it is not the same for
+  // every tool that creates. `reconcile_currency_residual` computes what it
+  // writes from the balance, so its safe move is to run again and let it
+  // recompute, not to force the write past the check.
+  lines.push('', ...advice);
   return lines;
 }

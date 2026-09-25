@@ -84,15 +84,22 @@ describe('createTransaction (#26 explicit category must win)', () => {
   });
 
   it('looks the row up only when a category has to be enforced', async () => {
+    // Recorded inside the mock, per call. Reading `lastQuery` after the fact
+    // only ever describes whichever query happened to run last, so it would
+    // stop meaning anything the moment another query were added after this
+    // one, and it could not fail.
+    const byId: unknown[] = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'id' in lastQuery.filter) byId.push(lastQuery.filter);
+      return { data: [] } as never;
+    });
+
     await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
 
     expect(api.addTransactions).toHaveBeenCalledOnce();
     // The duplicate check queries before writing; what must not happen is the
     // marker lookup, which only runs when a category has to be enforced.
-    const byId = vi
-      .mocked(api.runQuery)
-      .mock.calls.length > 0 && lastQuery.filter && 'id' in lastQuery.filter;
-    expect(byId).toBeFalsy();
+    expect(byId).toHaveLength(0);
     expect(api.updateTransaction).not.toHaveBeenCalled();
   });
 
@@ -398,6 +405,23 @@ describe('create_transaction: what it does with the duplicate check', () => {
     vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
     vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+  });
+
+  it('names the account, not the id it was given', async () => {
+    // The preview's account column comes from the wiring, not the util: the
+    // unit test for the text hands it a name directly, so it only proves the
+    // util prints what it is given. Passing an id through and getting the id
+    // back would be a row the reader cannot place.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: anExisting }) as never,
+    );
+
+    const text = (
+      await createTransaction({ account: 'acc-1', amount: -50, date: '2026-09-21' })
+    ).join('\n');
+
+    expect(text).toContain('Checking');
+    expect(text).not.toContain('acc-1');
   });
 
   it('refuses on a single match, not only on several', async () => {
