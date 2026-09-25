@@ -188,7 +188,11 @@ describe.skipIf(skip)('warning about a transaction that already exists (#88)', (
     ).join('\n');
 
     expect(text).toMatch(/Transaction created/);
-    expect(text).not.toContain('PARENTPAYEE-UNIQUE');
+    // Independent of the line above: the row has to actually be in the
+    // register. Asserting instead that the refusal did not name the parent's
+    // payee would add nothing, since it cannot fail unless this one does.
+    const rows = await api.getTransactions(checking, '2026-06-05', '2026-06-05');
+    expect(rows.filter((t: any) => t.amount === -4000 && !t.is_child)).toHaveLength(1);
   });
 
   it('says when the match is the far leg of a transfer', async () => {
