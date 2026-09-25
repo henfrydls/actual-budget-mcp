@@ -96,4 +96,53 @@ describe.skipIf(skip)('get_transactions through the MCP protocol (#81)', () => {
     expect(res.content[0].text).toMatch(/ALREADY-SORTED/);
     expect(res.content[0].text).toMatch(/AWAITING-A-CATEGORY/);
   });
+
+  it('advertises notes_contains too, since a client cannot use what it cannot see', async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'get_transactions');
+
+    expect(Object.keys((tool!.inputSchema as { properties: object }).properties)).toContain(
+      'notes_contains',
+    );
+  });
+
+  it('honours notes_contains over the wire', async () => {
+    // The promise is "a filter on get_transactions", and that lives in the
+    // schema: an unknown key is dropped silently by the SDK, so a missing one
+    // returns everything with no error anywhere.
+    await budget();
+
+    const res = await call('get_transactions', {
+      notes_contains: 'AWAITING',
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toMatch(/AWAITING-A-CATEGORY/);
+    expect(res.content[0].text).not.toMatch(/ALREADY-SORTED/);
+  });
+
+  it('describes what it returns, including the split note', async () => {
+    // The protocol tests read inputSchema.properties, so the tool's own
+    // description could be reverted to master's without failing anything.
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'get_transactions');
+
+    expect(tool!.description).toMatch(/split/i);
+  });
+
+  it('tells a client that the search is not limited to this month', async () => {
+    // A client reads the schema, not the source. Without this the parameter
+    // looked like a filter over the default window.
+    const { tools } = await client.listTools();
+    const props = (tools.find((t) => t.name === 'get_transactions')!.inputSchema as {
+      properties: Record<string, { description?: string }>;
+    }).properties;
+
+    expect(props.notes_contains.description).toMatch(/every date/i);
+    expect(props.start_date.description).toMatch(/notes_contains/);
+    // Both ends: only one of them was asserted, so the other could be reverted.
+    expect(props.end_date.description).toMatch(/notes_contains/);
+  });
 });

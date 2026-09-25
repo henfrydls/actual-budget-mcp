@@ -68,7 +68,7 @@ describe.skipIf(skip)('listing transactions that have no category (#81)', () => 
   }
 
   it('returns what needs a category and nothing else', async () => {
-    await budgetWithEverything();
+    const { checking } = await budgetWithEverything();
 
     const report = await getTransactionsReport({
       start_date: '2026-06-01',
@@ -86,9 +86,14 @@ describe.skipIf(skip)('listing transactions that have no category (#81)', () => 
     // A transfer between your own accounts is not spending and never takes a
     // category, so listing it as work to do is noise.
     expect(report).not.toMatch(/moving my own money/);
-    // The parent of a split has no category by design: its categories live on
-    // its parts, which are listed separately.
-    expect(report).not.toMatch(/a split\b/);
+    // The parent of a split is not offered as work: its categories live on its
+    // parts, which are listed separately. Its note is now visible in the
+    // "Split of" column of those parts (#82), so the check is that the parent
+    // row itself is absent, not that its text is.
+    const rows = await api.getTransactions(checking, '2026-06-01', '2026-06-30');
+    const parentId = (rows as any[]).find((r) => r.is_parent)?.id as string;
+    expect(parentId).toBeTruthy();
+    expect(report).not.toContain(parentId);
     expect(report).not.toMatch(/off budget/);
   });
 
