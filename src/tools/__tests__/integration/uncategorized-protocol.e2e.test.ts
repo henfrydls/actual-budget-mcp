@@ -96,4 +96,30 @@ describe.skipIf(skip)('get_transactions through the MCP protocol (#81)', () => {
     expect(res.content[0].text).toMatch(/ALREADY-SORTED/);
     expect(res.content[0].text).toMatch(/AWAITING-A-CATEGORY/);
   });
+
+  it('advertises notes_contains too, since a client cannot use what it cannot see', async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'get_transactions');
+
+    expect(Object.keys((tool!.inputSchema as { properties: object }).properties)).toContain(
+      'notes_contains',
+    );
+  });
+
+  it('honours notes_contains over the wire', async () => {
+    // The promise is "a filter on get_transactions", and that lives in the
+    // schema: an unknown key is dropped silently by the SDK, so a missing one
+    // returns everything with no error anywhere.
+    await budget();
+
+    const res = await call('get_transactions', {
+      notes_contains: 'AWAITING',
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
+    });
+
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toMatch(/AWAITING-A-CATEGORY/);
+    expect(res.content[0].text).not.toMatch(/ALREADY-SORTED/);
+  });
 });

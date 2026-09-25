@@ -476,7 +476,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **get_budget_month** - `month` (optional): YYYY-MM or natural language ("this month", "last month", "enero 2025")
 
-**get_transactions** - `account` (optional): account name | `start_date` / `end_date` (optional): YYYY-MM-DD or natural language | `category` (optional): category name | `payee` (optional): payee name | `min_amount` / `max_amount` (optional): filter by amount | `uncategorized` (optional): only transactions with no category, leaving out split parents, transfers between accounts on the same side of the budget, and off-budget accounts; searches all dates unless you give a range | `limit` (optional, default 50)
+**get_transactions** - `account` (optional): account name | `start_date` / `end_date` (optional): YYYY-MM-DD or natural language | `category` (optional): category name | `payee` (optional): payee name | `min_amount` / `max_amount` (optional): filter by amount | `notes_contains` (optional): text to find in the notes, case-insensitive, matching the note of the split a transaction belongs to as well | `uncategorized` (optional): only transactions with no category, leaving out split parents, transfers between accounts on the same side of the budget, and off-budget accounts; searches all dates unless you give a range | `limit` (optional, default 50)
 
 **get_category_balance** - `category` (required): category name or ID | `months` (optional, default 3): months to look back
 

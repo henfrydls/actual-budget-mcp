@@ -17,6 +17,7 @@ export interface GetTransactionsInput {
   min_amount?: number;
   max_amount?: number;
   uncategorized?: boolean;
+  notes_contains?: string;
   limit?: number;
 }
 
@@ -33,6 +34,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     min_amount,
     max_amount,
     uncategorized,
+    notes_contains,
     limit = 50,
   } = input;
 
@@ -100,6 +102,8 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     parent_id?: string | null;
     subtransactions?: any[];
     transfer_id?: string | null;
+    /** The note on the split this row is part of, if it is one. */
+    splitOf?: string | null;
   }> = [];
 
   for (const accId of accountIds) {
@@ -120,7 +124,14 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
             payee: sub.payee || t.payee,
             // Cleared status is a property of the parent (bank-facing) transaction
             cleared: (t as any).cleared,
-            notes: sub.notes ? `[Split] ${sub.notes}` : `[Split]`,
+            notes: sub.notes || '',
+            // The parent's note, which used to be dropped here and could not be
+            // read back through any tool: written and unreadable. On a real
+            // budget 12 of 15 splits carry one, and they hold the meaning —
+            // what the purchase was, who is being reimbursed. It goes in a
+            // column of its own rather than inside this note, so each part
+            // still reads as one line about one thing.
+            splitOf: (t as any).notes || '',
           });
         }
       } else if (!(t as any).is_child) {
@@ -199,6 +210,24 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     });
   }
 
+  if (notes_contains) {
+    // Both the row's own note and the note of the split it belongs to, because
+    // both are shown. What is searched and what is displayed must be the same
+    // string: a row matching on text the reader cannot see looks like a broken
+    // search, and here it was one — a note on a split parent could not be read
+    // back at all.
+    //
+    // `toLowerCase` on both sides and nothing else. Folding accents on the
+    // search side only would match "cafe" against a displayed "café" and leave
+    // no way to see why.
+    const needle = notes_contains.toLowerCase();
+    allTransactions = allTransactions.filter((t) => {
+      const own = (t.notes || '').toLowerCase();
+      const parent = (t.splitOf || '').toLowerCase();
+      return own.includes(needle) || parent.includes(needle);
+    });
+  }
+
   if (payee) {
     const lower = payee.toLowerCase();
     allTransactions = allTransactions.filter((t) => {
@@ -231,7 +260,20 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   ];
 
   // Cleared is appended after the existing columns to preserve backward compatibility.
-  const headers = ['ID', 'Date', 'Payee', 'Category', 'Amount', 'Account', 'Notes', 'Cleared'];
+  // "Split of" is appended after the existing columns, as Cleared was before
+  // it, so nothing reading this table by position moves. It is empty on
+  // ordinary rows, so it costs nothing outside splits.
+  const headers = [
+    'ID',
+    'Date',
+    'Payee',
+    'Category',
+    'Amount',
+    'Account',
+    'Notes',
+    'Cleared',
+    'Split of',
+  ];
   const rows = limited.map((t) => [
     t.id,
     t.date,
@@ -241,6 +283,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     accountMap.get(t.account) || '',
     t.notes || '',
     t.cleared ? '✓' : '✗',
+    t.splitOf || '',
   ]);
 
   lines.push(
@@ -250,6 +293,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
       'left',
       'left',
       'right',
+      'left',
       'left',
       'left',
       'left',
@@ -304,6 +348,12 @@ export function registerGetTransactions(server: McpServer): void {
         .optional()
         .describe(
           'Only transactions with no category. Left out: split parents (their categories live on their parts), transfers between accounts on the same side of the budget (Actual clears those), and off-budget accounts (they take no categories at all). Searches all dates unless you give a range.',
+        ),
+      notes_contains: z
+        .string()
+        .optional()
+        .describe(
+          'Only transactions whose notes contain this text, case-insensitive. Also matches the note on the split a transaction belongs to, shown in the "Split of" column.',
         ),
       limit: z
         .number()
