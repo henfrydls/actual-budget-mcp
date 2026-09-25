@@ -341,4 +341,82 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     expect(report).toMatch(/Claro Dominicana/);
     expect(report).not.toMatch(/Starlink/);
   });
+
+  /**
+   * The note filter composes with every other filter, and each of these
+   * fixtures carries a row that passes the *other* filter and fails the note.
+   * Without such a row the test cannot tell whether the note filter ran: that
+   * is what let a single-row window and a single-account budget pass while the
+   * filter was skipped, twice in this file's history.
+   */
+  describe('composing the note filter with the others', () => {
+    async function mixed() {
+      let checking = '';
+      let food = '';
+      let travel = '';
+      await createFreshBudget(async () => {
+        checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+        const g = await api.createCategoryGroup({ name: 'G' } as any);
+        food = await api.createCategory({ name: 'Comida', group_id: g } as any);
+        travel = await api.createCategory({ name: 'Viaje', group_id: g } as any);
+      });
+      await api.addTransactions(checking, [
+        // Passes both: the one that must come back.
+        { date: '2026-06-05', amount: -100, category: food, payee_name: 'Claro', notes: 'COMIDA-CON #tag' },
+        // Passes the other filter, fails the note. The row that makes each
+        // assertion mean something.
+        { date: '2026-06-06', amount: -200, category: food, payee_name: 'Claro', notes: 'COMIDA-SIN' },
+        // Fails the other filter, passes the note.
+        { date: '2026-06-07', amount: -300, category: travel, payee_name: 'Starlink', notes: 'VIAJE-CON #tag' },
+        // No category, with and without the tag, for the uncategorized case.
+        { date: '2026-06-08', amount: -400, notes: 'SUELTA-CON #tag' },
+        { date: '2026-06-09', amount: -500, notes: 'SUELTA-SIN' },
+      ] as any);
+    }
+
+    it('narrows within a category rather than replacing it', async () => {
+      await mixed();
+
+      const report = await getTransactionsReport({ notes_contains: '#tag', category: 'Comida' });
+
+      expect(report).toMatch(/COMIDA-CON/);
+      expect(report).not.toMatch(/COMIDA-SIN/);
+      expect(report).not.toMatch(/VIAJE-CON/);
+    });
+
+    it('narrows within what has no category', async () => {
+      await mixed();
+
+      const report = await getTransactionsReport({ notes_contains: '#tag', uncategorized: true });
+
+      expect(report).toMatch(/SUELTA-CON/);
+      expect(report).not.toMatch(/SUELTA-SIN/);
+      expect(report).not.toMatch(/COMIDA-CON/);
+    });
+
+    it('narrows within a payee', async () => {
+      await mixed();
+
+      const report = await getTransactionsReport({ notes_contains: '#tag', payee: 'Claro' });
+
+      expect(report).toMatch(/COMIDA-CON/);
+      expect(report).not.toMatch(/COMIDA-SIN/);
+      expect(report).not.toMatch(/VIAJE-CON/);
+    });
+
+    it('narrows within an amount range', async () => {
+      await mixed();
+
+      // -200 and -100 are in range; only one carries the tag.
+      const report = await getTransactionsReport({
+        notes_contains: '#tag',
+        min_amount: -2.5,
+        max_amount: 0,
+      });
+
+      expect(report).toMatch(/COMIDA-CON/);
+      expect(report).not.toMatch(/COMIDA-SIN/);
+      expect(report).not.toMatch(/VIAJE-CON/);
+    });
+  });
 });
