@@ -16,6 +16,7 @@ export interface GetTransactionsInput {
   payee?: string;
   min_amount?: number;
   max_amount?: number;
+  uncategorized?: boolean;
   limit?: number;
 }
 
@@ -31,6 +32,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     payee,
     min_amount,
     max_amount,
+    uncategorized,
     limit = 50,
   } = input;
 
@@ -46,6 +48,11 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   if (account) {
     const id = await resolveAccountId(account);
     accountIds = [id];
+  } else if (uncategorized) {
+    // Off-budget accounts are left out unless one was asked for by name. Their
+    // transactions have no category because none is wanted, so counting them as
+    // work to do would bury the rows that really are waiting to be sorted.
+    accountIds = allAccounts.filter((a) => !a.closed && !a.offbudget).map((a) => a.id);
   } else {
     accountIds = allAccounts.filter((a) => !a.closed).map((a) => a.id);
   }
@@ -72,6 +79,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     is_parent?: boolean;
     parent_id?: string | null;
     subtransactions?: any[];
+    transfer_id?: string | null;
   }> = [];
 
   for (const accId of accountIds) {
@@ -102,6 +110,26 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   allTransactions.sort((a, b) => b.date.localeCompare(a.date));
 
   // Apply filters
+  if (uncategorized) {
+    // What counts as "no category" was measured against the real engine rather
+    // than assumed, because three different kinds of row report a null one:
+    //
+    //   - a plain transaction nobody has sorted yet  -> wanted
+    //   - a split child with no category of its own  -> wanted
+    //   - the parent of a split                      -> not wanted, its
+    //     categories live on its parts, and the loop above has already
+    //     replaced it with them
+    //   - a transfer                                 -> not wanted, money
+    //     moving between your own accounts is not spending and never takes a
+    //     category
+    //
+    // Without the last two this would answer a question about tidying up with
+    // a list of rows that are already exactly as they should be.
+    allTransactions = allTransactions.filter(
+      (t) => !t.category && !t.is_parent && !t.transfer_id,
+    );
+  }
+
   if (category) {
     const lower = category.toLowerCase();
     allTransactions = allTransactions.filter((t) => {
@@ -210,6 +238,12 @@ export function registerGetTransactions(server: McpServer): void {
         .number()
         .optional()
         .describe('Maximum amount in human format'),
+      uncategorized: z
+        .boolean()
+        .optional()
+        .describe(
+          'Only transactions with no category. Transfers and split parents are left out: they have no category because none belongs there.',
+        ),
       limit: z
         .number()
         .optional()
