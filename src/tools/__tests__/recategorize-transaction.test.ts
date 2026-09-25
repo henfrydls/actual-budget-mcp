@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fakeQ } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -8,7 +9,7 @@ vi.mock('@actual-app/api', () => ({
   updateTransaction: vi.fn().mockResolvedValue({}),
   sync: vi.fn().mockResolvedValue(undefined),
   runQuery: vi.fn(),
-  q: () => ({ filter: () => ({ select: () => ({}) }) }),
+  q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
     integerToAmount: (cents: number) => cents / 100,

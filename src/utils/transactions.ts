@@ -1,4 +1,5 @@
 import * as api from '@actual-app/api';
+import { transactionsQuery } from './transaction-query.js';
 
 /**
  * Update a transaction without destroying a split child's amount.
@@ -25,7 +26,11 @@ export async function updatePreservingChildAmount(
 
   if (safe.amount === undefined) {
     const result = await api.runQuery(
-      api.q('transactions').filter({ id }).select(['id', 'amount', 'is_child']),
+      // 'inline' on purpose, and the reason is the whole point of this
+      // function: it returns the child row itself. 'grouped' would resolve a
+      // child id to its parent, `is_child` would never be set, and the guard
+      // below would silently stop firing (#25).
+      transactionsQuery('inline').filter({ id }).select(['id', 'amount', 'is_child']),
     );
     const txn = (result as { data?: Array<{ amount: number; is_child?: boolean }> } | undefined)
       ?.data?.[0];
