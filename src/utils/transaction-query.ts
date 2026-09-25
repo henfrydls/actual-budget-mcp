@@ -17,14 +17,28 @@ import * as api from '@actual-app/api';
  *    split across categories. A reimbursement nobody chases, with nothing to
  *    signal it was missed.
  *
- * The values, measured rather than taken from documentation:
+ * The values, measured against the engine rather than taken from documentation,
+ * by querying a budget holding one plain row and one split:
  *
- *  - `inline`   parents are excluded, children are returned as rows
- *  - `grouped`  parents are returned with children nested; a child id resolves
- *               to its parent, which is why `updatePreservingChildAmount` must
- *               not use it (#25)
- *  - `all`      both parents and children are returned
- *  - `none`     splits are ignored entirely
+ *  - `inline`   children only; the parent is excluded. This is the default, and
+ *               the reason a query that says nothing is blind to parents.
+ *  - `grouped`  parents only, with children nested. A child id resolves to its
+ *               parent, which is why `updatePreservingChildAmount` must not use
+ *               it (#25).
+ *  - `all`      both, as separate rows
+ *  - `none`     parents only, *not* expanded — it excludes children rather than
+ *               ignoring splits, which is not what the name suggests
+ *
+ * ## What this does not cover
+ *
+ * Only the AQL path, which has two consumers. Most transaction reads in this
+ * server go through `api.getTransactions`, around ten call sites, and that SDK
+ * helper fixes `splits: 'grouped'` internally with the same invisibility this
+ * guard exists to remove. The difference is that `grouped` is fixed and knowable
+ * rather than a default that varies with the query: parents come back with their
+ * children attached, so nothing is hidden, but anyone reading a row from it is
+ * reading a parent and should know that. Saying "every transactions query
+ * declares what splits mean" would be false; it is true of the AQL path.
  *
  * Requiring the argument does not make anyone choose correctly. It makes the
  * choice visible in the diff, which is what was missing.
@@ -38,5 +52,8 @@ export type SplitHandling = 'inline' | 'grouped' | 'all' | 'none';
  * reaches for the raw builder, because that is how the two bugs above got in.
  */
 export function transactionsQuery(splits: SplitHandling) {
+  // `options()` replaces rather than merges, so a later `.options({...})` on
+  // the returned builder would erase this decision silently. Nothing does that
+  // today; the shape invites it, which is why it is written down here.
   return api.q('transactions').options({ splits });
 }

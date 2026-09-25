@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { transactionsQuery } from '../transaction-query.js';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -38,10 +39,15 @@ describe('every transactions query decides what splits mean', () => {
     const offenders: string[] = [];
 
     for (const file of sourceFiles(SRC)) {
-      if (file.endsWith('transaction-query.ts')) continue; // the helper itself
+      // By exact path, not by name: a new `write/my-transaction-query.ts`
+      // would otherwise exempt itself just by being called that.
+      if (file.slice(SRC.length) === join('utils', 'transaction-query.ts')) continue;
       const text = readFileSync(file, 'utf8');
-      if (/\bapi\s*\.\s*q\s*\(\s*['"]transactions['"]/.test(text) ||
-          /(^|[^.\w])q\s*\(\s*['"]transactions['"]/.test(text.replace(/api\s*\.\s*q/g, 'api_q'))) {
+      // Any object, not just one called `api`: the 46 files that import the
+      // SDK all use `import * as api`, but nothing makes them, and an alias
+      // would slip past a check written around that name.
+      const rawCall = /(^|[^\w$])[\w$]*\s*\.?\s*q\s*\(\s*['"`]transactions['"`]\s*\)/;
+      if (rawCall.test(text)) {
         offenders.push(file.slice(SRC.length));
       }
     }
@@ -52,12 +58,13 @@ describe('every transactions query decides what splits mean', () => {
     ).toEqual([]);
   });
 
-  it('has no default, so the decision cannot be skipped by omission', async () => {
-    const helper = readFileSync(join(SRC, 'utils', 'transaction-query.ts'), 'utf8');
-
-    // A default would put the trap back: `inline` is the value that hides
-    // parents, and it is the one anyone would reach for by accident.
-    expect(helper).not.toMatch(/splits\s*[:=]\s*['"]inline['"]\s*\)/);
-    expect(helper).toMatch(/splits: SplitHandling/);
+  it('has no default, so the decision cannot be skipped by omission', () => {
+    // Asked of the function, not of its source. A regex over the text only
+    // caught the JavaScript shape `splits = 'inline')`; the TypeScript shape
+    // `splits: SplitHandling = 'inline'` slipped straight past it, so the exact
+    // trap this guard exists to prevent could be put back with everything
+    // green. `Function.length` counts parameters before the first default, so
+    // any default at all makes this zero.
+    expect(transactionsQuery.length).toBe(1);
   });
 });
