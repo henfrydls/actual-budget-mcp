@@ -1,4 +1,5 @@
 import * as api from '@actual-app/api';
+import { transactionsQuery } from './transaction-query.js';
 
 /**
  * Update a transaction without destroying a split child's amount.
@@ -12,10 +13,11 @@ import * as api from '@actual-app/api';
  * When no `amount` is supplied and the target turns out to be a split child, its
  * current amount is re-sent so the value is preserved.
  *
- * The lookup deliberately relies on the query default, which returns the child
- * row itself. Adding `options({ splits: 'grouped' })` would resolve a child id
- * to its parent, `is_child` would never be set, and the guard would silently
- * stop firing.
+ * The lookup asks for `inline` explicitly. That is the same behaviour as the
+ * query default, and saying it out loud is the point: `grouped` would resolve a
+ * child id to its parent, `is_child` would never be set, and the guard would
+ * silently stop firing. A guarantee that rests on someone else's default is a
+ * coincidence, not a guarantee.
  */
 export async function updatePreservingChildAmount(
   id: string,
@@ -25,7 +27,11 @@ export async function updatePreservingChildAmount(
 
   if (safe.amount === undefined) {
     const result = await api.runQuery(
-      api.q('transactions').filter({ id }).select(['id', 'amount', 'is_child']),
+      // 'inline' on purpose, and the reason is the whole point of this
+      // function: it returns the child row itself. 'grouped' would resolve a
+      // child id to its parent, `is_child` would never be set, and the guard
+      // below would silently stop firing (#25).
+      transactionsQuery('inline').filter({ id }).select(['id', 'amount', 'is_child']),
     );
     const txn = (result as { data?: Array<{ amount: number; is_child?: boolean }> } | undefined)
       ?.data?.[0];

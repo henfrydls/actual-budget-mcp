@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import * as api from '@actual-app/api';
+import { transactionsQuery } from './transaction-query.js';
 
 /**
  * The id this server gives a transaction before writing it, so it can find that
@@ -50,10 +51,8 @@ export interface MarkedRow {
 export async function findByMarker(marker: string): Promise<MarkedRow[] | null> {
   try {
     const result = await api.runQuery(
-      api
-        .q('transactions')
+      transactionsQuery('all')
         .filter({ id: marker })
-        .options({ splits: 'all' })
         .select(['id', 'category', 'amount', 'is_parent']),
     );
     const data = (result as { data?: MarkedRow[] } | undefined)?.data;
