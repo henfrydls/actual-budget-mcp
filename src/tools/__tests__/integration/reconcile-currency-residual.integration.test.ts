@@ -153,16 +153,26 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
         category: 'Cash-CHF',
         date: '2027-06-05',
       }),
-    ).rejects.toThrow(/2027-06-05.*in the future/s);
+    ).rejects.toThrow(/2027-06-05.*after this server's today/s);
 
     // Refused means nothing written.
     expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(1);
   }, 60_000);
 
-  it('reports the balance the bank would report, not one as of some other day', async () => {
-    // A pre-existing future row must not move the figure the user compares
-    // against their statement. The cutoff that briefly lived here made this
-    // say -150.00 where the bank says -100.00, and book +150.00.
+  it('measures the balance at today, not at the adjustment date', async () => {
+    // What this pins is the cutoff, and only the cutoff. An earlier attempt
+    // measured the balance as of the date being written, which silently
+    // excluded everything between that date and today.
+    //
+    // Every row here is in the past on purpose. Whether a row dated *after*
+    // today should count towards the balance is an open question, not a
+    // settled one: a card purchase made at the weekend is commonly posted by
+    // the bank with a later date, so the bank has already deducted something
+    // that Actual has not yet counted. That is #100, and this test must not
+    // decide it by accident. It used to: it seeded a row dated 2099 and
+    // asserted that ignoring it was correct, which would have had to be
+    // rewritten to fix #100, and a test you must change to fix a bug is a test
+    // that asserts the bug.
     let acctId = '';
     await createFreshBudget(async () => {
       acctId = await api.createAccount({ name: 'Card (NOK)', type: 'credit' } as any, 0);
@@ -172,7 +182,9 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
         acctId,
         [
           { date: '2026-05-01', amount: -10000, payee_name: 'FX drift' },
-          { date: '2099-01-01', amount: -5000, payee_name: 'Scheduled, far ahead' },
+          // Later than the adjustment's date, earlier than today: counted if
+          // the cutoff is today, invisible if it follows the adjustment.
+          { date: '2026-06-10', amount: -5000, payee_name: 'After the booking date' },
         ] as any,
         { learnCategories: false, runTransfers: false },
       );
@@ -183,12 +195,12 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
         account: 'Card (NOK)',
         target_balance: 0,
         category: 'Cash-NOK',
+        date: '2026-06-01',
       })
     ).join('\n');
 
-    expect(text).toContain('Was:        -100.00');
-    expect(text).toContain('Adjustment: 100.00');
-    // And it agrees with what the SDK reports for the account today.
+    expect(text).toContain('Was:        -150.00');
+    expect(text).toContain('Adjustment: 150.00');
     expect(await api.getAccountBalance(acctId)).toBe(0);
   }, 60_000);
 

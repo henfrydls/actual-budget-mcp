@@ -187,7 +187,7 @@ describe('reconcile_currency_residual: what #88 added', () => {
     expect(order.slice(0, 3)).toEqual(['sync:start', 'sync:done', 'balance']);
   });
 
-  it('refuses a date in the future and writes nothing', async () => {
+  it('refuses a date after this server\'s today and writes nothing', async () => {
     await expect(
       reconcileCurrencyResidual({
         account: 'Card (USD)',
@@ -195,11 +195,65 @@ describe('reconcile_currency_residual: what #88 added', () => {
         category: 'Cashback',
         date: '2099-01-01',
       }),
-    ).rejects.toThrow(/2099-01-01.*in the future/s);
+    ).rejects.toThrow(/2099-01-01.*after this server's today/s);
 
     expect(api.addTransactions).not.toHaveBeenCalled();
-    // Refused before reading anything, so it costs nothing either.
     expect(api.getAccountBalance).not.toHaveBeenCalled();
+  });
+
+  it('refuses without paying for a sync', async () => {
+    // The refusal used to happen after the pull, so rejecting an input cost a
+    // full network round trip, which against a server that accepts the
+    // connection and stops answering can hold for minutes.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow();
+
+    expect(api.sync).not.toHaveBeenCalled();
+  });
+
+  it('points at the tool that does record a date ahead', async () => {
+    // Recording a purchase before the bank posts it is ordinary, and it is
+    // create_transaction's job. Saying only "use a past date" sends someone
+    // away from the thing they actually wanted.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/create_transaction/);
+  });
+
+  it('calls an impossible date what it is, not "in the future"', async () => {
+    // 2026-09-31 has no 31st. Reporting it as a future date is misleading, and
+    // an impossible date in the past would otherwise be written and counted in
+    // the balance as though it were a real day.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-09-31',
+      }),
+    ).rejects.toThrow(/not a real calendar date/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-02-30',
+      }),
+    ).rejects.toThrow(/not a real calendar date/);
+
+    expect(api.addTransactions).not.toHaveBeenCalled();
   });
 
   it('accepts today, which is the boundary the refusal must not eat', async () => {

@@ -35,11 +35,6 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
 
   const accountId = await resolveAccountId(input.account);
 
-  // Before reading the balance, not after. Two agents reconciling the same
-  // drift both read a stale balance and both book an adjustment, which is the
-  // #88 scenario reappearing on the one path that computes what it writes.
-  await pullBeforeReading('reading the balance to reconcile');
-
   // An adjustment dated ahead cannot do what this tool is for. The promise is
   // "bring the account to the balance the bank reports"; a row that takes
   // effect next year leaves the account not matching the bank today, so the
@@ -66,14 +61,57 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   // also silently rolls an impossible date like 2026-02-30 into March while
   // the stored transaction keeps the original string).
   const txnDate = resolveDate(input.date);
+
+  // `resolveDate` only checks the shape, so an impossible day reaches here
+  // looking like an ordinary date. Reject it as what it is: saying "that is in
+  // the future" about 2026-09-31 is misleading, and 2026-02-30 would otherwise
+  // be written and counted in the balance as though it were a real day.
+  const asDate = new Date(`${txnDate}T00:00:00`);
+  if (Number.isNaN(asDate.getTime()) || formatDate(asDate) !== txnDate) {
+    throw new Error(
+      `"${txnDate}" is not a real calendar date, so nothing was booked. Use YYYY-MM-DD.`,
+    );
+  }
+
+  // An adjustment dated ahead cannot do what this tool is for. The promise is
+  // "bring the account to the balance the bank reports"; a row that takes
+  // effect later leaves the account not matching the bank today, so the reply
+  // would state a reconciliation that has not happened.
+  //
+  // It was also unsound. `getAccountBalance` counts `date <= cutoff` with the
+  // cutoff defaulting to now, so a future-dated adjustment never entered the
+  // balance: every run computed the same delta and wrote another one. An
+  // earlier attempt moved the cutoff to the adjustment's own date instead,
+  // which stopped the identical repeat but made `Was:` stop matching the
+  // statement the user compares against, and still left a second run with no
+  // date free to book again.
+  //
+  // Compared as strings. Both sides are `YYYY-MM-DD`, so this is exact and has
+  // no timezone or DST behaviour of its own.
+  //
+  // "Today" is this server's today. A client in a timezone ahead of the server
+  // can be told its own date is in the future; omitting `date`, or passing
+  // "today", uses the same clock as this check and always works.
   const today = formatDate(new Date());
   if (txnDate > today) {
     throw new Error(
-      `Cannot book a reconciliation adjustment on ${txnDate}, which is in the future. ` +
-        'The adjustment would not take effect until that date, so the account would not ' +
-        'match the balance the bank reports now. Use today or a past date.',
+      `Cannot book a reconciliation adjustment on ${txnDate}, which is after this ` +
+        `server's today (${today}). The adjustment would not take effect until then, ` +
+        'so the account would not match the balance the bank reports now. Use today or ' +
+        'a past date, or omit the date. To record a transaction that is genuinely dated ' +
+        'ahead, such as a card purchase the bank posts on a later day, use ' +
+        'create_transaction instead.',
     );
   }
+
+  // Only now, after the input is known to be usable. A refusal must not cost a
+  // sync: this is a full network round trip, and against a server that accepts
+  // the connection and stops answering it can hold for minutes.
+  //
+  // Before reading the balance, not after. Two agents reconciling the same
+  // drift both read a stale balance and both book an adjustment, which is the
+  // #88 scenario reappearing on the one path that computes what it writes.
+  await pullBeforeReading('reading the balance to reconcile');
 
   const currentCents = await api.getAccountBalance(accountId);
   const targetCents = amountToCents(input.target_balance ?? 0);

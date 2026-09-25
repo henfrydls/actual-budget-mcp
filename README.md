@@ -508,11 +508,32 @@ What it does not catch:
 - `create_transfer` and `create_split_transaction`, which do not run the check
   yet, and an opening balance from `create_account`. Tracked in #98.
 
-`reconcile_currency_residual` refuses a date in the future. Its whole promise is
-to bring the account to the balance the bank reports now, and an adjustment that
+#### reconcile_currency_residual and dates
+
+It refuses a date in the future for the adjustment it writes. Its whole promise
+is to bring the account to the balance the bank reports now, and a row that
 takes effect later does not do that. It also could not be made to behave: the
 balance counts transactions up to today, so a future-dated adjustment never
 entered it and every run booked another one.
+
+"Today" here is the server's today. A client in a timezone ahead of the server
+can be told its own date is in the future; omitting `date`, or passing `"today"`,
+uses the same clock as the check and always works. `create_transaction` has no
+such restriction, so recording a purchase dated ahead, which is what you want
+when a card posts a weekend purchase on the next business day, still works
+there.
+
+**Open problem, #100.** The reverse case is not handled. If the account already
+holds rows dated after today, the balance Actual reports today and the balance
+the bank reports are not comparable, and reconcile books the difference as
+residual. Measured: one purchase of -100.00 dated ahead, with the bank already
+reporting -100.00, produces an adjustment of -100.00 and leaves the account at
+-200.00. Until that is decided, check for future-dated rows in an account before
+reconciling it.
+
+It also syncs three times on the happy path: once before reading the balance,
+once inside the create it delegates to, and once to push. Two of those are
+consecutive pulls, so a remote server pays a redundant round trip.
 
 ### Read-only mode
 
