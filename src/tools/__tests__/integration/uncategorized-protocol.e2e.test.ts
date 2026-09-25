@@ -122,4 +122,25 @@ describe.skipIf(skip)('get_transactions through the MCP protocol (#81)', () => {
     expect(res.content[0].text).toMatch(/AWAITING-A-CATEGORY/);
     expect(res.content[0].text).not.toMatch(/ALREADY-SORTED/);
   });
+
+  it('describes what it returns, including the split note', async () => {
+    // The protocol tests read inputSchema.properties, so the tool's own
+    // description could be reverted to master's without failing anything.
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === 'get_transactions');
+
+    expect(tool!.description).toMatch(/split/i);
+  });
+
+  it('tells a client that the search is not limited to this month', async () => {
+    // A client reads the schema, not the source. Without this the parameter
+    // looked like a filter over the default window.
+    const { tools } = await client.listTools();
+    const props = (tools.find((t) => t.name === 'get_transactions')!.inputSchema as {
+      properties: Record<string, { description?: string }>;
+    }).properties;
+
+    expect(props.notes_contains.description).toMatch(/every date/i);
+    expect(props.start_date.description).toMatch(/notes_contains/);
+  });
 });

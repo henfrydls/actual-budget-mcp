@@ -54,7 +54,13 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // a question about this month. Answering it with the month's rows returns
   // "nothing" and reads as "no reimbursements pending", which is the most
   // likely way to be misled by this tool.
-  const wholeHistory = uncategorized || notes_contains !== undefined;
+  // Computed once and used by both the window and the filter. They used to
+  // ask different questions of the same input — the window opened on
+  // `notes_contains !== undefined` while the filter acted on a non-blank
+  // value — so an empty string, which MCP clients send for optional strings
+  // often enough, opened the whole history and then filtered nothing.
+  const needle = (notes_contains ?? '').trim().toLowerCase();
+  const wholeHistory = uncategorized || needle !== '';
   const startDate = resolveDate(start_date || (wholeHistory ? '1900-01-01' : 'start of month'));
   const endDate = wholeHistory && !end_date ? '2099-12-31' : resolveDate(end_date);
 
@@ -108,8 +114,10 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     parent_id?: string | null;
     subtransactions?: any[];
     transfer_id?: string | null;
-    /** The note on the split this row is part of, if it is one. */
+    /** The note on the split this row is part of. Searched, so data only. */
     splitOf?: string | null;
+    /** Whether this row is part of a split, which the display marks. */
+    isSplitPart?: boolean;
   }> = [];
 
   for (const accId of accountIds) {
@@ -137,13 +145,13 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
             // what the purchase was, who is being reimbursed. It goes in a
             // column of its own rather than inside this note, so each part
             // still reads as one line about one thing.
-            // Falls back to a marker rather than an empty cell. Removing the
-            // old `[Split]` prefix from the note left a part of a split whose
-            // parent has no note indistinguishable from an ordinary
-            // transaction — three of fifteen splits on a real budget — and
-            // someone reconciling against a statement would see -300 and -200
-            // with nothing saying they are one charge of -500.
-            splitOf: (t as any).notes || '(part of a split)',
+            // The parent's note, or nothing. The marker shown when there is
+            // none is added at render time, not here: putting it in this field
+            // made it searchable, so `notes_contains: 'split'` returned parts
+            // whose notes contain no such word. Presentation text must not sit
+            // in a field the search reads.
+            splitOf: (t as any).notes || null,
+            isSplitPart: true,
           });
         }
       } else if (!(t as any).is_child) {
@@ -222,7 +230,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     });
   }
 
-  if (notes_contains !== undefined && notes_contains.trim() !== '') {
+  if (needle !== '') {
     // Both the row's own note and the note of the split it belongs to, because
     // both are shown. What is searched and what is displayed must be the same
     // string: a row matching on text the reader cannot see looks like a broken
@@ -232,11 +240,6 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     // `toLowerCase` on both sides and nothing else. Folding accents on the
     // search side only would match "cafe" against a displayed "café" and leave
     // no way to see why.
-    // Trimmed: a trailing space is invisible where it is typed, and without
-    // this `"#Soventix "` misses `"Pago #Soventix"`. It also settles blank
-    // input one way instead of two — an empty string used to return everything
-    // and a space used to return nothing.
-    const needle = notes_contains.trim().toLowerCase();
     allTransactions = allTransactions.filter((t) => {
       const own = (t.notes || '').toLowerCase();
       const parent = (t.splitOf || '').toLowerCase();
@@ -299,7 +302,8 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     accountMap.get(t.account) || '',
     t.notes || '',
     t.cleared ? '✓' : '✗',
-    t.splitOf || '',
+    // Resolved here so the marker is never searchable.
+    t.splitOf || (t.isSplitPart ? '(part of a split)' : ''),
   ]);
 
   lines.push(
@@ -337,12 +341,12 @@ export function registerGetTransactions(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          'Start date (YYYY-MM-DD or natural language like "start of month", "30 days ago"). Defaults to the start of the current month, or to every date when uncategorized is set.',
+          'Start date (YYYY-MM-DD or natural language like "start of month", "30 days ago"). Defaults to the start of the current month, or to every date when uncategorized or notes_contains is set.',
         ),
       end_date: z
         .string()
         .optional()
-        .describe('End date (YYYY-MM-DD or natural language). Defaults to today, or to every date when uncategorized is set.'),
+        .describe('End date (YYYY-MM-DD or natural language). Defaults to today, or to every date when uncategorized or notes_contains is set.'),
       category: z
         .string()
         .optional()
@@ -369,7 +373,7 @@ export function registerGetTransactions(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          'Only transactions whose notes contain this text, case-insensitive. Also matches the note on the split a transaction belongs to, shown in the "Split of" column.',
+          'Only transactions whose notes contain this text, case-insensitive. Also matches the note on the split a transaction belongs to, shown in the "Split of" column. Searches every date unless you give a range, since a tag is not a question about this month.',
         ),
       limit: z
         .number()

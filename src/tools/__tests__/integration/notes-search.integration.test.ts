@@ -165,6 +165,14 @@ describe.skipIf(skip)('searching notes (#82)', () => {
 
     expect(report.indexOf('Notes')).toBeLessThan(report.indexOf('Cleared'));
     expect(report.indexOf('Cleared')).toBeLessThan(report.indexOf('Split of'));
+
+    // The cell, not only the heading: moving the value without the heading
+    // leaves the order assertion true and the table misaligned.
+    const header = report.split('\n').find((l) => l.includes('Split of'))!;
+    const part = report.split('\n').find((l) => l.includes('Cena #Soventix con el equipo'))!;
+    expect(part.indexOf('Cena #Soventix con el equipo')).toBeGreaterThan(
+      header.indexOf('Cleared'),
+    );
   });
 
   it('searches every date when none is given, as the tag carries no date', async () => {
@@ -196,16 +204,47 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     expect(await search(' Reembolso')).toMatch(/RP-1234/);
   });
 
-  it('treats a blank search as no search at all', async () => {
+  it('treats a blank search as no search at all, window included', async () => {
+    // Without dates, so the window is part of what "no search at all" means.
+    // The window used to open on the parameter being present while the filter
+    // acted on it being non-blank: two rules for one input, so an empty string
+    // returned the entire history unfiltered. MCP clients send empty strings
+    // for optional strings often enough for that to be a real answer.
     await budget();
 
-    const empty = await getTransactionsReport({
-      notes_contains: '   ',
-      start_date: '2026-06-01',
-      end_date: '2026-06-30',
-    });
+    for (const blank of ['', '   ']) {
+      const report = await getTransactionsReport({ notes_contains: blank });
 
-    expect(empty).toMatch(/nada que ver/);
+      expect(report).not.toMatch(/1900-01-01/);
+      expect(report).toMatch(/No transactions found|Transactions: 20\d\d-\d\d-01/);
+    }
+  });
+
+  it('does not match its own marker for a split with no note on the parent', async () => {
+    // The marker is presentation. It used to live in the field the search
+    // reads, so searching for "split" returned parts whose notes contain no
+    // such word, silently and against what the parameter promises.
+    let checking = '';
+    let cat = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G' } as any);
+      cat = await api.createCategory({ name: 'Comida', group_id: g } as any);
+    });
+    await api.addTransactions(checking, [
+      {
+        date: '2026-06-09',
+        amount: -500,
+        subtransactions: [
+          { amount: -300, category: cat },
+          { amount: -200, category: cat },
+        ],
+      },
+    ] as any);
+
+    for (const term of ['split', 'part', 'of a']) {
+      expect(await search(term)).toMatch(/No transactions found/i);
+    }
   });
 
   it('matches nothing rather than everything when the text is absent', async () => {
@@ -220,16 +259,25 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     // The window has to hold more than the one row that should come back, or
     // the filter cannot be seen to act: with a single-row window, deleting the
     // filter entirely left this test green.
+    // A second account and a row before the window, so both filters have
+    // something to exclude. With one account, "all accounts" and "Checking"
+    // are the same set; with the window starting before the first row, only
+    // its far end was ever tested.
+    const other = await api.createAccount({ name: 'Savings', type: 'savings' } as any, 0);
+    await api.addTransactions(other, [
+      { date: '2026-06-06', amount: -50, notes: 'otra cuenta #Soventix' },
+    ] as any);
+
     const report = await getTransactionsReport({
       notes_contains: '#Soventix',
       account: 'Checking',
-      start_date: '2026-06-01',
+      start_date: '2026-06-06',
       end_date: '2026-06-08',
     });
 
-    expect(report).toMatch(/RP-1234/);
     expect(report).toMatch(/minúscula/);
-    expect(report).not.toMatch(/nada que ver/);
+    expect(report).not.toMatch(/RP-1234/);
+    expect(report).not.toMatch(/otra cuenta/);
     expect(report).not.toMatch(/Cena/);
   });
 
