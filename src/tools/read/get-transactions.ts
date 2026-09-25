@@ -49,8 +49,14 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // future-dated transaction — a scheduled one that has landed, a card charge
   // past the statement date — stayed invisible. Worse than before the change,
   // because the header now reads `1900-01-01 to ...` and looks exhaustive.
-  const startDate = resolveDate(start_date || (uncategorized ? '1900-01-01' : 'start of month'));
-  const endDate = uncategorized && !end_date ? '2099-12-31' : resolveDate(end_date);
+  // Searching for a tag carries no date, exactly as "what still needs a
+  // category?" does not: looking for #Soventix to chase a reimbursement is not
+  // a question about this month. Answering it with the month's rows returns
+  // "nothing" and reads as "no reimbursements pending", which is the most
+  // likely way to be misled by this tool.
+  const wholeHistory = uncategorized || notes_contains !== undefined;
+  const startDate = resolveDate(start_date || (wholeHistory ? '1900-01-01' : 'start of month'));
+  const endDate = wholeHistory && !end_date ? '2099-12-31' : resolveDate(end_date);
 
   // Get accounts to query
   const allAccounts = await api.getAccounts();
@@ -131,7 +137,13 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
             // what the purchase was, who is being reimbursed. It goes in a
             // column of its own rather than inside this note, so each part
             // still reads as one line about one thing.
-            splitOf: (t as any).notes || '',
+            // Falls back to a marker rather than an empty cell. Removing the
+            // old `[Split]` prefix from the note left a part of a split whose
+            // parent has no note indistinguishable from an ordinary
+            // transaction — three of fifteen splits on a real budget — and
+            // someone reconciling against a statement would see -300 and -200
+            // with nothing saying they are one charge of -500.
+            splitOf: (t as any).notes || '(part of a split)',
           });
         }
       } else if (!(t as any).is_child) {
@@ -210,7 +222,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     });
   }
 
-  if (notes_contains) {
+  if (notes_contains !== undefined && notes_contains.trim() !== '') {
     // Both the row's own note and the note of the split it belongs to, because
     // both are shown. What is searched and what is displayed must be the same
     // string: a row matching on text the reader cannot see looks like a broken
@@ -220,7 +232,11 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     // `toLowerCase` on both sides and nothing else. Folding accents on the
     // search side only would match "cafe" against a displayed "café" and leave
     // no way to see why.
-    const needle = notes_contains.toLowerCase();
+    // Trimmed: a trailing space is invisible where it is typed, and without
+    // this `"#Soventix "` misses `"Pago #Soventix"`. It also settles blank
+    // input one way instead of two — an empty string used to return everything
+    // and a space used to return nothing.
+    const needle = notes_contains.trim().toLowerCase();
     allTransactions = allTransactions.filter((t) => {
       const own = (t.notes || '').toLowerCase();
       const parent = (t.splitOf || '').toLowerCase();
@@ -311,7 +327,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
 export function registerGetTransactions(server: McpServer): void {
   server.tool(
     'get_transactions',
-    'List transactions with optional filters. Returns date, payee, category, amount, notes, account, and cleared status.',
+    'List transactions with optional filters. Returns date, payee, category, amount, notes, account, cleared status, and — for a part of a split — the note on the split it belongs to.',
     {
       account: z
         .string()

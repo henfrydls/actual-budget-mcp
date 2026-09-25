@@ -103,15 +103,105 @@ describe.skipIf(skip)('searching notes (#82)', () => {
   });
 
   it('leaves the column empty for transactions that are not splits', async () => {
+    // Asserted on the row itself, with a split in the same window so the
+    // column is populated somewhere. The previous version only checked that a
+    // note from another date was absent, which was true whatever the column
+    // held: filling it on every ordinary row left the suite green.
     await budget();
 
     const report = await getTransactionsReport({
-      start_date: '2026-06-05',
-      end_date: '2026-06-05',
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
     });
 
-    expect(report).toMatch(/RP-1234/);
-    expect(report).not.toMatch(/Cena/);
+    const ordinary = report.split('\n').find((l) => l.includes('RP-1234'))!;
+    const part = report.split('\n').find((l) => l.includes('mi parte'))!;
+
+    expect(ordinary).toBeTruthy();
+    expect(ordinary.trimEnd()).toMatch(/[✓✗]$/);
+    expect(part).toMatch(/Cena #Soventix con el equipo/);
+  });
+
+  it('marks a split part even when the parent has no note', async () => {
+    // Removing the old `[Split]` prefix left these indistinguishable from an
+    // ordinary transaction: three of fifteen splits on a real budget have no
+    // note on the parent, and someone reconciling would see the parts as
+    // separate charges.
+    let checking = '';
+    let cat = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G' } as any);
+      cat = await api.createCategory({ name: 'Comida', group_id: g } as any);
+    });
+    await api.addTransactions(checking, [
+      {
+        date: '2026-06-09',
+        amount: -500,
+        subtransactions: [
+          { amount: -300, category: cat },
+          { amount: -200, category: cat },
+        ],
+      },
+    ] as any);
+
+    const report = await getTransactionsReport({
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
+    });
+
+    expect(report.match(/part of a split/g)?.length).toBe(2);
+  });
+
+  it('keeps the new column after the existing ones', async () => {
+    // Appended, so nothing reading this table by position moves. Only the
+    // order of the two adjacent columns fixes that.
+    await budget();
+
+    const report = await getTransactionsReport({
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
+    });
+
+    expect(report.indexOf('Notes')).toBeLessThan(report.indexOf('Cleared'));
+    expect(report.indexOf('Cleared')).toBeLessThan(report.indexOf('Split of'));
+  });
+
+  it('searches every date when none is given, as the tag carries no date', async () => {
+    // Looking for #Soventix to chase a reimbursement is not a question about
+    // this month, and answering with the month's rows reads as "no
+    // reimbursements pending".
+    let checking = '';
+    await createFreshBudget(async () => {
+      checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
+    });
+    await api.addTransactions(checking, [
+      { date: '2019-03-02', amount: -100, notes: 'viejo #Soventix' },
+      { date: '2027-11-30', amount: -200, notes: 'futuro #Soventix' },
+    ] as any);
+
+    const report = await getTransactionsReport({ notes_contains: '#Soventix' });
+
+    expect(report).toMatch(/viejo/);
+    expect(report).toMatch(/futuro/);
+  });
+
+  it('ignores surrounding spaces in the search term', async () => {
+    await budget();
+
+    expect(await search(' #Soventix ')).toMatch(/RP-1234/);
+  });
+
+  it('treats a blank search as no search at all', async () => {
+    await budget();
+
+    const empty = await getTransactionsReport({
+      notes_contains: '   ',
+      start_date: '2026-06-01',
+      end_date: '2026-06-30',
+    });
+
+    expect(empty).toMatch(/nada que ver/);
   });
 
   it('matches nothing rather than everything when the text is absent', async () => {
@@ -123,14 +213,19 @@ describe.skipIf(skip)('searching notes (#82)', () => {
   it('composes with a date range and an account', async () => {
     await budget();
 
+    // The window has to hold more than the one row that should come back, or
+    // the filter cannot be seen to act: with a single-row window, deleting the
+    // filter entirely left this test green.
     const report = await getTransactionsReport({
       notes_contains: '#Soventix',
       account: 'Checking',
       start_date: '2026-06-01',
-      end_date: '2026-06-05',
+      end_date: '2026-06-08',
     });
 
     expect(report).toMatch(/RP-1234/);
+    expect(report).toMatch(/minúscula/);
+    expect(report).not.toMatch(/nada que ver/);
     expect(report).not.toMatch(/Cena/);
   });
 
