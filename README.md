@@ -422,7 +422,7 @@ hand.
 
 ## Safety
 
-Two things protect your budget from an agent acting on a vague instruction.
+Three things protect your budget from an agent acting on a vague instruction.
 
 ### Deletes preview before they delete
 
@@ -442,6 +442,102 @@ Tools that find their target **by name** (`delete_account`, `delete_category`,
 exact name. That is where deleting the wrong thing actually happens: asking for
 "Adicionales" can resolve to "Ingresos Adicionales". Tools that take an exact id
 (`delete_transaction`, `delete_rule`) need only `confirm: true`.
+
+### A transaction that already exists is not created twice
+
+`create_transaction` looks before it writes. If the account, the date and the
+amount all match something already in the budget, it creates nothing and shows
+you what is there:
+
+```
+create_transaction(account: "Checking", amount: -50, date: "2026-06-05")
+  → A transaction like this one already exists, so nothing was created:
+
+      2026-06-05  -50.00  Checking  Claro
+        id: 0b6d516e-...
+
+    Same account, same date, same amount. If this is a second, genuine payment
+    rather than the same one recorded twice, call again with allow_duplicate: true.
+
+create_transaction(account: "Checking", amount: -50, date: "2026-06-05", allow_duplicate: true)
+  → Transaction created
+```
+
+Two identical coffees on one card on one day are a real thing, so the flag
+exists and one extra call is the whole cost. This is a change from 0.9.x, where
+the second call created a second row without saying anything.
+
+The check syncs first, so it sees what another client wrote and not only what
+this one did. That is the case it is for: two agents against one budget, neither
+able to see the other. `reconcile_currency_residual` takes the same flag, for
+the same reason, and syncs before reading the balance it computes from.
+
+**It is not returned as an error.** The delete tools set `isError` on their
+preview so that a repeated call cannot destroy anything by accident. This one
+does the opposite, deliberately: a repeated call creates nothing at all, and an
+agent that reads `isError` treats being asked as being refused and retries,
+which is what duplicates. Deletes flag; this one does not.
+
+**What it costs.** One extra round trip per `create_transaction`, whether or not
+a duplicate is found. Against a server on the same machine that is not
+measurable. Against a remote server it roughly doubles the time per write:
+measured at 80 ms of round-trip latency, 87 ms becomes 171 ms for a single
+create, and 22 creates in a row go from 1.9 s to 3.8 s. Passing
+`allow_duplicate: true` skips the sync as well as the check, so a bulk import
+that has already been deduplicated elsewhere pays nothing.
+
+**Offline and hung servers.** If the sync fails the check still runs against the
+local copy and the write is not blocked, so an offline session keeps working
+with a weaker check rather than no writes. It says so on stderr, with the
+reason, so a weakened check is never silent.
+
+A server that accepts the connection and then never answers is the slow case:
+the Actual library sets no timeout of its own, so the call falls back to Node's
+own five-minute header timeout before failing. This PR adds a second place
+where that can happen, now before the write rather than after it, so a hung
+server can cost twice as long as it used to. Tracked in #99.
+
+What it does not catch:
+
+- A rule that rewrites the **amount or the date** of the row as it is stored,
+  since the stored row then no longer matches what was asked. Renaming rules,
+  the common kind, make no difference to it.
+- A transaction that arrives **between the check and the write**. The sync
+  narrows that window; it does not close it. This looks before it writes, which
+  is not the same as doing both at once.
+- `create_transfer` and `create_split_transaction`, which do not run the check
+  yet, and an opening balance from `create_account`. Tracked in #98.
+
+#### reconcile_currency_residual and dates
+
+It refuses a date in the future for the adjustment it writes. Its whole promise
+is to bring the account to the balance the bank reports now, and a row that
+takes effect later does not do that. It also could not be made to behave: the
+balance counts transactions up to today, so a future-dated adjustment never
+entered it and every run booked another one.
+
+"Today" here is the server's today. A client in a timezone ahead of the server
+can be told its own date is in the future; omitting `date`, or passing `"today"`,
+uses the same clock as the check and always works. `create_transaction` has no
+such restriction, so recording a purchase dated ahead, which is what you want
+when a card posts a weekend purchase on the next business day, still works
+there.
+
+**Open problem, #100.** The reverse case is not handled. If the account already
+holds rows dated after today, the balance Actual reports today and the balance
+the bank reports are not comparable, and reconcile books the difference as
+residual. Measured: one purchase of -100.00 dated ahead, with the bank already
+reporting -100.00, produces an adjustment of -100.00 and leaves the account at
+-200.00. Until that is decided, check for future-dated rows in an account before
+reconciling it.
+
+It also refuses a date that does not exist, such as `2026-09-31` or
+`2026-02-30`, rather than calling it a future one. Other tools still accept an
+impossible date and store it verbatim; that is older than this and unchanged.
+
+It also syncs three times on the happy path: once before reading the balance,
+once inside the create it delegates to, and once to push. Two of those are
+consecutive pulls, so a remote server pays a redundant round trip.
 
 ### Read-only mode
 
@@ -528,7 +624,7 @@ Writes are enabled by default. Read-only is opt-in.
 <details>
 <summary>Parameters</summary>
 
-**create_transaction** - `account` (required): account name | `amount` (required): negative for expenses, positive for income | `payee` (optional) | `category` (optional) | `date` (optional) | `notes` (optional) | `cleared` (optional)
+**create_transaction** - `account` (required): account name | `amount` (required): negative for expenses, positive for income | `payee` (optional) | `category` (optional) | `date` (optional) | `notes` (optional) | `cleared` (optional) | `allow_duplicate` (optional): create it even though one with the same account, date and amount exists
 
 **update_transaction** - `transaction_id` (required) | `amount`, `payee`, `category`, `date`, `notes`, `cleared` (all optional)
 
@@ -542,7 +638,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **create_split_transaction** - `account` (required) | `amount` (required): total, must equal the sum of the splits | `splits` (required): two or more `{category, amount, notes}` | `payee`, `date`, `notes`, `cleared` (all optional)
 
-**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `date`, `notes` (all optional)
+**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day
 
 **run_bank_sync** - `account` (optional): sync specific account or all if omitted
 

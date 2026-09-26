@@ -4,7 +4,9 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { amountToCents, centsToAmount, formatMoney } from '../../utils/money.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
+import { resolveDate, formatDate } from '../../utils/dates.js';
 import { createTransaction } from './create-transaction.js';
+import { pullBeforeReading, isDuplicatePreview } from '../../utils/duplicate-check.js';
 import { describeError } from '../../utils/errors.js';
 import { WriteReportedError } from '../../utils/write-outcome.js';
 
@@ -15,6 +17,8 @@ export interface ReconcileResidualInput {
   notes?: string;
   date?: string;
   payee?: string;
+  /** Book the adjustment even though a transaction of that amount is already on that day. */
+  allow_duplicate?: boolean;
 }
 
 /**
@@ -30,6 +34,68 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   await ensureConnection();
 
   const accountId = await resolveAccountId(input.account);
+
+  const txnDate = resolveDate(input.date);
+
+  // `resolveDate` only checks the shape, so an impossible day reaches here
+  // looking like an ordinary date. Reject it as what it is: saying "that is in
+  // the future" about 2026-09-31 is misleading, and 2026-02-30 would otherwise
+  // be written and counted in the balance as though it were a real day.
+  const asDate = new Date(`${txnDate}T00:00:00`);
+  if (Number.isNaN(asDate.getTime()) || formatDate(asDate) !== txnDate) {
+    throw new Error(
+      `"${txnDate}" is not a real calendar date, so nothing was booked. Use YYYY-MM-DD.`,
+    );
+  }
+
+  // An adjustment dated ahead cannot do what this tool is for. The promise is
+  // "bring the account to the balance the bank reports"; a row that takes
+  // effect later leaves the account not matching the bank today, so the reply
+  // would state a reconciliation that has not happened.
+  //
+  // It was also unsound. `getAccountBalance` counts `date <= cutoff` with the
+  // cutoff defaulting to now, so a future-dated adjustment never entered the
+  // balance: every run computed the same delta and wrote another one. An
+  // earlier attempt moved the cutoff to the adjustment's own date instead,
+  // which stopped the identical repeat but made `Was:` stop matching the
+  // statement the user compares against, and still left a second run with no
+  // date free to book again.
+  //
+  // Compared as strings. Both sides are `YYYY-MM-DD`, so this is exact and has
+  // no timezone or DST behaviour of its own.
+  //
+  // "Today" comes from `resolveDate`, the same source that turns a caller's
+  // "today" into a date everywhere else in this server, rather than from a
+  // second formatting of `new Date()` here. Two notions of today in one
+  // process drift apart across a timezone or a DST boundary, and the drift is
+  // invisible to a suite running in UTC: swapping this line for the common
+  // `toISOString().slice(0, 10)` idiom passes every test on a UTC runner and
+  // rejects a client's own date for part of the day anywhere east of it.
+  //
+  // It remains this server's today, not the client's. A client ahead of the
+  // server can still be told its date is in the future; omitting `date`, or
+  // passing "today", goes through this same call and always works.
+  const today = resolveDate('today');
+  if (txnDate > today) {
+    throw new Error(
+      `Cannot book a reconciliation adjustment on ${txnDate}, which is after this ` +
+        `server's today (${today}). The adjustment would not take effect until then, ` +
+        'so the account would not match the balance the bank reports now. Use today or ' +
+        'a past date, or omit the date. To record a transaction that is genuinely dated ' +
+        'ahead, such as a card purchase the bank posts on a later day, use ' +
+        'create_transaction instead.',
+    );
+  }
+
+  // Only now, after the input is known to be usable. A refusal must not cost a
+  // sync: this is a full network round trip, and against a server that accepts
+  // the connection and stops answering it can hold for minutes.
+  //
+  // Before reading the balance, not after. Two agents reconciling the same
+  // drift both read a stale balance and both book an adjustment, which is the
+  // #88 scenario reappearing on the one path that computes what it writes.
+  await pullBeforeReading('reading the balance to reconcile');
+
   const currentCents = await api.getAccountBalance(accountId);
   const targetCents = amountToCents(input.target_balance ?? 0);
   const deltaCents = targetCents - currentCents;
@@ -43,6 +109,15 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     ];
   }
 
+  // The #88 check stays on. An earlier attempt passed `allow_duplicate` here,
+  // reasoning that this cannot duplicate itself because a second run computes a
+  // delta of zero; that was wrong on two measured paths, a future-dated
+  // adjustment and two agents reconciling at once, and turning the check off
+  // made this the only write in the server that neither synced nor looked. The
+  // delta is computed above from a synced balance that counts the adjustment's
+  // own date, so a genuine repeat now stops before reaching here, and what the
+  // check catches is what it should: an unrelated transaction that happens to
+  // match, which is worth pausing on rather than silently double-booking.
   const lines = await createTransaction({
     account: accountId,
     amount: centsToAmount(deltaCents),
@@ -50,7 +125,30 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     notes: input.notes || 'FX residual adjustment',
     date: input.date,
     payee: input.payee,
+    allow_duplicate: input.allow_duplicate,
+    // Not "pass allow_duplicate", which is this tool's least safe move: it
+    // forces the write past the check while the delta was computed from a
+    // balance read moments earlier. Running again recomputes from a fresh
+    // balance and stops by itself if the adjustment is already there.
+    duplicateAdvice: [
+      'Same account, same date, same amount. If that row is this adjustment,',
+      'already booked, run this again and it will recompute from the balance',
+      'and stop. Only pass allow_duplicate: true if the match is unrelated.',
+    ],
   });
+
+  // Nothing was written, so nothing may be announced. The header used to print
+  // regardless, so the reply stated the adjustment, then stated that nothing
+  // had been created, then advised a flag this tool did not accept, while the
+  // balance sat unchanged.
+  if (isDuplicatePreview(lines)) {
+    return [
+      `No adjustment was booked for ${acctName}.`,
+      `It would have been ${formatMoney(deltaCents)} on ${txnDate}.`,
+      '',
+      ...lines,
+    ];
+  }
 
   return [
     'Currency residual reconciled:',
@@ -65,7 +163,9 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
 export function registerReconcileCurrencyResidual(server: McpServer): void {
   server.tool(
     'reconcile_currency_residual',
-    'Book an adjustment transaction to bring a multi-currency account to the balance the bank reports, clearing accumulated FX-rate residual.',
+    'Book an adjustment transaction to bring a multi-currency account to the balance the bank reports, clearing accumulated FX-rate residual. ' +
+      'The date must be today or earlier. If a transaction with the same account, date and amount already exists this books nothing and ' +
+      'reports it instead; run it again to recompute, or pass allow_duplicate if the match is unrelated.',
     {
       account: z.string().describe('Account name or ID to reconcile'),
       category: z.string().describe('Category to book the adjustment under (name or ID)'),
@@ -83,6 +183,12 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         .optional()
         .describe('Date for the adjustment (YYYY-MM-DD or "today"). Defaults to today.'),
       payee: z.string().optional().describe('Optional payee for the adjustment'),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Book the adjustment even though a transaction with the same account, date and amount already exists. Without this, such a call reports the existing one and books nothing.',
+        ),
     },
     { title: 'Reconcile currency residual', readOnlyHint: false },
     async (input) => {

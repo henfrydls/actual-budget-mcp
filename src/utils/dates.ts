@@ -164,6 +164,13 @@ function formatMonth(year: number, month: number): string {
   return `${year}-${String(month + 1).padStart(2, '0')}`;
 }
 
-function formatDate(d: Date): string {
+/**
+ * Local calendar date as `YYYY-MM-DD`.
+ *
+ * Exported so that anything comparing against "today" uses the same notion of
+ * today that `resolveDate` hands out, rather than a second one that drifts
+ * from it across a timezone or a DST boundary.
+ */
+export function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }

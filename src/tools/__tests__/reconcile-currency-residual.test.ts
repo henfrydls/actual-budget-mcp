@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, lastQuery } from './fake-query.js';
+import { fakeQ, lastQuery, answerByFilter } from './fake-query.js';
 
 vi.mock('@actual-app/api', () => ({
   default: {},
@@ -7,6 +7,7 @@ vi.mock('@actual-app/api', () => ({
     { id: 'acc-1', name: 'Card (USD)', closed: false, offbudget: false },
   ]),
   getAccountBalance: vi.fn(),
+  getPayees: vi.fn().mockResolvedValue([]),
   getCategories: vi.fn().mockResolvedValue([
     { id: 'cat-1', name: 'Cashback', group_id: 'g1', hidden: false },
   ]),
@@ -16,7 +17,7 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn().mockResolvedValue(undefined),
   // The write is given an id of our own and found again by querying for it,
   // which is what replaced the date window and the snapshot (#93).
-  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
   q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -29,6 +30,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import * as api from '@actual-app/api';
+import { resolveDate, formatDate } from '../../utils/dates.js';
 import {
   reconcileCurrencyResidual,
   registerReconcileCurrencyResidual,
@@ -100,7 +102,9 @@ describe('a verdict arriving from createTransaction', () => {
     vi.mocked(api.getAccountBalance).mockResolvedValue(-10000 as any);
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
     // Found by the marker written with it, not by scanning a date range.
-    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [{ id: 'new' }] } as any);
+    vi.mocked(api.runQuery)
+      .mockReset()
+      .mockImplementation(answerByFilter({ byId: { data: [{ id: 'new' }] } }) as never);
     vi.mocked(api.addTransactions)
       .mockReset()
       .mockRejectedValue(new Error('We had an unknown problem opening "x"'));
@@ -142,5 +146,394 @@ describe('reconcile_currency_residual: verdicts other than "saved"', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/could not be.*determined/is);
+  });
+});
+
+/**
+ * Everything #88 added to this tool, covered here and not only in the
+ * integration file. That file is `describe.skipIf(SKIP_ACTUAL_INTEGRATION)`,
+ * so with the engine skipped the pull, the refusal, the flag and the
+ * conditional header all had no net at all.
+ */
+describe('reconcile_currency_residual: what #88 added', () => {
+  const order: string[] = [];
+
+  beforeEach(() => {
+    order.length = 0;
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+    vi.mocked(api.sync).mockReset().mockImplementation(async () => {
+      order.push('sync:start');
+      await Promise.resolve();
+      await Promise.resolve();
+      order.push('sync:done');
+    });
+    vi.mocked(api.getAccountBalance).mockReset().mockImplementation(async () => {
+      order.push('balance');
+      return -10000;
+    });
+  });
+
+  it('waits for the pull to finish before reading the balance', async () => {
+    // Start and finish, because a promise started without being awaited still
+    // gets its call in first.
+    await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: '2026-06-05',
+    });
+
+    expect(order.slice(0, 3)).toEqual(['sync:start', 'sync:done', 'balance']);
+  });
+
+  it('refuses a date after this server\'s today and writes nothing', async () => {
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/2099-01-01.*after this server's today/s);
+
+    expect(api.addTransactions).not.toHaveBeenCalled();
+    expect(api.getAccountBalance).not.toHaveBeenCalled();
+  });
+
+  it('refuses without paying for a sync', async () => {
+    // The refusal used to happen after the pull, so rejecting an input cost a
+    // full network round trip, which against a server that accepts the
+    // connection and stops answering can hold for minutes.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow();
+
+    expect(api.sync).not.toHaveBeenCalled();
+  });
+
+  it('explains why, not just that it refused', async () => {
+    // The remedy and the reason were the only parts a reader can act on and
+    // the only parts nothing pinned: the whole explanation could be deleted
+    // with the suite green, leaving a bare refusal.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/would not take effect/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/balance the bank reports now/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/Use today or a past date/);
+  });
+
+  it('refuses through the handler as an error, not as a result', async () => {
+    // The two refusal tests call the function directly, so nothing watched the
+    // wire. Returning the refusal without `isError` would let its text read as
+    // a reconciliation that happened.
+    let handler: any;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => { handler = a.at(-1); },
+    } as never);
+
+    const res = await handler({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: '2099-01-01',
+    });
+
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toMatch(/^Error:/);
+    expect(res.content[0].text).toMatch(/after this server's today/);
+  });
+
+  it('points at the tool that does record a date ahead', async () => {
+    // Recording a purchase before the bank posts it is ordinary, and it is
+    // create_transaction's job. Saying only "use a past date" sends someone
+    // away from the thing they actually wanted.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2099-01-01',
+      }),
+    ).rejects.toThrow(/create_transaction/);
+  });
+
+  it('calls an impossible date what it is, not "in the future"', async () => {
+    // 2026-09-31 has no 31st. Reporting it as a future date is misleading, and
+    // an impossible date in the past would otherwise be written and counted in
+    // the balance as though it were a real day.
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-09-31',
+      }),
+    ).rejects.toThrow(/not a real calendar date/);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-02-30',
+      }),
+    ).rejects.toThrow(/not a real calendar date/);
+
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('asks for the account balance without imposing a cutoff of its own', async () => {
+    // Both wrong versions of this line are a second argument: the adjustment's
+    // own date, which was attempt two, and any fixed date. Asserting the shape
+    // of the call catches both, and says something about this code rather than
+    // about which transactions the SDK should count, which is #100's question
+    // and not settled here. Matching is arity-strict, so a second argument
+    // fails whatever it holds.
+    await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: '2026-06-05',
+    });
+
+    expect(api.getAccountBalance).toHaveBeenCalledExactlyOnceWith('acc-1');
+  });
+
+  it('refuses tomorrow, the first date that is actually in the future', async () => {
+    // The boundary was pinned from below by "accepts today" and from above by
+    // 2099, leaving everything between tomorrow and 2098 unheld. Moving the
+    // line to the end of the month, or an off-by-one that lets exactly
+    // tomorrow through, passed all 536 tests in both modes.
+    //
+    // It is not cosmetic. An adjustment dated tomorrow never enters a balance
+    // that counts up to today, so the next run recomputes the same delta and
+    // books another: the "attempt one" defect this refusal exists to close.
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    const tomorrow = formatDate(t);
+
+    await expect(
+      reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: tomorrow,
+      }),
+    ).rejects.toThrow(/after this server's today/);
+
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('follows the clock rather than a date decided when the code was written', async () => {
+    // `accepts today` and `refuses tomorrow` between them force any constant C
+    // to satisfy today <= C < tomorrow, which is to say C must equal today.
+    // That holds on every day except the one where a hardcoded C happens to be
+    // today's date, and on that day the only thing catching it is another test
+    // by coincidence. So the clock is anchored on purpose here: two simulated
+    // days, years apart, each with its own boundary. No single constant, and
+    // no expression that is not a real clock, satisfies both.
+    const realTZ = process.env.TZ;
+    try {
+      process.env.TZ = 'UTC';
+      for (const [day, nextDay] of [
+        ['2027-03-04', '2027-03-05'],
+        ['2031-11-30', '2031-12-01'],
+      ]) {
+        vi.setSystemTime(new Date(`${day}T12:00:00Z`));
+
+        const lines = await reconcileCurrencyResidual({
+          account: 'Card (USD)',
+          target_balance: 0,
+          category: 'Cashback',
+          date: day,
+        });
+        expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+
+        await expect(
+          reconcileCurrencyResidual({
+            account: 'Card (USD)',
+            target_balance: 0,
+            category: 'Cashback',
+            date: nextDay,
+          }),
+        ).rejects.toThrow(/after this server's today/);
+      }
+    } finally {
+      vi.useRealTimers();
+      if (realTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = realTZ;
+    }
+  });
+
+  it('takes today from the same clock as the rest of the server, in any timezone', async () => {
+    // Two notions of today in one process drift apart across a timezone, and
+    // the drift is invisible to a suite running in UTC — which is why this was
+    // once dismissed as untestable. It is not: Node honours `TZ` changed at
+    // runtime, so the timezone can be chosen here rather than inherited from
+    // whoever runs it, and this fails under the mutation even with the runner
+    // forced to UTC.
+    //
+    // Kiritimati is UTC+14, so at this instant the local day is already the
+    // 26th while UTC is still on the 25th. `resolveDate('today')` says the
+    // 26th; `toISOString().slice(0, 10)`, the common idiom, says the 25th and
+    // would refuse the caller's own today.
+    const realTZ = process.env.TZ;
+    try {
+      process.env.TZ = 'Pacific/Kiritimati';
+      vi.setSystemTime(new Date('2026-09-25T12:00:00Z'));
+
+      const lines = await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: 'today',
+      });
+
+      expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+    } finally {
+      vi.useRealTimers();
+      if (realTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = realTZ;
+    }
+  });
+
+  it('tells a client what the flag is for, in the text a client reads', () => {
+    // The description is as much the wire as the schema: it is the only place
+    // an agent learns that the flag exists and that "already exists" is a
+    // question rather than a refusal. Without it the agent retries, which is
+    // what the whole PR exists to stop.
+    let description: string | undefined;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => { description = a[1] as string; },
+    } as never);
+
+    // Not just the word: naming the flag and then saying the opposite of what
+    // it does would pass a bare `/allow_duplicate/`.
+    expect(description).toMatch(/allow_duplicate/);
+    expect(description).toMatch(/already exists/i);
+    expect(description).toMatch(/today or earlier/i);
+  });
+
+  it('accepts today, which is the boundary the refusal must not eat', async () => {
+    const lines = await reconcileCurrencyResidual({
+      account: 'Card (USD)',
+      target_balance: 0,
+      category: 'Cashback',
+      date: 'today',
+    });
+
+    expect(lines.join('\n')).toMatch(/Currency residual reconciled/);
+  });
+
+  it('does not announce a reconciliation when the create found a duplicate', async () => {
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({
+        byAccountDateAmount: {
+          data: [{ id: 'other-1', date: '2026-06-05', amount: 10000, payee: null, notes: 'UNRELATED' }],
+        },
+      }) as never,
+    );
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-06-05',
+      })
+    ).join('\n');
+
+    expect(text).not.toMatch(/Currency residual reconciled/);
+    expect(text).toMatch(/No adjustment was booked/);
+    expect(text).toContain('UNRELATED');
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('tells the caller to run it again, not to force the write past the check', async () => {
+    // The generic advice is "pass allow_duplicate", which for this tool is its
+    // least safe move: it writes an amount computed from an earlier balance.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({
+        byAccountDateAmount: {
+          data: [{ id: 'other-1', date: '2026-06-05', amount: 10000, payee: null, notes: 'X' }],
+        },
+      }) as never,
+    );
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-06-05',
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/run this again/i);
+    expect(text).toMatch(/recompute/i);
+  });
+
+  it('passes the flag through, so the caller can overrule the match', async () => {
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({
+        byAccountDateAmount: {
+          data: [{ id: 'other-1', date: '2026-06-05', amount: 10000, payee: null, notes: 'X' }],
+        },
+      }) as never,
+    );
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: 0,
+        category: 'Cashback',
+        date: '2026-06-05',
+        allow_duplicate: true,
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/Currency residual reconciled/);
+    expect(api.addTransactions).toHaveBeenCalled();
+  });
+
+  it('advertises allow_duplicate on its schema, or the flag never arrives', async () => {
+    // Unknown keys are dropped silently over the wire, so an interface field
+    // without a schema field is a parameter nobody can pass.
+    let schema: Record<string, unknown> | undefined;
+    registerReconcileCurrencyResidual({
+      tool: (...a: unknown[]) => {
+        schema = a[2] as Record<string, unknown>;
+      },
+    } as never);
+
+    expect(Object.keys(schema ?? {})).toContain('allow_duplicate');
   });
 });

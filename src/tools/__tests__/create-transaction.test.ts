@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fakeQ, lastQuery } from './fake-query.js';
+import { fakeQ, lastQuery, answerByFilter } from './fake-query.js';
 
 // Mock the external Actual API. addTransactions returns the literal 'ok'
 // (matching the real SDK: api/transactions-add -> Promise<'ok'>), NOT an array
@@ -21,7 +21,7 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn().mockResolvedValue(undefined),
   // The write is given an id of our own and found again by querying for it,
   // which is what replaced the date window and the snapshot (#93).
-  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  runQuery: vi.fn().mockImplementation(async () => ({ data: [] })),
   q: (table: string) => fakeQ(table),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -35,6 +35,7 @@ vi.mock('../../connection.js', () => ({
 
 import * as api from '@actual-app/api';
 import { createTransaction, registerCreateTransaction } from '../write/create-transaction.js';
+import { resolveDate } from '../../utils/dates.js';
 
 describe('createTransaction (#26 explicit category must win)', () => {
   beforeEach(() => {
@@ -48,9 +49,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
   it('forces the explicit category when the SDK overrides it with a learned one', async () => {
     // The created row, found by its marker, came back with the wrong (learned)
     // category.
-    vi.mocked(api.runQuery).mockResolvedValue({
-      data: [{ id: 'txn-new', category: 'cat-2', amount: -10000 }],
-    } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'txn-new', category: 'cat-2', amount: -10000 }] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -73,9 +72,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
   });
 
   it('does not call updateTransaction when the stored category already matches', async () => {
-    vi.mocked(api.runQuery).mockResolvedValue({
-      data: [{ id: 'txn-new', category: 'cat-1', amount: -10000 }],
-    } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'txn-new', category: 'cat-1', amount: -10000 }] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -88,10 +85,22 @@ describe('createTransaction (#26 explicit category must win)', () => {
   });
 
   it('looks the row up only when a category has to be enforced', async () => {
+    // Recorded inside the mock, per call. Reading `lastQuery` after the fact
+    // only ever describes whichever query happened to run last, so it would
+    // stop meaning anything the moment another query were added after this
+    // one, and it could not fail.
+    const byId: unknown[] = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'id' in lastQuery.filter) byId.push(lastQuery.filter);
+      return { data: [] } as never;
+    });
+
     await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
 
     expect(api.addTransactions).toHaveBeenCalledOnce();
-    expect(api.runQuery).not.toHaveBeenCalled();
+    // The duplicate check queries before writing; what must not happen is the
+    // marker lookup, which only runs when a category has to be enforced.
+    expect(byId).toHaveLength(0);
     expect(api.updateTransaction).not.toHaveBeenCalled();
   });
 
@@ -99,9 +108,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
     // The old code found "rows that were not there before" within a date
     // range, so another process's transaction could be given this one's
     // category. A marker lookup returns one row: ours.
-    vi.mocked(api.runQuery).mockResolvedValue({
-      data: [{ id: 'ours', category: 'cat-2', amount: -10000 }],
-    } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'ours', category: 'cat-2', amount: -10000 }] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -115,7 +122,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
 
   it('warns on stderr when the row cannot be found to enforce its category', async () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(api.runQuery).mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [] } }) as any);
 
     await createTransaction({
       account: 'Checking',
@@ -142,12 +149,22 @@ describe('a write that fails after it has already been applied', () => {
   const failure = () => new Error('We had an unknown problem opening "My-Finances-8174eb5"');
 
   /** What the marker lookup finds: our row, nothing, or an unreadable budget. */
+  /**
+   * Answers the marker lookup only. The duplicate check runs the other query
+   * on the same mock, and handing it these rows would make every write look
+   * like a duplicate and return before writing at all.
+   */
   const lookupFinds = (rows: Array<Record<string, unknown>> | null) => {
     vi.mocked(api.runQuery).mockReset();
     if (rows === null) {
-      vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
+      vi.mocked(api.runQuery).mockImplementation(async () => {
+        if ('id' in (lastQuery.filter ?? {})) throw new Error('budget will not open');
+        return { data: [] } as never;
+      });
     } else {
-      vi.mocked(api.runQuery).mockResolvedValue({ data: rows } as any);
+      vi.mocked(api.runQuery).mockImplementation(
+        answerByFilter({ byId: { data: rows } }) as never,
+      );
     }
   };
 
@@ -269,7 +286,7 @@ describe('create_transaction through its handler', () => {
   });
 
   it('does not report a saved write as an error', async () => {
-    vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
+    vi.mocked(api.runQuery).mockImplementation(answerByFilter({ byId: { data: [{ id: 'ours' }] } }) as any);
 
     const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
 
@@ -279,7 +296,10 @@ describe('create_transaction through its handler', () => {
   });
 
   it('still reports an unknown outcome as an error', async () => {
-    vi.mocked(api.runQuery).mockRejectedValue(new Error('budget will not open'));
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if ('id' in (lastQuery.filter ?? {})) throw new Error('budget will not open');
+      return { data: [] } as never;
+    });
 
     const result = await capture()({ account: 'Checking', amount: -50, date: '2026-09-21' });
 
@@ -349,9 +369,13 @@ describe('when a rule turns the transaction into a split', () => {
     vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
     vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
     vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
-    vi.mocked(api.runQuery).mockReset().mockResolvedValue({
-      data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }],
-    } as any);
+    vi.mocked(api.runQuery)
+      .mockReset()
+      .mockImplementation(
+        answerByFilter({
+          byId: { data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }] },
+        }) as never,
+      );
 
     await createTransaction({
       account: 'Checking',
@@ -363,5 +387,223 @@ describe('when a rule turns the transaction into a split', () => {
     expect(api.updateTransaction).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/turned the new transaction.*into a split/i));
     stderr.mockRestore();
+  });
+});
+
+/**
+ * The wiring, not the util. `duplicate-check.test.ts` covers the lookup and the
+ * text; none of it covered what `create_transaction` does with either, so with
+ * `SKIP_ACTUAL_INTEGRATION=1` the threshold that decides whether to refuse at
+ * all could be moved and nothing failed.
+ */
+describe('create_transaction: what it does with the duplicate check', () => {
+  const anExisting = {
+    data: [{ id: 'existing-1', date: '2026-09-21', amount: -5000, payee: null, notes: 'ALREADY-HERE' }],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+  });
+
+  it('names the account, not the id it was given', async () => {
+    // The preview's account column comes from the wiring, not the util: the
+    // unit test for the text hands it a name directly, so it only proves the
+    // util prints what it is given. Passing an id through and getting the id
+    // back would be a row the reader cannot place.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: anExisting }) as never,
+    );
+
+    const text = (
+      await createTransaction({ account: 'acc-1', amount: -50, date: '2026-09-21' })
+    ).join('\n');
+
+    expect(text).toContain('Checking');
+    expect(text).not.toContain('acc-1');
+  });
+
+  it('refuses on a single match, not only on several', async () => {
+    // A `> 1` threshold would let the ordinary case straight through: one
+    // existing transaction is exactly what recording a payment twice looks like.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: anExisting }) as never,
+    );
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+    });
+
+    expect(lines.join('\n')).toMatch(/already exists/i);
+    expect(lines.join('\n')).toContain('ALREADY-HERE');
+    expect(api.addTransactions).not.toHaveBeenCalled();
+  });
+
+  it('asks the lookup with the resolved date, not the word it was given', async () => {
+    // The check must ask the question the write will answer. Passing the raw
+    // input through means looking for a row dated "today", which matches
+    // nothing, so every call with a relative date silently skips the check.
+    // Only the real engine caught this, because the mocks did not care what
+    // the date was.
+    const filters: Array<Record<string, unknown>> = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'account' in lastQuery.filter) filters.push(lastQuery.filter);
+      return { data: [] } as never;
+    });
+
+    await createTransaction({ account: 'Checking', amount: -50, date: 'today' });
+
+    expect(filters).toHaveLength(1);
+    expect(filters[0].date).toBe(resolveDate('today'));
+    // There used to be a `.not.toBe('today')` under that line. It could not
+    // fail: `resolveDate('today')` returns YYYY-MM-DD and never the word, so
+    // the line above passing makes it pass, and the line above failing aborts
+    // the test before it runs. It was written in the fix for the round before,
+    // which is where this shape keeps coming back.
+  });
+
+  it('asks the lookup before writing, never after', async () => {
+    const order: string[] = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'account' in lastQuery.filter) order.push('lookup');
+      return { data: [] } as never;
+    });
+    vi.mocked(api.addTransactions).mockImplementation(async () => {
+      order.push('write');
+      return 'ok' as never;
+    });
+
+    await createTransaction({ account: 'Checking', amount: -50, date: '2026-09-21' });
+
+    expect(order).toEqual(['lookup', 'write']);
+  });
+
+  it('skips the pull and the lookup entirely when the flag is set', async () => {
+    // Not merely "creates anyway": the flag is what lets a caller avoid the
+    // extra round trip, so doing the work and discarding the answer would be a
+    // silent cost with no behavioural difference to catch it.
+    // Recorded inside the mock, at the moment of each call. Filtering
+    // `mock.calls` afterwards would read whatever `lastQuery` ended up holding
+    // and could not fail.
+    const lookups: unknown[] = [];
+    vi.mocked(api.runQuery).mockImplementation(async () => {
+      if (lastQuery.filter && 'account' in lastQuery.filter) {
+        lookups.push(lastQuery.filter);
+        return anExisting as never;
+      }
+      return { data: [] } as never;
+    });
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+      allow_duplicate: true,
+    });
+
+    expect(lines.join('\n')).toMatch(/Transaction created/);
+    expect(lookups).toHaveLength(0);
+    // One sync only: the one after the write. A pre-check pull would make two.
+    expect(api.sync).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The promises that live on the wire, tested under the wire.
+ *
+ * Three mutations survived a full run with `SKIP_ACTUAL_INTEGRATION=1` and were
+ * caught only by the real engine: dropping `allow_duplicate` from the schema,
+ * returning the preview as an error, and listing one match out of several. The
+ * same asymmetry was fixed for `reconcile_currency_residual` two rounds ago and
+ * not carried back to the tool the whole PR is about. Integration is a second
+ * net here, never the only one.
+ */
+describe('create_transaction: the duplicate warning as a client meets it', () => {
+  const capture = () => {
+    let handler: unknown;
+    let schema: Record<string, unknown> | undefined;
+    registerCreateTransaction({
+      tool: (...a: unknown[]) => {
+        schema = a[2] as Record<string, unknown>;
+        handler = a.at(-1);
+      },
+    } as never);
+    return { handler: handler as (i: Record<string, unknown>) => Promise<any>, schema };
+  };
+
+  const twoExisting = {
+    data: [
+      { id: 'dup-one', date: '2026-09-21', amount: -5000, payee: null, notes: 'FIRST-MATCH' },
+      { id: 'dup-two', date: '2026-09-21', amount: -5000, payee: null, notes: 'SECOND-MATCH' },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.runQuery).mockReset().mockImplementation(async () => ({ data: [] }) as never);
+  });
+
+  it('advertises allow_duplicate on its schema, or the flag never arrives', () => {
+    // Unknown keys are dropped silently over the wire, so an interface field
+    // with no schema field is a parameter nobody can pass. The warning would
+    // then be a wall rather than a question.
+    expect(Object.keys(capture().schema ?? {})).toContain('allow_duplicate');
+  });
+
+  it('does not come back as an error, which is what invites the retry', () => {
+    // The code comments promise this and only the e2e checked it. An agent
+    // reading `isError` treats being asked as being refused, and retries, and
+    // retrying is what duplicates.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: twoExisting }) as never,
+    );
+
+    return capture()
+      .handler({ account: 'Checking', amount: -50, date: '2026-09-21' })
+      .then((res) => {
+        expect(res.isError).toBeUndefined();
+        expect(res.content[0].text).toMatch(/already exist/i);
+        expect(res.content[0].text).not.toMatch(/^Error:/);
+      });
+  });
+
+  it('lists every match in the body, not only in the count', async () => {
+    // The header test reads the first line only, so truncating the loop to one
+    // row was invisible to it. The ids are what a caller acts on, and being
+    // told "2 transactions" while shown one is worse than being told nothing.
+    vi.mocked(api.runQuery).mockImplementation(
+      answerByFilter({ byAccountDateAmount: twoExisting }) as never,
+    );
+
+    const res = await capture().handler({ account: 'Checking', amount: -50, date: '2026-09-21' });
+    const text = res.content[0].text;
+
+    // Two assertions, each with a mutation that fails it alone: truncating the
+    // loop fails the first, dropping the id line fails the second. An earlier
+    // version listed four `toContain`s, and the last of them could never be
+    // the one to fail, because anything that removed the second id had already
+    // failed on the first.
+    expect(text).toContain('SECOND-MATCH');
+    expect(text.match(/^ {4}id: /gm) ?? []).toHaveLength(2);
+  });
+
+  it('tells a client what the flag is for, in the text a client reads', () => {
+    // The description is as much the wire as the schema: it is the only place
+    // an agent learns the flag exists and that "already exists" is a question
+    // rather than a refusal. Without it the agent retries, and retrying is
+    // what duplicates.
+    let description: string | undefined;
+    registerCreateTransaction({
+      tool: (...a: unknown[]) => { description = a[1] as string; },
+    } as never);
+
+    expect(description).toMatch(/allow_duplicate/);
+    expect(description).toMatch(/already exists/i);
   });
 });
