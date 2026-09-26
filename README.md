@@ -601,7 +601,7 @@ budget data, and hiding it would leave a desynced budget with no way to recover.
 
 Writes are enabled by default. Read-only is opt-in.
 
-## Tools (37)
+## Tools (38)
 
 ### Read (9)
 
@@ -657,7 +657,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write: Transactions (9)
+### Write: Transactions (10)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -666,6 +666,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `update_transaction` | Edit an existing transaction | "Change the amount on that transaction to 600" |
 | `delete_transaction` | Remove a transaction (previews first, see [Safety](#safety)) | "Delete that test transaction" |
 | `update_budget_amount` | Change a budget amount | "Set my food budget to 15,000 for this month" |
+| `transfer_between_categories` | Move budgeted money between categories, creating no transaction | "Move 114.06 from Reembolsos pendientes to Familia" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
 | `reconcile_currency_residual` | Clear accumulated FX-rate residual | "Reconcile my USD card to 213.82 USD" |
@@ -681,6 +682,8 @@ Writes are enabled by default. Read-only is opt-in.
 **delete_transaction** - `transaction_id` (required) | `confirm` (optional): must be true to delete; without it the tool only previews
 
 **update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional)
+
+**transfer_between_categories** - `from` (required): category to take from | `to` (required): category to give to | `amount` (required): positive | `month` (optional, defaults to the current month). Refuses an income category at either end, and a month that is not `YYYY-MM` with the month between 01 and 12, because Actual's own handler accepts both and silently loses or destroys the money. Covering an overspent category is allowed and reported.
 
 **recategorize_transaction** - `transaction_id` (required) | `category` (required)
 

@@ -39,7 +39,8 @@ describe('read-only mode hides write tools from discovery', () => {
 
     expect(names).toContain('create_transaction');
     expect(names).toContain('delete_account');
-    expect(names.length).toBe(37);
+    expect(names).toContain('transfer_between_categories');
+    expect(names.length).toBe(38);
   });
 
   it('does not register write tools when read-only', () => {
@@ -49,6 +50,8 @@ describe('read-only mode hides write tools from discovery', () => {
     expect(names).not.toContain('create_transaction');
     expect(names).not.toContain('delete_account');
     expect(names).not.toContain('run_bank_sync');
+    // It writes budget, so read-only mode has to hide it like the rest.
+    expect(names).not.toContain('transfer_between_categories');
   });
 
   it('keeps the read and analysis tools when read-only', () => {

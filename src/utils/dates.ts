@@ -22,8 +22,15 @@ export function resolveMonth(input?: string): string {
 
   const trimmed = input.trim().toLowerCase();
 
-  // Already in YYYY-MM format
-  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+  // Already in YYYY-MM format.
+  //
+  // The month has to be a real one. `\d{2}` let "2026-13" through, and nothing
+  // downstream catches it: `dbMonth` is a `parseInt`, so the engine writes
+  // budget against month 202613 and reports success, while every reader keeps
+  // looking at the twelve months that exist. Measured against the engine: money
+  // moved to "2026-13" left the source category alone and never arrived
+  // anywhere, with no error raised.
+  if (/^\d{4}-(0[1-9]|1[0-2])$/.test(trimmed)) {
     return trimmed;
   }
 
