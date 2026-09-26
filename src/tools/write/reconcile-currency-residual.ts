@@ -7,6 +7,7 @@ import { resolveAccountId } from '../../utils/resolvers.js';
 import { resolveDate, formatDate } from '../../utils/dates.js';
 import { createTransaction } from './create-transaction.js';
 import { pullBeforeReading, isDuplicatePreview } from '../../utils/duplicate-check.js';
+import { rowsDatedAfterToday, describeFutureRows } from '../../utils/future-dated.js';
 import { describeError } from '../../utils/errors.js';
 import { WriteReportedError } from '../../utils/write-outcome.js';
 
@@ -19,6 +20,12 @@ export interface ReconcileResidualInput {
   payee?: string;
   /** Book the adjustment even though a transaction of that amount is already on that day. */
   allow_duplicate?: boolean;
+  /**
+   * What the bank's figure does with transactions dated after today.
+   * `exclude` reconciles against the balance up to today, `include` against
+   * the balance counting every row. Required only when such rows exist.
+   */
+  future_rows?: 'exclude' | 'include';
 }
 
 /**
@@ -30,6 +37,20 @@ export interface ReconcileResidualInput {
  * (what the bank reports, default 0) and books a single adjustment transaction
  * in `category` to close the gap. Returns the confirmation lines.
  */
+/**
+ * Append what the adjustment was measured against, when that was a choice.
+ *
+ * Only when rows dated ahead exist, since otherwise there was nothing to
+ * decide and the clause would be noise on every ordinary reconciliation.
+ */
+function futureNote(base: string, futureCount: number, reading?: 'exclude' | 'include'): string {
+  if (futureCount === 0 || !reading) return base;
+  const what = futureCount === 1 ? '1 transaction' : `${futureCount} transactions`;
+  return reading === 'include'
+    ? `${base} (counting ${what} dated after today)`
+    : `${base} (not counting ${what} dated after today)`;
+}
+
 export async function reconcileCurrencyResidual(input: ReconcileResidualInput): Promise<string[]> {
   await ensureConnection();
 
@@ -96,12 +117,61 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   // #88 scenario reappearing on the one path that computes what it writes.
   await pullBeforeReading('reading the balance to reconcile');
 
-  const currentCents = await api.getAccountBalance(accountId);
-  const targetCents = amountToCents(input.target_balance ?? 0);
-  const deltaCents = targetCents - currentCents;
-
+  // What the balance counts, before comparing it to anything.
+  //
+  // `getAccountBalance` sums `date <= today`. A bank's figure may already
+  // include a transaction dated after today, because a card purchase made at
+  // the weekend is commonly posted with the following business day's date. When
+  // that happens the two numbers are not measuring the same thing, and the
+  // difference between them lands in the residual category as though it were
+  // currency drift.
+  //
+  // Measured: an account at -100.00 to today, a -40.00 purchase dated ahead
+  // that the bank has already posted, a -80.00 transfer scheduled for later
+  // that it has not, and a bank figure of -140.00. This booked -40.00 and left
+  // the account summing to -260.00 where the bank will end at -220.00. The
+  // adjustment was exactly the purchase, recorded a second time.
+  //
+  // In general the data does not tell the two kinds apart, so the choice is
+  // the caller's and this refuses to make it for them. Where it does say
+  // something, `rowsDatedAfterToday` passes it on rather than deciding with
+  // it; see the note there about the two labels that got this wrong first.
+  // One reading of the clock, threaded through both.
+  //
+  // The balance stops at a cutoff and the lookup starts after a date, so if
+  // those two come from different reads a row dated between them is in
+  // neither: not counted in the balance, not reported as ahead, so the
+  // question is never asked and an adjustment is written.
+  //
+  // Passing a cutoff at all was the first fix, and it only narrowed the
+  // window: it replaced "the engine's clock against `resolveDate`" with
+  // "`resolveDate` against `resolveDate`", the same width, because the two
+  // calls sat in different modules with an `await` between them. Measured
+  // across midnight: cutoff 2026-09-26, `$gt` 2026-09-27, and a row dated the
+  // 27th in neither.
+  //
+  // `today` is already computed above for the refusal, so this is the same
+  // value the rest of the function reasons about as well.
   const accounts = await api.getAccounts();
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
+
+  const balanceToToday = await api.getAccountBalance(accountId, today as never);
+  const future = await rowsDatedAfterToday(accountId, today);
+
+  if (future.rows.length > 0 && !input.future_rows) {
+    return describeFutureRows(
+      future.rows,
+      future.total,
+      acctName,
+      balanceToToday,
+      amountToCents(input.target_balance ?? 0),
+    );
+  }
+
+  const currentCents =
+    input.future_rows === 'include' ? balanceToToday + future.total : balanceToToday;
+  const targetCents = amountToCents(input.target_balance ?? 0);
+  const deltaCents = targetCents - currentCents;
 
   if (deltaCents === 0) {
     return [
@@ -122,8 +192,20 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     account: accountId,
     amount: centsToAmount(deltaCents),
     category: input.category,
-    notes: input.notes || 'FX residual adjustment',
-    date: input.date,
+    // The row records which reading it was taken under. #100's complaint was
+    // that a wrong adjustment is indistinguishable afterwards: it sits in the
+    // residual category saying it is currency drift. If the caller answers
+    // this question wrongly the figure is still wrong, but the row now says
+    // what it was computed against, which is the difference between a puzzle
+    // and a lookup.
+    notes: futureNote(input.notes || 'FX residual adjustment', future.rows.length, input.future_rows),
+    // The date already resolved and validated above, not the raw input. Sent
+    // raw, `createTransaction` resolves it a second time, so across midnight
+    // the row is written on the new day while the balance was measured on the
+    // old one, on a date that never went through the future-date refusal. The
+    // same class as the window closed above, and closed the same way: read
+    // once, pass it on.
+    date: txnDate,
     payee: input.payee,
     allow_duplicate: input.allow_duplicate,
     // Not "pass allow_duplicate", which is this tool's least safe move: it
@@ -165,7 +247,9 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
     'reconcile_currency_residual',
     'Book an adjustment transaction to bring a multi-currency account to the balance the bank reports, clearing accumulated FX-rate residual. ' +
       'The date must be today or earlier. If a transaction with the same account, date and amount already exists this books nothing and ' +
-      'reports it instead; run it again to recompute, or pass allow_duplicate if the match is unrelated.',
+      'reports it instead; run it again to recompute, or pass allow_duplicate if the match is unrelated. ' +
+      'If the account holds transactions dated after today, it reports those and books nothing until future_rows says ' +
+      'whether the balance you gave already counts them.',
     {
       account: z.string().describe('Account name or ID to reconcile'),
       category: z.string().describe('Category to book the adjustment under (name or ID)'),
@@ -183,6 +267,12 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         .optional()
         .describe('Date for the adjustment (YYYY-MM-DD or "today"). Defaults to today.'),
       payee: z.string().optional().describe('Optional payee for the adjustment'),
+      future_rows: z
+        .enum(['exclude', 'include'])
+        .optional()
+        .describe(
+          'What the balance you gave does with transactions dated after today. "exclude" if the bank has not posted them, "include" if it has, which is usual for a card purchase the bank dates a day or two ahead. Only needed when the account holds such rows; without it, this reports them and books nothing.',
+        ),
       allow_duplicate: z
         .boolean()
         .optional()

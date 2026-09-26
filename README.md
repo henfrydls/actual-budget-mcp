@@ -529,13 +529,57 @@ such restriction, so recording a purchase dated ahead, which is what you want
 when a card posts a weekend purchase on the next business day, still works
 there.
 
-**Open problem, #100.** The reverse case is not handled. If the account already
-holds rows dated after today, the balance Actual reports today and the balance
-the bank reports are not comparable, and reconcile books the difference as
-residual. Measured: one purchase of -100.00 dated ahead, with the bank already
-reporting -100.00, produces an adjustment of -100.00 and leaves the account at
--200.00. Until that is decided, check for future-dated rows in an account before
-reconciling it.
+**When the account holds transactions dated after today, it asks which they
+are.** Actual's balance stops at today; your bank's figure may not. A card
+purchase made at the weekend is commonly posted with the following business
+day's date, so the bank has already counted something the balance has not, and
+the difference would otherwise be booked as currency drift.
+
+So reconcile reports those rows and books nothing until you say which reading
+you gave it:
+
+```
+reconcile_currency_residual(account: "Card", target_balance: -140, category: "Cashback")
+  → No adjustment was booked for Card.
+
+    This account holds 2 transactions dated after today, so the balance Actual
+    reports and the balance your bank reports are not measuring the same thing.
+
+      2026-09-28  -40.00  WEEKEND-PURCHASE  (came from the bank, so the bank counts it)
+      2026-10-26  -80.00  SCHEDULED-LATER
+
+      Balance to today:        -100.00
+      Those rows come to:      -120.00
+      Balance counting them:   -220.00
+      You said the bank says:  -140.00
+
+    Which is it?
+
+      future_rows: "exclude"   the bank has not posted them yet.
+                               Adjustment would be -40.00.
+      future_rows: "include"   the bank has posted them already, ...
+                               Adjustment would be 80.00.
+```
+
+The choice is yours, because in general nothing says which a row is. Where
+something does, it is said: a row that arrived from the bank is one the bank
+obviously counts, and a row entered here and not reconciled may be one it has
+not seen. Neither settles it, both narrow it. Rows are listed oldest first, so
+the nearest one, the one most likely to have been posted, is the first you read.
+
+Accounts with nothing dated ahead are unaffected and never see the question. A
+row dated exactly today counts as present, not as ahead, because the balance
+already includes it.
+
+Whichever you choose is recorded on the adjustment itself, as
+`FX residual adjustment (counting 2 transactions dated after today)`, so a row
+booked on the wrong reading can be found later instead of being a puzzle.
+
+Measured before this existed: an account at -100.00 to today, a -40.00 purchase
+dated ahead that the bank had posted, a -80.00 transfer scheduled for later that
+it had not, and a bank figure of -140.00. It booked -40.00 and left the account
+summing to -260.00 where the bank ends at -220.00. The adjustment was exactly
+the purchase, recorded a second time, in a category that calls it drift.
 
 It also refuses a date that does not exist, such as `2026-09-31` or
 `2026-02-30`, rather than calling it a future one. Other tools still accept an
@@ -644,7 +688,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **create_split_transaction** - `account` (required) | `amount` (required): total, must equal the sum of the splits | `splits` (required): two or more `{category, amount, notes}` | `payee`, `date`, `notes`, `cleared` (all optional)
 
-**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day
+**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day | `future_rows` (optional): `exclude` or `include`, whether the balance you gave already counts transactions dated after today
 
 **run_bank_sync** - `account` (optional): sync specific account or all if omitted
 

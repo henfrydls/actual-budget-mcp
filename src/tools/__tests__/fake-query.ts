@@ -15,6 +15,7 @@ export interface RecordedQuery {
   filter?: Record<string, unknown>;
   options?: Record<string, unknown>;
   select?: string[];
+  orderBy?: unknown;
 }
 
 export const lastQuery: RecordedQuery = {};
@@ -24,6 +25,7 @@ export function fakeQ(table: string) {
   lastQuery.filter = undefined;
   lastQuery.options = undefined;
   lastQuery.select = undefined;
+  lastQuery.orderBy = undefined;
 
   const builder: Record<string, (arg?: unknown) => unknown> = {
     filter: (f?: unknown) => {
@@ -36,6 +38,10 @@ export function fakeQ(table: string) {
     },
     select: (s?: unknown) => {
       lastQuery.select = s as string[];
+      return builder;
+    },
+    orderBy: (o?: unknown) => {
+      lastQuery.orderBy = o;
       return builder;
     },
   };
@@ -55,11 +61,22 @@ export function fakeQ(table: string) {
 export function answerByFilter(answers: {
   byId?: unknown;
   byAccountDateAmount?: unknown;
+  /** The rows-dated-after-today lookup (#100), which filters `date: { $gt }`. */
+  byFutureDate?: unknown;
   fallback?: unknown;
 }) {
   return async () => {
     const filter = lastQuery.filter ?? {};
     if ('id' in filter) return answers.byId ?? { data: [] };
+    // Before the plain account branch, and told apart by the shape of `date`
+    // rather than by the presence of `account`, which both carry: the
+    // duplicate check passes a `YYYY-MM-DD` string, this one an operator
+    // object. Falling through to the other branch handed reconcile's future
+    // lookup the duplicate fixture and made every account look as though it
+    // held transactions dated ahead.
+    if (typeof filter.date === 'object' && filter.date !== null) {
+      return answers.byFutureDate ?? { data: [] };
+    }
     if ('account' in filter) return answers.byAccountDateAmount ?? { data: [] };
     return answers.fallback ?? { data: [] };
   };
