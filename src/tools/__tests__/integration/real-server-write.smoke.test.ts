@@ -83,11 +83,25 @@ describe.skipIf(!enabled)('real server WRITE smoke (#28/#25/#30, dedicated budge
     const parent = (await api.getTransactions(acctId, '2026-06-05', '2026-06-05')).find((t: any) => t.is_parent);
     const sub = (parent as any).subtransactions[0];
     await updateTransactionFields({ transaction_id: sub.id, notes: 'smoke' });
+    // A read issued too soon after an update returns the row as it was before
+    // it, and `target.amount === sub.amount` then holds whether or not the
+    // amount was preserved. That mechanism is measured: reintroducing #25 and
+    // reading without a wait passes, reading with one fails.
+    //
+    // Whether this test was ever exposed to it is *not* measured, and the
+    // reasoning says probably not: `updateTransactionFields` ends in
+    // `api.sync()`, and this file only runs with a real server, so that sync is
+    // a network round trip and the window is long closed by the time the read
+    // happens. Kept because it is correct regardless and costs nothing, not
+    // because a bug was found here.
+    await new Promise((r) => setTimeout(r, 0));
 
     const after = (await api.getTransactions(acctId, '2026-06-05', '2026-06-05')).find((t: any) => t.is_parent);
     const target = (after as any).subtransactions.find((s: any) => s.id === sub.id);
     expect(target.amount).toBe(sub.amount);
-    expect((after as any).amount).toBe(-15000);
+    // No assertion on the parent's own total here: it is unchanged by #25, so
+    // it cannot report the regression this test exists for, and the test above
+    // already asserts the same -15000.
   }, 120_000);
 
   it('reconcile_currency_residual hits the target through a real sync', async () => {
