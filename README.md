@@ -437,6 +437,12 @@ delete_category(category: "Groceries", confirm: true, confirm_name: "Groceries")
   → deleted
 ```
 
+The preview covers every row that can be deleted, which is the point of it:
+dated ahead of today, older than the rest of the budget, one part of a split,
+or in a closed account. Those four used to preview as blank and delete anyway,
+so the guard was asking you to confirm nothing. An id that matches no
+transaction is now refused rather than reported as deleted.
+
 Tools that find their target **by name** (`delete_account`, `delete_category`,
 `delete_category_group`, `delete_payee`) also require `confirm_name` with the
 exact name. That is where deleting the wrong thing actually happens: asking for
@@ -628,7 +634,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **update_transaction** - `transaction_id` (required) | `amount`, `payee`, `category`, `date`, `notes`, `cleared` (all optional)
 
-**delete_transaction** - `transaction_id` (required)
+**delete_transaction** - `transaction_id` (required) | `confirm` (optional): must be true to delete; without it the tool only previews
 
 **update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional)
 
