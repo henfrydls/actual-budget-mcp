@@ -73,6 +73,13 @@ describe('transfer_between_categories (#86)', () => {
   beforeEach(() => {
     sendMock.mockClear().mockResolvedValue(undefined);
     vi.mocked(api.getBudgetMonth).mockReset();
+    // Reset this too. The income test replaces it with a three-category list,
+    // and without this that list leaks into every test declared after it. It
+    // breaks nothing today, which is exactly what made #106 the same shape.
+    vi.mocked(api.getCategories).mockReset().mockResolvedValue([
+      { id: 'cat-1', name: 'Groceries', group_id: 'g1', hidden: false },
+      { id: 'cat-2', name: 'Dining', group_id: 'g1', hidden: false },
+    ] as never);
   });
 
   it('sends the move in cents and reports both figures', async () => {
@@ -203,6 +210,45 @@ describe('transfer_between_categories (#86)', () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('did not run, so nothing was moved');
+  });
+
+  it('does not claim a move when the source did not give the money up', async () => {
+    // Half of the read-back check. Removing this comparison alone left the
+    // suite green, and the reply would then say "Moved 114.06" about money
+    // that never left the source: the destination is credited and the source
+    // still holds it, which is money invented.
+    vi.mocked(api.getBudgetMonth)
+      .mockResolvedValueOnce(month(20000, 5000) as never)
+      .mockResolvedValueOnce(month(20000, 16406) as never);
+
+    const result = await handlerFor()({
+      from: 'Groceries',
+      to: 'Dining',
+      amount: 114.06,
+      month: '2026-09',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('did not change the way they should have');
+  });
+
+  it('does not claim a move when the destination never received it', async () => {
+    // The other half, and the one that matters most: it is the shape the
+    // income-category bug produced. The source is debited, nothing arrives,
+    // and without this comparison the reply reports a successful move.
+    vi.mocked(api.getBudgetMonth)
+      .mockResolvedValueOnce(month(20000, 5000) as never)
+      .mockResolvedValueOnce(month(8594, 5000) as never);
+
+    const result = await handlerFor()({
+      from: 'Groceries',
+      to: 'Dining',
+      amount: 114.06,
+      month: '2026-09',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('did not change the way they should have');
   });
 
   it('does not claim a move the figures do not show', async () => {

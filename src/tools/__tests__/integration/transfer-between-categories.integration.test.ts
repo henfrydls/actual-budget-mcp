@@ -19,6 +19,7 @@ vi.mock('../../../connection.js', async () => {
 
 import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './actual-engine.js';
 import { registerTransferBetweenCategories } from '../../write/transfer-between-categories.js';
+import { getInternal } from '../../../connection.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../../types.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
@@ -215,12 +216,17 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
     expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted);
   }, 60_000);
 
-  it('refuses a month with a day on it instead of destroying the month', async () => {
-    // The worst of the malformed months, and the easiest to send by accident:
+  it('refuses a month with a day on it, and leaves the budget alone', async () => {
+    // Named for what it measures. It used to say "instead of destroying the
+    // month", which it never demonstrated: loosening `resolveMonth` AND
+    // disabling the tool's own shape check, both at once, leaves this green,
+    // because `api.getBudgetMonth` refuses the month on its own and the tool
+    // reads the figures before it writes. The guards give the person a clear
+    // answer early; the read is what keeps the bad month away from the
+    // handler. The test below is the one that exercises the handler.
+    //
+    // It is still the easiest malformed month to send by accident:
     // `resolveDate('today')` returns YYYY-MM-DD and it is one field name away.
-    // Measured without the refusal, asking to move 10.00 with month
-    // "2026-09-15" took Groceries from 200.00 to -10.00 and Dining from 50.00
-    // to 10.00, and returned success.
     let groceries = '';
     let dining = '';
     await createFreshBudget(async () => {
@@ -300,6 +306,46 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
     expect(back.content[0].text).toContain('income category');
     const afterBack = await figures(thisMonth, [groceries, sneaky]);
     expect(afterBack.cats[0].budgeted).toBe(before.cats[0].budgeted);
+  }, 60_000);
+
+  it('the engine handler really does destroy a month given a day', async () => {
+    // The claim the whole design rests on, exercised rather than remembered.
+    // Nothing else here reaches the handler with a bad month, because the tool
+    // refuses first, so without this the justification for every guard above is
+    // a sentence in a commit message.
+    //
+    // If Actual ever fixes this, this test fails, and that is the point: it is
+    // the notification. The same reasoning as the #44 guard, which pins an
+    // undocumented default of the same dependency.
+    let groceries = '';
+    let dining = '';
+    await createFreshBudget(async () => {
+      const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+      groceries = await api.createCategory({ name: 'Groceries', group_id: g } as never);
+      dining = await api.createCategory({ name: 'Dining', group_id: g } as never);
+    }, 'xfer-handler-damage');
+
+    await api.setBudgetAmount(thisMonth, groceries, 20000);
+    await api.setBudgetAmount(thisMonth, dining, 5000);
+
+    // 10.00, from a category holding 200.00 to one holding 50.00.
+    await (getInternal() as unknown as {
+      send: (m: string, a: unknown) => Promise<unknown>;
+    }).send('budget/transfer-category', {
+      month: `${thisMonth}-15`,
+      amount: 1000,
+      from: groceries,
+      to: dining,
+    });
+
+    const after = await figures(thisMonth, [groceries, dining]);
+    // Not 190.00 and 60.00. The source is left owing, and the destination
+    // holds the amount of the move instead of its own budget plus the move:
+    // `sheetForMonth` replaces only the first dash, so both figures are read
+    // from a sheet that does not exist, while `dbMonth`'s parseInt stops at the
+    // dash and writes to the real month. It is an overwrite, not a move.
+    expect(after.cats[0].budgeted).toBe(-1000);
+    expect(after.cats[1].budgeted).toBe(1000);
   }, 60_000);
 
   it('allows covering an overspent category and reports what it left behind', async () => {
