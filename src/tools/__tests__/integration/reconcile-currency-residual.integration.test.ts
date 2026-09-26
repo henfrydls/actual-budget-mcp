@@ -14,6 +14,19 @@ import { reconcileCurrencyResidual } from '../../write/reconcile-currency-residu
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
 
+function plusDays(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
+}
+
+// Read once. Calling plusDays() again inside an assertion would disagree with
+// the fixture across a midnight boundary.
+const AHEAD = plusDays(3);
+const LATER = plusDays(30);
+
 describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
   beforeAll(async () => {
     await initTestEngine();
@@ -263,4 +276,293 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
     balanceSpy.mockRestore();
     expect(order.slice(0, 3)).toEqual(['sync:start', 'sync:done', 'balance']);
   }, 60_000);
+
+  /**
+   * #100. The scenario that motivated it, measured before anything was
+   * changed: an account at -100.00 to today, a -40.00 purchase dated ahead
+   * that the bank has already posted, a -80.00 transfer scheduled for later
+   * that it has not, and a bank figure of -140.00. It booked -40.00 and left
+   * the account summing to -260.00 where the bank ends at -220.00. The
+   * adjustment was exactly the purchase, recorded a second time, in a category
+   * that says it is currency drift.
+   */
+  describe('transactions dated after today', () => {
+    async function budgetWithFutureRows(name: string) {
+      let acctId = '';
+      const budget = await createFreshBudget(async () => {
+        acctId = await api.createAccount({ name, type: 'credit' } as never, 0);
+        const group = await api.createCategoryGroup({ name: `G-${name}` } as never);
+        await api.createCategory({ name: `C-${name}`, group_id: group } as never);
+        await api.addTransactions(
+          acctId,
+          [
+            { date: '2026-05-01', amount: -10000, payee_name: 'FX drift' },
+            { date: AHEAD, amount: -4000, payee_name: 'WEEKEND-PURCHASE' },
+            { date: LATER, amount: -8000, payee_name: 'SCHEDULED-LATER' },
+          ] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+      return { acctId, budget, category: `C-${name}` };
+    }
+
+    it('books nothing, and shows both readings, when it cannot know which they are', async () => {
+      const { acctId, budget, category } = await budgetWithFutureRows('Card (A)');
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (A)',
+          target_balance: -140,
+          category,
+        })
+      ).join('\n');
+
+      expect(text).toMatch(/No adjustment was booked/);
+      expect(text).toContain('WEEKEND-PURCHASE');
+      expect(text).toContain('SCHEDULED-LATER');
+      expect(text).toContain('Balance to today:        -100.00');
+      expect(text).toContain('Balance counting them:   -220.00');
+
+      await api.loadBudget(budget);
+      const rows = await api.getTransactions(acctId, '1900-01-01', '2099-12-31');
+      expect(rows, 'nothing was written').toHaveLength(3);
+    }, 60_000);
+
+    it('counts them in when the bank has posted them, which is the motivating case', async () => {
+      const { acctId, budget, category } = await budgetWithFutureRows('Card (B)');
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (B)',
+          target_balance: -220,
+          category,
+          future_rows: 'include',
+        })
+      ).join('\n');
+
+      // Nothing to do, and that is the whole point. The account already
+      // agrees with the bank once the rows dated ahead are counted, so no
+      // adjustment is booked. Told to exclude them, the same call books -40.00
+      // and duplicates the purchase, which is what the test below shows.
+      expect(text).toMatch(/No adjustment needed/);
+      expect(text).toContain('-220.00');
+
+      await api.loadBudget(budget);
+      expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(3);
+    }, 60_000);
+
+    it('still books a real residual when one survives counting them in', async () => {
+      // Proves the arithmetic rather than only the refusal: -230.00 reported
+      // against -220.00 counted is a genuine -10.00 of drift.
+      const { acctId, budget, category } = await budgetWithFutureRows('Card (E)');
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (E)',
+          target_balance: -230,
+          category,
+          future_rows: 'include',
+        })
+      ).join('\n');
+
+      expect(text).toMatch(/Currency residual reconciled/);
+      expect(text).toMatch(/Was:        -220\.00/);
+      expect(text).toMatch(/Adjustment: -10\.00/);
+
+      await api.loadBudget(budget);
+      expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(4);
+    }, 60_000);
+
+    it('leaves them out when the bank has not, which is the older behaviour', async () => {
+      const { acctId, budget, category } = await budgetWithFutureRows('Card (C)');
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (C)',
+          target_balance: -140,
+          category,
+          future_rows: 'exclude',
+        })
+      ).join('\n');
+
+      expect(text).toMatch(/Was:        -100\.00/);
+      expect(text).toMatch(/Adjustment: -40\.00/);
+
+      await api.loadBudget(budget);
+      expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(4);
+    }, 60_000);
+
+    it('lists a split dated ahead as the purchase, not as its parts', async () => {
+      // Measured while choosing the query: `inline` substitutes a split's
+      // parts for the parent and would list three rows where there are two
+      // purchases. Both total the same, so only the listing tells them apart.
+      let acctId = '';
+      await createFreshBudget(async () => {
+        acctId = await api.createAccount({ name: 'Card (F)', type: 'credit' } as never, 0);
+        const group = await api.createCategoryGroup({ name: 'G-F' } as never);
+        const category = await api.createCategory({ name: 'C-F', group_id: group } as never);
+        await api.addTransactions(
+          acctId,
+          [
+            { date: '2026-05-01', amount: -10000, payee_name: 'FX drift' },
+            {
+              date: AHEAD,
+              amount: -6000,
+              payee_name: 'SPLIT-AHEAD',
+              subtransactions: [
+                { amount: -2000, category },
+                { amount: -4000, category },
+              ],
+            },
+          ] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (F)',
+          target_balance: -160,
+          category: 'C-F',
+        })
+      ).join('\n');
+
+      // No `not.toContain('-20.00')` under these: for a part's amount to
+      // appear there would have to be a second row, which fails the count
+      // above, or the single row would have to be a part, which fails the
+      // -60.00 below. It could never be the assertion that reports, which is
+      // the same reason two of its kind came out of `future-dated.test.ts`.
+      expect(text).toMatch(/holds one transaction dated after today/);
+      expect(text).toContain('-60.00');
+      expect(text).toContain('Those rows come to:      -60.00');
+    }, 60_000);
+
+    it('labels rows by what the engine actually records about them', async () => {
+      // The joint between the lookup and the text, which neither end covered:
+      // one test mocks the query and the other hands rows in by hand, so the
+      // fields the engine really sets were never exercised. Four rows, one per
+      // outcome, in one preview.
+      let acctId = '';
+      let savings = '';
+      await createFreshBudget(async () => {
+        acctId = await api.createAccount({ name: 'Card (I)', type: 'credit' } as never, 0);
+        savings = await api.createAccount({ name: 'Savings (I)', type: 'savings' } as never, 0);
+        const group = await api.createCategoryGroup({ name: 'G-I' } as never);
+        await api.createCategory({ name: 'C-I', group_id: group } as never);
+        await api.addTransactions(
+          acctId,
+          [{ date: '2026-05-01', amount: -10000, payee_name: 'FX drift' }] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+
+      // Arrived from the bank.
+      await api.importTransactions(acctId, [
+        { date: AHEAD, amount: -1500, payee_name: 'FROM-THE-BANK', imported_id: 'bank-1', cleared: true },
+      ] as never);
+      // Typed here, not reconciled.
+      await api.addTransactions(
+        acctId,
+        [{ date: AHEAD, amount: -2500, payee_name: 'TYPED-HERE', cleared: false }] as never,
+        { learnCategories: false, runTransfers: false },
+      );
+      // Reconciled here but never imported: neither label is true of it.
+      await api.addTransactions(
+        acctId,
+        [{ date: AHEAD, amount: -3500, payee_name: 'CLEARED-HERE', cleared: true }] as never,
+        { learnCategories: false, runTransfers: false },
+      );
+      // One leg of a real transfer, which the previous labelling called "not a
+      // bank movement" and which the engine returns cleared.
+      const payees = await api.getPayees();
+      const toSavings = payees.find((p) => p.transfer_acct === savings)!;
+      await api.addTransactions(
+        acctId,
+        [{ date: LATER, amount: -5000, payee: toSavings.id }] as never,
+        { learnCategories: false, runTransfers: true },
+      );
+
+      const lines = await reconcileCurrencyResidual({
+        account: 'Card (I)',
+        target_balance: -140,
+        category: 'C-I',
+      });
+      const lineWith = (needle: string) => {
+        const found = lines.filter((l) => l.includes(needle));
+        expect(found, `expected one line for ${needle}`).toHaveLength(1);
+        return found[0];
+      };
+
+      // `From-The-Bank`, not `FROM-THE-BANK`: `importTransactions` title-cases
+      // the payee on the way in, which is worth knowing before matching on one.
+      expect(lineWith('From-The-Bank')).toContain('came from the bank');
+      expect(lineWith('TYPED-HERE')).toContain('entered here, not reconciled');
+      expect(lineWith('CLEARED-HERE')).not.toMatch(/came from the bank|entered here/);
+      expect(lineWith('Savings (I)')).not.toMatch(/came from the bank|entered here/);
+    }, 60_000);
+
+    it('lists them oldest first, so the nearest one is read first', async () => {
+      const { category } = await budgetWithFutureRows('Card (G)');
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (G)',
+          target_balance: -140,
+          category,
+        })
+      ).join('\n');
+
+      expect(text.indexOf('WEEKEND-PURCHASE')).toBeLessThan(text.indexOf('SCHEDULED-LATER'));
+    }, 60_000);
+
+    it('treats a row dated exactly today as present, not as ahead', async () => {
+      // The boundary the `$gt` sits on. A row dated today is already in the
+      // balance, so asking about it would be asking about nothing.
+      let acctId = '';
+      await createFreshBudget(async () => {
+        acctId = await api.createAccount({ name: 'Card (H)', type: 'credit' } as never, 0);
+        const group = await api.createCategoryGroup({ name: 'G-H' } as never);
+        await api.createCategory({ name: 'C-H', group_id: group } as never);
+        await api.addTransactions(
+          acctId,
+          [
+            { date: '2026-05-01', amount: -10000, payee_name: 'FX drift' },
+            { date: plusDays(0), amount: -2500, payee_name: 'TODAY-ROW' },
+          ] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (H)',
+          target_balance: 0,
+          category: 'C-H',
+        })
+      ).join('\n');
+
+      expect(text).toMatch(/Currency residual reconciled/);
+      expect(text).not.toMatch(/dated after today/);
+      // -100 drift and -25 today are both counted, so the adjustment closes both.
+      expect(text).toMatch(/Was:        -125\.00/);
+    }, 60_000);
+
+    it('does not ask the question of an account with nothing dated ahead', async () => {
+      // The check must cost nothing in the ordinary case, or every
+      // reconciliation grows a step.
+      const { category } = await budgetWithACollision('Card (D)');
+
+      const text = (
+        await reconcileCurrencyResidual({
+          account: 'Card (D)',
+          target_balance: 0,
+          category,
+          date: '2026-06-07',
+        })
+      ).join('\n');
+
+      expect(text).toMatch(/Currency residual reconciled/);
+      expect(text).not.toMatch(/dated after today/);
+    }, 60_000);
+  });
 });

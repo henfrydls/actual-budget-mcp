@@ -142,4 +142,65 @@ describe.skipIf(skip)('MCP tool wrapper E2E (#28/#25/#30 through the protocol)',
     expect(res.content[0].text).toContain('Currency residual reconciled');
     expect(await api.getAccountBalance(acctId)).toBe(0);
   }, 60_000);
+
+  it('asks about rows dated after today, and takes the answer, over the wire', async () => {
+    // #100 through the protocol rather than the function. Unknown keys are
+    // dropped silently in transit, so a parameter that exists on the interface
+    // and not on the schema is one nobody can pass: this is the same check
+    // #88's flag got, for the same reason.
+    const ahead = new Date();
+    ahead.setDate(ahead.getDate() + 3);
+    const aheadDate = `${ahead.getFullYear()}-${String(ahead.getMonth() + 1).padStart(2, '0')}-${String(ahead.getDate()).padStart(2, '0')}`;
+
+    let acctId = '';
+    await createFreshBudget(async () => {
+      acctId = await api.createAccount({ name: 'Card (EUR)', type: 'credit' } as any, 0);
+      const g = await api.createCategoryGroup({ name: 'G2' } as any);
+      await api.createCategory({ name: 'Cashback2', group_id: g } as any);
+      await api.addTransactions(
+        acctId,
+        [
+          { date: '2026-05-01', amount: -10000, payee_name: 'FX drift' },
+          { date: aheadDate, amount: -4000, payee_name: 'POSTED-AHEAD' },
+        ] as any,
+        { learnCategories: false, runTransfers: false },
+      );
+    });
+
+    const asked = await call('reconcile_currency_residual', {
+      account: 'Card (EUR)',
+      target_balance: -140,
+      category: 'Cashback2',
+    });
+
+    expect(asked.isError).toBeFalsy();
+    expect(asked.content[0].text).toContain('No adjustment was booked');
+    expect(asked.content[0].text).toContain('POSTED-AHEAD');
+
+    const answered = await call('reconcile_currency_residual', {
+      account: 'Card (EUR)',
+      target_balance: -140,
+      category: 'Cashback2',
+      future_rows: 'include',
+    });
+
+    // Counting the row dated ahead, the account already agrees with the bank,
+    // so nothing is booked. Told to exclude it the same call would book -40.00
+    // and record the purchase a second time, which is the whole of #100.
+    expect(answered.isError).toBeFalsy();
+    expect(answered.content[0].text).toMatch(/No adjustment needed/);
+    expect(answered.content[0].text).toContain('-140.00');
+    expect(await api.getTransactions(acctId, '1900-01-01', '2099-12-31')).toHaveLength(2);
+  }, 60_000);
+
+  it('refuses a future_rows the schema does not allow, at the boundary', async () => {
+    const res = await call('reconcile_currency_residual', {
+      account: 'Card (EUR)',
+      target_balance: 0,
+      category: 'Cashback2',
+      future_rows: 'maybe',
+    });
+
+    expect(res.isError).toBe(true);
+  }, 60_000);
 });
