@@ -44,6 +44,9 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
   let closed = '';
   let ids: Record<string, string> = {};
   let budgetId = '';
+  // Read once. Calling plusDays() again inside an assertion would disagree
+  // with the fixture across a midnight boundary.
+  const AHEAD = plusDays(3);
 
   beforeAll(async () => {
     await initTestEngine();
@@ -56,7 +59,7 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
       await api.addTransactions(
         open,
         [
-          { date: plusDays(3), amount: -1000, payee_name: 'DATED-AHEAD' },
+          { date: AHEAD, amount: -1000, payee_name: 'DATED-AHEAD' },
           { date: '1998-05-01', amount: -2000, payee_name: 'BEFORE-2000' },
           {
             date: '2026-06-05',
@@ -97,6 +100,7 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
       ahead: byAmount(-1000),
       old: byAmount(-2000),
       child: byAmount(-4000, true),
+      splitParent: byAmount(-7000),
       inClosed: byAmount(-900),
       ordinary: byAmount(-500),
     };
@@ -117,7 +121,7 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
 
     expect(text).not.toMatch(NOT_FOUND);
     expect(text).toContain('DATED-AHEAD');
-    expect(text).toContain(plusDays(3));
+    expect(text).toContain(AHEAD);
   });
 
   it('a row older than the date floor the scan used to start at', async () => {
@@ -132,7 +136,9 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
     const text = await previewOf(ids.child);
 
     expect(text).not.toMatch(NOT_FOUND);
-    expect(text).toMatch(/-40\.00/);
+    // These come before the positive one on purpose. Under `grouped` the
+    // preview carries the parent, so asserting -40.00 first would report
+    // "the amount is missing" when what happened is "the wrong row came back".
     // Not the id: the confirmation subject echoes the id that was *asked for*,
     // so asserting it would pass whatever row came back. What separates the
     // child from its parent is what the preview says about it. `grouped`,
@@ -142,6 +148,7 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
     // parent's warning are the two things that must not appear.
     expect(text).not.toMatch(/-70\.00/);
     expect(text).not.toMatch(/split parent/i);
+    expect(text).toMatch(/-40\.00/);
     expect(text).toMatch(/one part of a split/i);
     // The consequences, not just the label. Measured: the balance moves by the
     // part's amount, and the parent is left stating a total its parts no
@@ -149,6 +156,87 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
     expect(text).toMatch(/moves the account balance by 40\.00/);
     expect(text).toMatch(/parts no longer add up to/);
   });
+
+  it('a split parent, warned about as one, which is the costliest row here', async () => {
+    // The other half of the pair. `is_child` was covered against the engine
+    // and `is_parent` was not: removing it from the select left the whole
+    // suite green in both modes while this warning vanished, so a parent and
+    // every child under it could be destroyed without the preview saying so.
+    // The same failure this PR exists to fix, on the row that costs most.
+    const text = await previewOf(ids.splitParent);
+
+    expect(text).not.toMatch(NOT_FOUND);
+    expect(text).toMatch(/-70\.00/);
+    expect(text).toContain('THE-SPLIT');
+    expect(text).toMatch(/split parent/i);
+    expect(text).toMatch(/child transactions are deleted with it/i);
+    // And not mistaken for one of its own parts, which carries the opposite
+    // warning.
+    expect(text).not.toMatch(/one part of a split/i);
+  });
+
+  it('and deleting that parent really does take its children', async () => {
+    // The warning above states a consequence, so the consequence is measured
+    // rather than trusted. Its own budget, because it destroys the fixture it
+    // uses and the others share theirs.
+    let acct = '';
+    const ownBudget = await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Solo', type: 'checking' } as never, 0);
+      const group = await api.createCategoryGroup({ name: 'GS' } as never);
+      const category = await api.createCategory({ name: 'CS', group_id: group } as never);
+      await api.addTransactions(
+        acct,
+        [
+          {
+            date: '2026-06-05',
+            amount: -7000,
+            payee_name: 'GOING-WITH-CHILDREN',
+            subtransactions: [
+              { amount: -4000, category },
+              { amount: -3000, category },
+            ],
+          },
+        ] as never,
+        { learnCategories: false, runTransfers: false },
+      );
+    });
+
+    // Everything that can throw sits inside the try, and the shared budget
+    // goes back in the finally. Restoring before the last assertion only was
+    // one exit path out of three: a failure in the precondition or in
+    // `deleted` left the other budget loaded, and the three tests after this
+    // one then read the wrong one and failed too. That is the same disguise
+    // this restore exists to remove, coming back through the doors it did not
+    // cover.
+    let after = -1;
+    try {
+      const before = (
+        (await api.runQuery(transactionsQuery('all').select(['id']))) as { data: unknown[] }
+      ).data.length;
+      // A precondition rather than a behavioural assertion: with a fixture of
+      // one row, `after === 0` would pass while proving nothing about children.
+      expect(before, 'a parent and two children').toBe(3);
+
+      const parent = String(
+        (
+          (await api.runQuery(
+            transactionsQuery('all').filter({ is_parent: true }).select(['id']),
+          )) as { data: Array<{ id: string }> }
+        ).data[0].id,
+      );
+      const result = await deleteTransactionGuarded({ transaction_id: parent, confirm: true });
+      expect(result.deleted).toBe(true);
+
+      await api.loadBudget(ownBudget);
+      after = (
+        (await api.runQuery(transactionsQuery('all').select(['id']))) as { data: unknown[] }
+      ).data.length;
+    } finally {
+      await api.loadBudget(budgetId);
+    }
+
+    expect(after, 'the parent and both children are gone').toBe(0);
+  }, 60_000);
 
   it('a row in a closed account, named as closed rather than as missing', async () => {
     const text = await previewOf(ids.inClosed);
@@ -167,7 +255,7 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
 
   it('refuses an id that matches nothing, and destroys nothing', async () => {
     const before = await api.runQuery(
-      transactionsQuery('all').filter({ tombstone: false }).select(['id']),
+      transactionsQuery('all').select(['id']),
     );
     const countBefore = (before as { data: unknown[] }).data.length;
 
@@ -177,7 +265,7 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
     });
 
     expect(result.deleted).toBe(false);
-    expect(result.lines.join('\n')).toMatch(/No transaction with id .* exists/);
+    expect(result.lines.join('\n')).toMatch(NOT_FOUND);
 
     // Reloaded before counting. Without it this assertion passes while a real
     // row is being destroyed: the first read after a delete returns the state
@@ -185,30 +273,55 @@ describe.skipIf(skip)('delete_transaction previews every row it can destroy (#10
     // anything went. A count taken inside that window cannot count.
     await api.loadBudget(budgetId);
     const after = await api.runQuery(
-      transactionsQuery('all').filter({ tombstone: false }).select(['id']),
+      transactionsQuery('all').select(['id']),
     );
     expect((after as { data: unknown[] }).data.length).toBe(countBefore);
   });
 
   it('actually deletes the row it previewed, including one it used to miss', async () => {
-    // The point of the fix is not only that the preview fills in: the row that
-    // was invisible is a real row, and confirming must remove that one.
-    const result = await deleteTransactionGuarded({
-      transaction_id: ids.ahead,
-      confirm: true,
+    // Its own budget, and not only for tidiness. This used to delete a row
+    // from the shared fixture that the first test in this file previews, so
+    // the file passed in written order and failed under
+    // `--sequence.shuffle.tests`, reproduced two runs in three. A test that
+    // destroys shared state is a test whose neighbours pass because of where
+    // they sit.
+    let acct = '';
+    let ahead = '';
+    const ownBudget = await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Solo Ahead', type: 'checking' } as never, 0);
+      await api.addTransactions(
+        acct,
+        [{ date: AHEAD, amount: -1000, payee_name: 'DATED-AHEAD-SOLO' }] as never,
+        { learnCategories: false, runTransfers: false },
+      );
     });
 
-    expect(result.deleted).toBe(true);
-    // Reloaded before reading, the way the other integration tests here do
-    // after a write: the engine is a module-level singleton, and without this
-    // the assertion is racing whatever else the suite has loaded.
-    await api.loadBudget(budgetId);
-    // `tombstone: false` here too: the AQL path keeps returning a deleted row
-    // unless asked not to, so without it this assertion would pass whether or
-    // not the row went anywhere.
-    const after = await api.runQuery(
-      transactionsQuery('all').filter({ id: ids.ahead, tombstone: false }).select(['id']),
-    );
-    expect((after as { data: unknown[] }).data).toHaveLength(0);
+    let survivors = -1;
+    try {
+      ahead = String(
+        (
+          (await api.runQuery(transactionsQuery('all').select(['id']))) as {
+            data: Array<{ id: string }>;
+          }
+        ).data[0].id,
+      );
+
+      const result = await deleteTransactionGuarded({ transaction_id: ahead, confirm: true });
+      expect(result.deleted).toBe(true);
+
+      // Reloaded before reading: the first query after a delete returns the
+      // state from before it, so without this the count is taken inside the
+      // stale window and cannot count.
+      await api.loadBudget(ownBudget);
+      survivors = (
+        (await api.runQuery(transactionsQuery('all').filter({ id: ahead }).select(['id']))) as {
+          data: unknown[];
+        }
+      ).data.length;
+    } finally {
+      await api.loadBudget(budgetId);
+    }
+
+    expect(survivors, 'the row that used to be invisible is really gone').toBe(0);
   });
 });

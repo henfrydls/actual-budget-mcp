@@ -102,6 +102,12 @@ describe('delete_transaction: finding the row it is about to destroy', () => {
     // `grouped`, which is what getTransactions fixes internally, nests a split
     // child inside its parent and leaves no row to match on.
     expect(lastQuery.options).toEqual({ splits: 'all' });
+    // The two fields the preview needs to tell a parent from one of its parts.
+    // Dropping `is_parent` silently removes the warning that deleting a parent
+    // takes every child with it, and that was caught only by the engine: the
+    // builder has always recorded `select`, and nothing asserted it.
+    expect(lastQuery.select).toContain('is_parent');
+    expect(lastQuery.select).toContain('is_child');
   });
 
   it('refuses an id that matches nothing, and deletes nothing even when confirmed', async () => {
@@ -121,10 +127,15 @@ describe('delete_transaction: finding the row it is about to destroy', () => {
 
     const text = (await deleteTransactionGuarded({ transaction_id: 't9' })).lines.join('\n');
 
+    // First, so that a row going missing again is reported as "this came back
+    // a refusal" rather than as "the date is absent". Anchored to the wording
+    // this tool uses now: `/not found/i` was the phrase the fix replaced, so
+    // it could never fire, and five like it were corrected in the integration
+    // file while this one was left behind.
+    expect(text).not.toMatch(/No transaction with id/);
     expect(text).toContain('2026-06-07');
     expect(text).toContain('Old Card');
     expect(text).toMatch(/closed/i);
-    expect(text).not.toMatch(/not found/i);
   });
 
   it('says when the target is one part of a split, not the purchase', async () => {
