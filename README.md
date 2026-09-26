@@ -683,7 +683,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional)
 
-**transfer_between_categories** - `from` (required): category to take from | `to` (required): category to give to | `amount` (required): positive | `month` (optional, defaults to the current month). Refuses an income category at either end, and a month that is not `YYYY-MM` with the month between 01 and 12, because Actual's own handler accepts both and silently loses or destroys the money. Covering an overspent category is allowed and reported.
+**transfer_between_categories** - `from` (required): category to take from | `to` (required): category to give to | `amount` (required): positive | `month` (optional, defaults to the current month). Refuses an income category at either end (Actual marks income per category, so one can sit in a spending group), a month that is not `YYYY-MM` with the month between 01 and 12, and moving a category to itself. Actual's own handler accepts all three and silently loses, destroys or invents money. Covering an overspent category is allowed and reported.
 
 **recategorize_transaction** - `transaction_id` (required) | `category` (required)
 
