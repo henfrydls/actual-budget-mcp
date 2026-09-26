@@ -21,16 +21,6 @@ vi.mock('../../connection.js', () => ({
   getInternal: () => ({ send: sendMock }),
 }));
 
-// `resolveMonth` is the gate that stops a malformed month reaching the engine,
-// and since it was tightened there is no input that gets past it and into the
-// tool's own check. Making it pass things through is the only way to exercise
-// that second barrier, which exists because a month this tool accepts wrongly
-// does not fail: it destroys the month's budget and reports success.
-vi.mock('../../utils/dates.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../utils/dates.js')>();
-  return { ...actual, resolveMonth: vi.fn((m?: string) => m ?? actual.resolveMonth()) };
-});
-
 import * as api from '@actual-app/api';
 import { registerTransferBetweenCategories } from '../write/transfer-between-categories.js';
 
@@ -135,12 +125,19 @@ describe('transfer_between_categories (#86)', () => {
       ['the same category twice', { from: 'Groceries', to: 'Groceries', amount: 10 }, 'same category'],
       ['the same category by id and by name', { from: 'cat-1', to: 'Groceries', amount: 10 }, 'same category'],
       // `parseInt` in the engine turns this into month 202613, which no reader
-      // ever looks at. Measured: the money never arrives anywhere.
-      ['a month outside 01-12', { from: 'Groceries', to: 'Dining', amount: 10, month: '2026-13' }, 'not a month this can act on'],
+      // ever looks at. Measured: the money never arrives anywhere. Stopped by
+      // `resolveMonth` since it was tightened.
+      ['a month outside 01-12', { from: 'Groceries', to: 'Dining', amount: 10, month: '2026-13' }, 'Could not parse month'],
       // `sheetForMonth` replaces only the first dash, so the figures are read
       // from a sheet that does not exist while the write lands on the real
       // month. Measured: it destroys both categories' budgets.
-      ['a month with a day on it', { from: 'Groceries', to: 'Dining', amount: 10, month: '2026-09-15' }, 'not a month this can act on'],
+      ['a month with a day on it', { from: 'Groceries', to: 'Dining', amount: 10, month: '2026-09-15' }, 'Could not parse month'],
+      // These reach the tool's own shape check, which is why it is there.
+      // `resolveMonth`'s natural-language branch does not pad the year:
+      // measured, "20000 months ago" returns "360-01" and "January 0999"
+      // returns "999-01", both of which it hands back as a resolved month.
+      ['a year the resolver did not pad', { from: 'Groceries', to: 'Dining', amount: 10, month: '20000 months ago' }, 'not a month this can act on'],
+      ['a four-digit year written short', { from: 'Groceries', to: 'Dining', amount: 10, month: 'January 0999' }, 'not a month this can act on'],
     ];
 
     for (const [name, args, expected] of rejected) {
@@ -191,6 +188,23 @@ describe('transfer_between_categories (#86)', () => {
     });
   });
 
+  it('explains a handler that is not there, instead of a TypeError', async () => {
+    // `budget/transfer-category` is internal and the dependency is a caret
+    // range, so it can go away without anyone editing this repository.
+    vi.mocked(api.getBudgetMonth).mockResolvedValue(month(20000, 5000) as never);
+    sendMock.mockRejectedValue(new TypeError('handler is not a function'));
+
+    const result = await handlerFor()({
+      from: 'Groceries',
+      to: 'Dining',
+      amount: 50,
+      month: '2026-09',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('did not run, so nothing was moved');
+  });
+
   it('does not claim a move the figures do not show', async () => {
     // The engine returns success whatever it did, so a reply that trusted it
     // would report money moved that is still where it was. Both reads return
@@ -238,5 +252,56 @@ describe('transfer_between_categories (#86)', () => {
     });
 
     expect(result.content[0].text).toContain('2020-01 is a past month');
+  });
+
+  it('does not call the current month past', async () => {
+    // The half this test's name always promised and never checked. With `<`
+    // relaxed to `<=`, every ordinary move in the current month would carry a
+    // warning about shifting the months after it, which would be false.
+    const now = new Date();
+    const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    vi.mocked(api.getBudgetMonth)
+      .mockResolvedValueOnce(month(20000, 5000) as never)
+      .mockResolvedValueOnce(month(15000, 10000) as never);
+
+    const result = await handlerFor()({
+      from: 'Groceries',
+      to: 'Dining',
+      amount: 50,
+      month: current,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).not.toContain('past month');
+  });
+
+  it('syncs between writing and reading the figures back', async () => {
+    // Without the sync the read-back can answer from before the write, which is
+    // the whole subject of #105. No integration test can see this: there is no
+    // server there, so `api.sync()` is a no-op and its absence changes nothing.
+    // The order is what can be asserted, so the order is what is asserted.
+    const order: string[] = [];
+    let reads = 0;
+    vi.mocked(api.sync).mockImplementation(async () => {
+      order.push('sync');
+    });
+    vi.mocked(api.getBudgetMonth).mockImplementation(async () => {
+      order.push('read');
+      reads += 1;
+      return (reads === 1 ? month(20000, 5000) : month(15000, 10000)) as never;
+    });
+    sendMock.mockImplementation(async () => {
+      order.push('write');
+    });
+
+    const result = await handlerFor()({
+      from: 'Groceries',
+      to: 'Dining',
+      amount: 50,
+      month: '2026-09',
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(order).toEqual(['read', 'write', 'sync', 'read']);
   });
 });

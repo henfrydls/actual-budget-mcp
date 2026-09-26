@@ -178,9 +178,14 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
 
   it('refuses an income category instead of making the money disappear', async () => {
     // Measured without the refusal: the source category lost the money, the
-    // income category's budgeted figure rose, its balance stayed null, and the
-    // month's total budgeted did not change. The money is simply gone, and the
-    // engine reported success.
+    // income category's budgeted figure rose, and its balance stayed null. The
+    // money is simply gone, and the engine reported success.
+    //
+    // This comment also claimed the month's total budgeted did not change.
+    // Two runs here said it did not and an audit measured that it did, which
+    // means the answer depends on something neither of us pinned down, so the
+    // claim is withdrawn rather than decided. What both agree on is the part
+    // that matters: a null balance is money nobody can spend.
     let groceries = '';
     let salary = '';
     await createFreshBudget(async () => {
@@ -236,9 +241,65 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
     });
 
     expect(result.isError).toBe(true);
+    // Named, because asserting only `isError` passes just as well when the
+    // refusal was about something else entirely: the same test went green with
+    // a category name that did not exist.
+    expect(result.content[0].text).toContain('month');
     const after = await figures(thisMonth, [groceries, dining]);
     expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted);
     expect(after.cats[1].budgeted).toBe(before.cats[1].budgeted);
+  }, 60_000);
+
+  it('refuses an income category that lives in a spending group', async () => {
+    // Actual records income per category, and dragging one into a spending
+    // group in the desktop UI keeps the flag: `category-move` writes only
+    // `cat_group` and `sort_order`. A guard that read the group's flag let this
+    // through, and measured, money moved into such a category came back with
+    // `balance: null` — in, where nobody can spend it, and out, inventing money
+    // that was never there.
+    let groceries = '';
+    let sneaky = '';
+    let spendingGroup = '';
+    await createFreshBudget(async () => {
+      spendingGroup = await api.createCategoryGroup({ name: 'Spending' } as never);
+      groceries = await api.createCategory({ name: 'Groceries', group_id: spendingGroup } as never);
+      sneaky = await api.createCategory({
+        name: 'Refunds',
+        group_id: spendingGroup,
+        is_income: true,
+      } as never);
+    }, 'xfer-income-in-spending');
+
+    // The shape this test exists for, confirmed before anything is asserted
+    // about the guard. Without this the test could pass against a budget where
+    // Actual had normalised the category into an income group, which is not the
+    // case being covered.
+    const budget = (await api.getBudgetMonth(thisMonth)) as unknown as BudgetMonth;
+    const group = (budget.categoryGroups as BudgetMonthGroup[]).find(
+      (g) => g.id === spendingGroup,
+    );
+    expect(group?.is_income).toBe(false);
+    const row = group?.categories.find((c) => c.id === sneaky) as
+      | { is_income?: boolean }
+      | undefined;
+    expect(row?.is_income).toBe(true);
+
+    await api.setBudgetAmount(thisMonth, groceries, 20000);
+    const before = await figures(thisMonth, [groceries, sneaky]);
+
+    const result = await handlerFor()({ from: 'Groceries', to: 'Refunds', amount: 50 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain('income category');
+    const after = await figures(thisMonth, [groceries, sneaky]);
+    expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted);
+
+    // And the other direction, which is the one that invents money.
+    const back = await handlerFor()({ from: 'Refunds', to: 'Groceries', amount: 50 });
+    expect(back.isError).toBe(true);
+    expect(back.content[0].text).toContain('income category');
+    const afterBack = await figures(thisMonth, [groceries, sneaky]);
+    expect(afterBack.cats[0].budgeted).toBe(before.cats[0].budgeted);
   }, 60_000);
 
   it('allows covering an overspent category and reports what it left behind', async () => {

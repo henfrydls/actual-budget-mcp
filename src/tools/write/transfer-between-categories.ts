@@ -14,12 +14,16 @@ import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
  * ## Why this goes through the engine's own handler
  *
  * Actual has `budget/transfer-category` internally, and the alternative was two
- * `setBudgetAmount` calls. The handler is worth reaching for three things that
+ * `setBudgetAmount` calls. The handler is worth reaching for two things that
  * composing it loses: it runs inside `batchMessages`, so the two figures move
- * together or not at all; it is `undoable`, so the app's undo puts it back; and
- * it appends a line to the month's note, which is the same trail the desktop UI
- * leaves. Money moving in two separate writes can stop halfway, and that is the
- * one failure this tool must not have.
+ * together or not at all, and it appends a line to the month's note, which is
+ * the same trail the desktop UI leaves. Money moving in two separate writes can
+ * stop halfway, and that is the one failure this tool must not have.
+ *
+ * It is also wrapped in `undoable`, which was given here as a third reason
+ * until it was checked: the undo history is a module-level array and this
+ * server is a different process from the app, so the app's undo will not see a
+ * move made here. Atomicity alone is reason enough.
  *
  * Reaching an internal handler is not new here: `repair_sync` (#41) does it
  * through the same `getInternal()`.
@@ -46,7 +50,12 @@ import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
  *                        `balance` comes back null.
  *   amount 0             a no-op that still writes a note line.
  *   a negative amount    silently moves the money the other way.
- *   from === to          a no-op that still writes a note line.
+ *   from === to          **creates money**. Moving 10.00 from a category to
+ *                        itself took it from 200.00 to 210.00 and left the
+ *                        month 10.00 further over-assigned, because the handler
+ *                        reads the destination's budgeted figure inside the
+ *                        batch, before its own subtraction has landed. Called a
+ *                        harmless no-op here three times before it was run.
  *
  * `resolveMonth` already refuses a date with a day on it, which is the easiest
  * of these to hit by accident: `resolveDate('today')` returns `YYYY-MM-DD` and
@@ -85,7 +94,16 @@ function snapshot(budget: BudgetMonth, id: string): Snapshot | undefined {
         // evidence that its budgeted figure is not money.
         budgeted: found.budgeted ?? 0,
         balance: found.balance ?? 0,
-        isIncome: group.is_income === true,
+        // The category's own flag, not just its group's. Actual records income
+        // per category, and a category keeps the flag when it is dragged into a
+        // spending group, which is what the desktop UI's `category-move` does:
+        // measured, such a category comes back under a group with
+        // `is_income: false` while carrying `is_income: true` itself, and its
+        // balance is null. Reading only the group let money move into one where
+        // nobody could spend it, and out of one, inventing money that was never
+        // there. The engine asks the same question of the category row, in
+        // `validateExpenseCategory`.
+        isIncome: group.is_income === true || found.is_income === true,
       };
     }
   }
@@ -113,9 +131,14 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         await ensureConnection();
 
         const month = resolveMonth(monthInput);
-        // `resolveMonth` is the only caller-facing gate, and this handler turns
-        // a malformed month into destroyed budget rather than an error, so the
-        // shape is confirmed here too rather than trusted.
+        // Reachable, which an earlier version of this comment doubted.
+        // `resolveMonth`'s natural-language branch does not pad the year, so
+        // "January 0999" returns "999-01", "20000 months ago" returns "360-01"
+        // and "hace 30000 meses" returns "-474-09". Those arrive here alive.
+        // This is not the only thing standing between them and the engine,
+        // since `getBudgetMonth` refuses them on its own, but the shape is
+        // confirmed rather than trusted, because this handler turns a malformed
+        // month into destroyed budget rather than into an error.
         if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
           throw new Error(
             `"${month}" is not a month this can act on. Use YYYY-MM, with the month between 01 and 12.`,
@@ -135,8 +158,13 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         const fromId = await resolveCategoryId(from);
         const toId = await resolveCategoryId(to);
         if (fromId === toId) {
+          // Measured: a self-transfer of 10.00 raised the category from 200.00
+          // to 210.00, because the handler reads the destination's figure
+          // before its own subtraction has landed.
           throw new Error(
-            `"${from}" and "${to}" are the same category, so there is nothing to move.`,
+            `"${from}" and "${to}" are the same category. Moving a category to ` +
+              `itself does not leave it unchanged, it adds the amount to it, so ` +
+              `nothing was done.`,
           );
         }
 
@@ -160,12 +188,25 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         }
 
         // The bundled types mark `currencyCode` as required; the implementation
-        // reads it with `getCurrency(currencyCode)`, which falls back to the
-        // budget's own currency when it is undefined. Measured: omitting it
-        // appended the note with the right two decimals. Sending an empty
-        // string instead was not measured, so it is not what goes on the wire.
+        // reads it with `getCurrency(currencyCode)`, which is
+        // `currencies.find((c) => c.code === code) || currencies[0]`. With
+        // nothing passed that is the first entry, which has two decimals, not
+        // the budget's own currency as this comment claimed before anyone read
+        // it. It decides how the note is formatted and nothing else, so in a
+        // budget whose currency has no decimals the note reads 100.00 where the
+        // app writes 100. Tracked in #115; the figures are unaffected.
         const payload = { month, amount: cents, from: fromId, to: toId };
-        await getInternal().send('budget/transfer-category', payload as never);
+        try {
+          await getInternal().send('budget/transfer-category', payload as never);
+        } catch (error) {
+          // An internal handler behind a caret range can go away without anyone
+          // editing this repository. Failing loudly is the right outcome;
+          // failing as `handler is not a function` is not one anyone can act on.
+          throw new Error(
+            `Actual's budget/transfer-category handler did not run, so nothing ` +
+              `was moved: ${describeError(error)}`,
+          );
+        }
         await api.sync();
 
         const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
