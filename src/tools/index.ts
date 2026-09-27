@@ -19,6 +19,7 @@ import { registerMonthlySummary } from './analysis/monthly-summary.js';
 
 // Read tools (continued)
 import { registerBalanceHistory } from './read/balance-history.js';
+import { registerReconcileAccount } from './read/reconcile-account.js';
 
 // Write tools
 import { registerCreateTransaction } from './write/create-transaction.js';
@@ -64,6 +65,11 @@ export function registerAllTools(server: McpServer): void {
   registerSpendingByCategory(server);
   registerMonthlySummary(server);
   registerBalanceHistory(server);
+
+  // Reads only, so read-only mode keeps it: it compares an account against a
+  // bank figure and books nothing. Adjusting a balance is a separate decision,
+  // and `reconcile_currency_residual` below is the tool that makes it.
+  registerReconcileAccount(server);
 
   // Reads that live next to their write siblings below, registered here so
   // read-only mode keeps them.
