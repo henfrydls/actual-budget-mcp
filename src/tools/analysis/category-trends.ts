@@ -8,6 +8,7 @@ import { resolveCategoryId } from '../../utils/resolvers.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
+import { isIncome } from '../../utils/income.js';
 
 export function registerCategoryTrends(server: McpServer): void {
   server.tool(
@@ -138,6 +139,9 @@ async function topCategoryTrends(monthRange: string[], monthCount: number) {
     if (group.is_income) continue;
     if (!group.categories) continue;
     for (const cat of group.categories) {
+      // The category's own flag; see #116. A salary here would rank as one of
+      // the largest "spending" categories.
+      if (isIncome(group, cat)) continue;
       if (cat.spent !== 0) {
         catSpending.push({ id: cat.id, name: cat.name, spent: Math.abs(cat.spent) });
       }

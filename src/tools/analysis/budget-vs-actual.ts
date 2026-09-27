@@ -7,6 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { sectionHeader, formatTable } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
+import { isIncome } from '../../utils/income.js';
 
 export function registerBudgetVsActual(server: McpServer): void {
   server.tool(
@@ -51,6 +52,8 @@ export function registerBudgetVsActual(server: McpServer): void {
           const rows: string[][] = [];
 
           for (const cat of grp.categories) {
+            // The category's own flag; see #116.
+            if (isIncome(grp, cat)) continue;
             const variance = cat.budgeted + cat.spent; // spent is negative
             let status: string;
 

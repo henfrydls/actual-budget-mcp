@@ -7,6 +7,7 @@ import { resolveMonth, daysInMonth, daysElapsed } from '../../utils/dates.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
+import { isIncome } from '../../utils/income.js';
 
 export function registerSpendingProjection(server: McpServer): void {
   server.tool(
@@ -50,6 +51,8 @@ export function registerSpendingProjection(server: McpServer): void {
           if (!grp.categories || grp.categories.length === 0) continue;
 
           for (const cat of grp.categories) {
+            // The category's own flag; see #116.
+            if (isIncome(grp, cat)) continue;
             if (cat.budgeted === 0 && cat.spent === 0) continue;
 
             const spent = Math.abs(cat.spent);
