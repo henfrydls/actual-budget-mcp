@@ -150,6 +150,20 @@ describe.skipIf(skip)('category_trends window', () => {
     expect(text).toMatch(/month.? in that window .* before this budget starts/);
   }, 120_000);
 
+  it('says there is nothing to rank instead of printing a bare heading', async () => {
+    // July has no spending in this budget, so the ranking is empty. Before, the
+    // reply was a heading and nothing else, with isError false: a silent empty
+    // that reads like a failure and is not one.
+    const result = await handlerFor()({ months: 3, month: '2026-07' });
+
+    expect(result.isError).toBeFalsy();
+    const text = result.content[0].text;
+    expect(text).toContain('Nothing was spent in 2026-07');
+    expect(text).toContain('3 months to 2026-07');
+    // And it is more than the heading, which is the whole point.
+    expect(text.trim().split('\n').filter((l) => l.trim()).length).toBeGreaterThan(1);
+  }, 60_000);
+
   it('is still the message the guard recognises', async () => {
     // The guard matches Actual's wording, so a version that reworded this
     // would turn it into either swallowing everything or swallowing nothing,
