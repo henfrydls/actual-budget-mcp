@@ -35,6 +35,7 @@ import { registerRunBankSync } from './write/run-bank-sync.js';
 import { registerRepairSync } from './write/repair-sync.js';
 import { registerCreateAccount } from './write/create-account.js';
 import { registerDeleteAccount } from './write/delete-account.js';
+import { registerUpdateAccount } from './write/update-account.js';
 import { registerCreateCategory } from './write/create-category.js';
 import { registerUpdateCategory } from './write/update-category.js';
 import { registerDeleteCategory } from './write/delete-category.js';
@@ -97,6 +98,7 @@ export function registerAllTools(server: McpServer): void {
   registerRunBankSync(server);
   registerCreateAccount(server);
   registerDeleteAccount(server);
+  registerUpdateAccount(server);
 
   // Category CRUD
   registerCreateCategory(server);

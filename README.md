@@ -601,7 +601,7 @@ budget data, and hiding it would leave a desynced budget with no way to recover.
 
 Writes are enabled by default. Read-only is opt-in.
 
-## Tools (39)
+## Tools (40)
 
 ### Read (10)
 
@@ -753,12 +753,13 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write: Accounts (2)
+### Write: Accounts (3)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
 | `create_account` | Create an on- or off-budget account | "Create an off-budget account called Family Investment with 10,000" |
 | `delete_account` | Delete an account and its history | "Delete the ZZ Test account" |
+| `update_account` | Rename an account | "Rename BHD Nomina to BHD Nomina DOP" |
 
 > **`delete_account` needs two keys.** It destroys the account's entire transaction
 > history, so a single call never deletes. The first call only *previews* what
@@ -772,6 +773,8 @@ Writes are enabled by default. Read-only is opt-in.
 <summary>Parameters</summary>
 
 **create_account** - `name` (required) | `offBudget` (optional, default false) | `initialBalance` (optional): human amount, creates the "Starting Balance" transaction. (Actual models accounts as on/off-budget only, so there is no account `type`.)
+
+**update_account** - `account` (required): name or ID | `name` (required): the new name. Renames only. Budget status (`offbudget`) and closing are deliberately not exposed: moving an account in or out of the budget changes every month's totals at once, and closing has its own flow in the app that asks where the remaining balance goes. A name already used by another account is refused, because Actual allows duplicates and then neither account can be resolved by name.
 
 **delete_account** - `account` (required): name or ID | `confirm` (required to delete): must be `true` | `confirm_name` (required to delete): the account's exact name
 
