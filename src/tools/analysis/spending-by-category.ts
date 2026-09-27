@@ -6,6 +6,7 @@ import { formatMoney, centsToAmount } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
+import { isIncome } from '../../utils/income.js';
 
 export function registerSpendingByCategory(server: McpServer): void {
   server.tool(
@@ -59,7 +60,11 @@ export function registerSpendingByCategory(server: McpServer): void {
             const cat = categoryMap.get(t.category);
             if (!cat || !('group_id' in cat)) continue;
             const group = groupMap.get((cat as any).group_id);
-            if (!include_income && group?.is_income) continue;
+            // The category's own flag, not only the group's. This is the site
+            // in #116 whose output made it visible: a salary listed as
+            // spending, `include_income: false` not excluding it, and a share
+            // column reading 104.2% of a total it was inflating.
+            if (!include_income && isIncome(group, cat)) continue;
 
             const current = spending.get(t.category) || 0;
             spending.set(t.category, current + t.amount);

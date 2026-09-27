@@ -7,6 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { sectionHeader, formatPercent } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
+import { isIncome, totalsWithMisfiledIncome } from '../../utils/income.js';
 
 export function registerGetBudgetSummary(server: McpServer): void {
   server.tool(
@@ -27,10 +28,16 @@ export function registerGetBudgetSummary(server: McpServer): void {
         const month = resolveMonth(monthInput);
         const budget = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
 
+        // The engine files an income category by its group, so a misfiled one is
+        // missing from income and sitting inside spending. Measured on that
+        // shape: income 0.00 with a salary of 5,000.00 in the budget, and
+        // spending of 4,800.00 against real spending of 200.00.
+        const { income, spent: totalSpent } = totalsWithMisfiledIncome(budget);
+
         const lines: string[] = [
           sectionHeader(`Budget Summary: ${month}`),
           '',
-          `Income:            ${formatMoney(budget.totalIncome).padStart(14)}`,
+          `Income:            ${formatMoney(income).padStart(14)}`,
           `Total Budgeted:    ${formatMoney(budget.totalBudgeted).padStart(14)}`,
           `To Be Budgeted:    ${formatMoney(budget.toBudget).padStart(14)}`,
           '',
@@ -45,6 +52,10 @@ export function registerGetBudgetSummary(server: McpServer): void {
           let groupSpent = 0;
 
           for (const cat of group.categories) {
+            // Its own flag, not the group's. An income category dragged into a
+            // spending group keeps it, and the engine still reports its figures
+            // here, so without this its salary lands in the group's spending.
+            if (isIncome(group, cat)) continue;
             groupBudgeted += cat.budgeted;
             groupSpent += cat.spent;
           }
@@ -59,8 +70,7 @@ export function registerGetBudgetSummary(server: McpServer): void {
           );
         }
 
-        const totalSpent = budget.totalSpent;
-        const income = budget.totalIncome;
+
         const remaining = income + totalSpent; // totalSpent is negative
         const savingsRate = income !== 0 ? (remaining / Math.abs(income)) * 100 : 0;
 

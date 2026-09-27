@@ -7,6 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
+import { isIncome } from '../../utils/income.js';
 
 /**
  * Move budgeted money between two categories, creating no transaction.
@@ -103,7 +104,7 @@ function snapshot(budget: BudgetMonth, id: string): Snapshot | undefined {
         // nobody could spend it, and out of one, inventing money that was never
         // there. The engine asks the same question of the category row, in
         // `validateExpenseCategory`.
-        isIncome: group.is_income === true || found.is_income === true,
+        isIncome: isIncome(group, found),
       };
     }
   }

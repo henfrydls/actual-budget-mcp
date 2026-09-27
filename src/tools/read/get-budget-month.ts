@@ -8,6 +8,7 @@ import { sectionHeader } from '../../utils/formatters.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
 import { findSpendingDivergences, describeDivergences } from '../../utils/budget-crosscheck.js';
+import { isIncome, totalsWithMisfiledIncome } from '../../utils/income.js';
 
 export function registerGetBudgetMonth(server: McpServer): void {
   server.tool(
@@ -49,6 +50,10 @@ export function registerGetBudgetMonth(server: McpServer): void {
           lines.push(group.name);
 
           for (const cat of group.categories) {
+            // Its own flag, not the group's. An income category dragged into a
+            // spending group keeps it, and the engine still reports its figures
+            // here, so without this its salary lands in the group's spending.
+            if (isIncome(group, cat)) continue;
             groupBudgeted += cat.budgeted;
             groupSpent += cat.spent;
             groupBalance += cat.balance;

@@ -42,6 +42,40 @@ describe('cross-checking a month against its own transactions', () => {
     expect(await findSpendingDivergences('2026-09', groups(-5263598))).toEqual([]);
   });
 
+  it('leaves an income category alone even inside a spending group', async () => {
+    // The comment above the group test says income is skipped because its
+    // "spent" is income received, which the budget module derives differently.
+    // That reason is about the category, and a category keeps its own income
+    // flag when it is moved into a spending group (#116), so the condition has
+    // to ask the category too.
+    //
+    // This is here for that mismatch, not for a reproduced failure: measured
+    // against the engine on the crossed shape, the cross-check returned no
+    // divergences, so nothing was shown to go wrong. The fixture below makes
+    // the two figures disagree on purpose, which is what the group-level skip
+    // already prevents for an ordinary income category.
+    const mixed = [
+      {
+        id: 'g1',
+        name: 'Gastos',
+        is_income: false,
+        categories: [
+          { id: 'cat-1', name: 'Comida', budgeted: 0, spent: -20000, balance: 0 },
+          { id: 'cat-2', name: 'Sueldo Movido', is_income: true, budgeted: 0, spent: 0, balance: 0 },
+        ],
+      },
+    ] as unknown as BudgetMonthGroup[];
+
+    getTransactions.mockResolvedValue([
+      { id: 't1', account: 'acc-1', category: 'cat-1', amount: -20000 },
+      { id: 't2', account: 'acc-1', category: 'cat-2', amount: 500000 },
+    ]);
+
+    const divergences = await findSpendingDivergences('2026-09', mixed);
+
+    expect(divergences.map((d) => d.category)).toEqual([]);
+  });
+
   it('catches the case that started this: a real charge reported as zero', async () => {
     // get_budget_month said `Hipoteca: Spent 0.00` while the transaction
     // existed and carried the category (#80).

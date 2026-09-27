@@ -1,6 +1,7 @@
 import * as api from '@actual-app/api';
 import { formatMoney } from './money.js';
 import type { BudgetMonthGroup } from '../types.js';
+import { isIncome } from './income.js';
 
 /**
  * A category where the budget module and the month's transactions disagree.
@@ -103,6 +104,13 @@ export async function findSpendingDivergences(
     // compare two things that are not meant to agree.
     if (group.is_income) continue;
     for (const category of group.categories ?? []) {
+      // The reason above is about the category, so the test has to be too: an
+      // income category can sit in a spending group (#116). This one is here
+      // for that mismatch rather than for a reproduced failure. Measured on
+      // the crossed shape, the cross-check returned zero divergences, so no
+      // false positive was demonstrated; the condition simply did not ask what
+      // the comment says it asks.
+      if (isIncome(group, category)) continue;
       const observed = sums.get(category.id) ?? 0;
       if (observed !== category.spent) {
         divergences.push({
