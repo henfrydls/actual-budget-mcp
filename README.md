@@ -601,9 +601,9 @@ budget data, and hiding it would leave a desynced budget with no way to recover.
 
 Writes are enabled by default. Read-only is opt-in.
 
-## Tools (38)
+## Tools (39)
 
-### Read (9)
+### Read (10)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -614,6 +614,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `get_budget_summary` | Executive budget overview | "Give me a budget summary for February" |
 | `get_categories` | All category groups and categories | "What categories do I have?" |
 | `get_payees` | All payees in the budget | "List all my payees" |
+| `reconcile_account` | Compare an account against a bank figure and explain the gap | "My BHD statement says 45,230.18, what am I missing?" |
 | `get_rules` | All transaction rules | "Show me my rules" |
 | `balance_history` | Account balance over time | "Show balance history for my checking account" |
 
@@ -621,6 +622,8 @@ Writes are enabled by default. Read-only is opt-in.
 <summary>Parameters</summary>
 
 **get_budget_month** - `month` (optional): YYYY-MM or natural language ("this month", "last month", "enero 2025")
+
+**reconcile_account** - `account` (required) | `expected_balance` (required): what the bank says | `as_of` (optional): the date that figure is from, defaults to today; transactions after it are not counted | `balance_counts` (optional): `all` (default) counts uncleared rows too, `cleared_only` does not | `lookback_days` (optional, default 90). Reads only, books nothing. Lists what might explain a difference, strongest signal first: a charge entered twice, the amount sitting on another account, a row dated past the cutoff, and last a bare amount match. Combinations are not searched on purpose, because on an ordinary account some pair sums to almost any round figure. When nothing explains it, it says so.
 
 **get_transactions** - `account` (optional): account name | `start_date` / `end_date` (optional): YYYY-MM-DD or natural language | `category` (optional): category name | `payee` (optional): payee name | `min_amount` / `max_amount` (optional): filter by amount | `notes_contains` (optional): text to find in the notes, case-insensitive, matching the note of the split a transaction belongs to as well; searches every date unless you give a range | `uncategorized` (optional): only transactions with no category, leaving out split parents, transfers between accounts on the same side of the budget, and off-budget accounts; searches all dates unless you give a range | `limit` (optional, default 50)
 
