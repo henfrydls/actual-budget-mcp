@@ -74,6 +74,20 @@ describe('resolveMonth', () => {
   it('throws on invalid input', () => {
     expect(() => resolveMonth('garbage')).toThrow('Could not parse month');
   });
+
+  it.each(['2026-13', '2026-00', '2026-99'])('refuses %s, which is not a month', (input) => {
+    // `\d{2}` accepted these and returned them unchanged. Nothing downstream
+    // catches it: the engine's `dbMonth` is a `parseInt`, so budget written for
+    // "2026-13" lands on month 202613 and every reader keeps looking at the
+    // twelve that exist. Measured against the engine: money moved to "2026-13"
+    // left the source alone, never arrived anywhere, and raised no error.
+    expect(() => resolveMonth(input)).toThrow('Could not parse month');
+  });
+
+  it('still accepts the edges of the real range', () => {
+    expect(resolveMonth('2026-01')).toBe('2026-01');
+    expect(resolveMonth('2026-12')).toBe('2026-12');
+  });
 });
 
 describe('resolveDate', () => {

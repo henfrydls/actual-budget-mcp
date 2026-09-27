@@ -16,6 +16,17 @@ export interface BudgetMonthCategory {
   balance: number;
   carryover: boolean;
   group_id: string;
+  /**
+   * Whether this category is income, which Actual records per category and not
+   * per group. A category keeps this flag when it is moved into a spending
+   * group, since `category-move` writes only `cat_group` and `sort_order`, so a
+   * group's own flag does not answer the question. The engine agrees: its
+   * `validateExpenseCategory` reads `is_income` from the category row.
+   *
+   * The engine returns it. This interface did not declare it, which made the
+   * field invisible to anything reading a budget month through these types.
+   */
+  is_income?: boolean;
 }
 
 export interface BudgetMonthGroup {

@@ -25,6 +25,7 @@ import { registerCreateTransaction } from './write/create-transaction.js';
 import { registerCreateSplitTransaction } from './write/create-split-transaction.js';
 import { registerReconcileCurrencyResidual } from './write/reconcile-currency-residual.js';
 import { registerUpdateBudgetAmount } from './write/update-budget-amount.js';
+import { registerTransferBetweenCategories } from './write/transfer-between-categories.js';
 import { registerRecategorizeTransaction } from './write/recategorize-transaction.js';
 import { registerCreateTransfer } from './write/create-transfer.js';
 import { registerUpdateTransaction } from './write/update-transaction.js';
@@ -82,6 +83,7 @@ export function registerAllTools(server: McpServer): void {
   registerCreateSplitTransaction(server);
   registerReconcileCurrencyResidual(server);
   registerUpdateBudgetAmount(server);
+  registerTransferBetweenCategories(server);
   registerRecategorizeTransaction(server);
   registerCreateTransfer(server);
   registerUpdateTransaction(server);
