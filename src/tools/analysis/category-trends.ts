@@ -224,6 +224,17 @@ async function topCategoryTrends(
     '',
   ];
 
+  // A heading over nothing reads like a failure. It is not: the ranking month
+  // simply had no spending in it, which happens on a new budget and on any
+  // window whose reference month is quiet. Saying so costs a line and saves
+  // the reader deciding whether the tool broke.
+  if (top.length === 0) {
+    lines.push(
+      `Nothing was spent in ${refMonth}, so there is nothing to rank. The window still covers ${monthCount} month${monthCount === 1 ? '' : 's'} to ${monthRange[0]}; name a category to see it, or anchor on a month with spending in it.`,
+    );
+    return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+  }
+
   for (const cat of top) {
     const values: number[] = [];
     for (const month of monthRange) {
