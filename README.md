@@ -610,7 +610,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `list_accounts` | All accounts with balances | "Show me all my accounts" |
 | `get_budget_month` | Budget for a specific month | "What does my March budget look like?" |
 | `get_transactions` | Transactions with filters | "Show me transactions from last week over 5000" |
-| `get_category_balance` | Category history across months | "How has my food spending changed?" |
+| `get_category_balance` | Category history across a window of months | "How did food look in the three months to June?" |
 | `get_budget_summary` | Executive budget overview | "Give me a budget summary for February" |
 | `get_categories` | All category groups and categories | "What categories do I have?" |
 | `get_payees` | All payees in the budget | "List all my payees" |
@@ -627,7 +627,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **get_transactions** - `account` (optional): account name | `start_date` / `end_date` (optional): YYYY-MM-DD or natural language | `category` (optional): category name | `payee` (optional): payee name | `min_amount` / `max_amount` (optional): filter by amount | `notes_contains` (optional): text to find in the notes, case-insensitive, matching the note of the split a transaction belongs to as well; searches every date unless you give a range | `uncategorized` (optional): only transactions with no category, leaving out split parents, transfers between accounts on the same side of the budget, and off-budget accounts; searches all dates unless you give a range | `limit` (optional, default 50)
 
-**get_category_balance** - `category` (required): category name or ID | `months` (optional, default 3): months to look back
+**get_category_balance** - `category` (required): category name or ID | `months` (optional, default 3): how many months the window covers, and the default is a default, not a limit | `month` (optional): the month the window ends in, defaulting to this month, so a past period can be asked for directly
 
 **get_budget_summary** - `month` (optional): YYYY-MM or natural language
 
@@ -641,7 +641,7 @@ Writes are enabled by default. Read-only is opt-in.
 |------|-------------|----------------|
 | `budget_vs_actual` | Budgeted vs spent per category | "Am I over budget on anything this month?" |
 | `spending_projection` | End-of-month spending forecast | "Will I stay within budget this month?" |
-| `category_trends` | Spending trends over time | "What are my spending trends for the last 6 months?" |
+| `category_trends` | Spending trends over a window of months | "What were my trends in the six months to June?" |
 | `spending_by_category` | Spending breakdown by category | "Show me spending by category for February" |
 | `monthly_summary` | Income vs expenses vs savings | "How have my finances been the last 3 months?" |
 
@@ -652,7 +652,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **spending_projection** - `month` (optional): YYYY-MM or natural language
 
-**category_trends** - `category` (optional): specific category or top spending if omitted | `months` (optional, default 6)
+**category_trends** - `category` (optional): specific category or top spending if omitted | `months` (optional, default 6): how many months the window covers, and the default is a default, not a limit | `month` (optional): the month the window ends in, defaulting to this month. Months earlier than the budget file are named in the reply rather than ending the call
 
 **spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20)
 
