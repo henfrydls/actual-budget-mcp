@@ -790,6 +790,13 @@ Writes are enabled by default. Read-only is opt-in.
 > inconsistent with the server. `repair_sync` rebuilds that state without
 > touching budget data. Note that deleting the local `ACTUAL_DATA_DIR` does
 > *not* fix this, because the inconsistency is in the sync state, not the cache.
+>
+> **It checks the server is there first.** Two different problems fail the same
+> way: a broken sync state, and a server that is not running — which for the
+> desktop app means the app is closed, since its server on port 5007 only runs
+> while it is open. `repair_sync` only fixes the first, so if nothing is
+> listening it says so and changes nothing, rather than spending a repair on a
+> problem that is "the app is not running".
 
 <details>
 <summary>Parameters</summary>
