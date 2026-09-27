@@ -9,11 +9,27 @@ import { sectionHeader, formatTable, formatPercent } from '../../utils/formatter
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
 import { isIncome } from '../../utils/income.js';
+import { readWindow, budgetMonthOrMissing } from '../../utils/budget-month.js';
 
+/**
+ * Spending across a window of months, ending where the caller says.
+ *
+ * The window used to always end today, and there was no parameter to say
+ * otherwise. Passing `month: "2026-06"` returned the last three months
+ * relative to today and said nothing, because an argument the schema does not
+ * declare is dropped silently over the wire: the caller believed they had asked
+ * for June and were reading this month (#90). `month` is now declared, so it is
+ * either honoured or refused.
+ *
+ * `months` is a length and has no maximum. Its default has been read as a hard
+ * limit by people who then rebuilt history from differences rather than asking
+ * for twenty-four months, so the description says it is a default and nothing
+ * more.
+ */
 export function registerCategoryTrends(server: McpServer): void {
   server.tool(
     'category_trends',
-    'Show spending trends for a category across multiple months. Identifies increasing/decreasing patterns.',
+    'Show spending trends for a category across a window of months, ending in the month you name or this month. Identifies increasing/decreasing patterns.',
     {
       category: z
         .string()
@@ -23,19 +39,33 @@ export function registerCategoryTrends(server: McpServer): void {
         .number()
         .optional()
         .default(6)
-        .describe('Number of months to analyze (default 6)'),
+        .describe(
+          'How many months the window covers. Defaults to 6, which is a default and not a limit: ask for 24 or 36 if that is what you want.',
+        ),
+      month: z
+        .string()
+        .optional()
+        .describe(
+          'The month the window ends in (YYYY-MM or natural language). Defaults to this month. Use it to look at a past period: month "2026-06" with months 3 reads April, May and June.',
+        ),
     },
     { title: 'Category spending trends', readOnlyHint: true },
-    async ({ category, months: monthCount }) => {
+    async ({ category, months: monthCount, month: monthInput }) => {
       try {
         await ensureConnection();
-        const currentMonth = resolveMonth();
-        const monthRange = getMonthRange(currentMonth, monthCount);
+        if (!Number.isInteger(monthCount) || monthCount < 1) {
+          throw new Error(
+            `months must be a whole number of at least 1. Got ${monthCount}. There is no upper limit.`,
+          );
+        }
+        const anchored = monthInput !== undefined;
+        const endMonth = resolveMonth(monthInput);
+        const monthRange = getMonthRange(endMonth, monthCount);
 
         if (category) {
           return await singleCategoryTrend(category, monthRange, monthCount);
         } else {
-          return await topCategoryTrends(monthRange, monthCount);
+          return await topCategoryTrends(monthRange, monthCount, anchored);
         }
       } catch (error) {
         const message = describeError(error);
@@ -59,7 +89,9 @@ async function singleCategoryTrend(
   const catName = catEntity?.name || category;
 
   const lines: string[] = [
-    sectionHeader(`Spending Trends: ${catName} (${monthCount} months)`),
+    sectionHeader(
+      `Spending Trends: ${catName} (${monthCount} months, ${monthRange[monthRange.length - 1]} to ${monthRange[0]})`,
+    ),
     '',
   ];
 
@@ -67,8 +99,13 @@ async function singleCategoryTrend(
   const rows: string[][] = [];
   const spentValues: number[] = [];
 
-  for (const month of monthRange) {
-    const budget = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+  // A month before the budget file starts throws rather than coming back
+  // empty, so a long window used to die on the first one and return nothing at
+  // all. Those months are listed at the end instead.
+  const { present, missing } = await readWindow(monthRange);
+  const months = present.map((p) => p.month);
+
+  for (const { budget } of present) {
     let found: BudgetMonthCategory | undefined;
 
     for (const group of budget.categoryGroups as BudgetMonthGroup[]) {
@@ -81,21 +118,27 @@ async function singleCategoryTrend(
     spentValues.push(spent);
   }
 
-  for (let i = 0; i < monthRange.length; i++) {
+  for (let i = 0; i < months.length; i++) {
     let change = '---';
-    if (i < monthRange.length - 1 && spentValues[i + 1] !== 0) {
+    if (i < months.length - 1 && spentValues[i + 1] !== 0) {
       const pctChange =
         ((spentValues[i] - spentValues[i + 1]) / spentValues[i + 1]) * 100;
       change = `${pctChange >= 0 ? '+' : ''}${formatPercent(pctChange)}`;
     }
-    if (i === 0 && monthRange[0] === resolveMonth()) {
+    if (i === 0 && months[0] === resolveMonth()) {
       change += ' (in progress)';
     }
 
-    rows.push([monthRange[i], formatMoney(-spentValues[i]), change]);
+    rows.push([months[i], formatMoney(-spentValues[i]), change]);
   }
 
   lines.push(formatTable(headers, rows, ['left', 'right', 'right']));
+  if (missing.length > 0) {
+    lines.push(
+      '',
+      `${missing.length} month${missing.length === 1 ? '' : 's'} in that window ${missing.length === 1 ? 'is' : 'are'} before this budget starts and ${missing.length === 1 ? 'was' : 'were'} left out: ${missing.join(', ')}.`,
+    );
+  }
 
   const validValues = spentValues.filter((v) => v > 0);
   if (validValues.length > 0) {
@@ -129,10 +172,33 @@ async function singleCategoryTrend(
   return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
 }
 
-async function topCategoryTrends(monthRange: string[], monthCount: number) {
-  // Get last full month's data to find top categories
-  const refMonth = monthRange.length > 1 ? monthRange[1] : monthRange[0];
-  const budget = (await api.getBudgetMonth(refMonth)) as unknown as BudgetMonth;
+async function topCategoryTrends(
+  monthRange: string[],
+  monthCount: number,
+  anchored: boolean,
+) {
+  // Which month decides who the top spenders are.
+  //
+  // With no anchor the window ends in the current month, which is part-spent,
+  // so ranking by it would under-report whatever is billed late in the month.
+  // The last full month is the better question and has been the behaviour all
+  // along.
+  //
+  // With an anchor the caller named the month they care about, and it is
+  // already complete if it is in the past. Ranking by the month before the one
+  // they asked for would answer a question nobody asked.
+  const refMonth = anchored || monthRange.length === 1 ? monthRange[0] : monthRange[1];
+  const budget = await budgetMonthOrMissing(refMonth);
+  if (!budget) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `${refMonth} is before this budget starts, so there is nothing to rank by. Pick a month inside the budget with the month argument.`,
+        },
+      ],
+    };
+  }
 
   const catSpending: Array<{ id: string; name: string; spent: number }> = [];
   for (const group of budget.categoryGroups as BudgetMonthGroup[]) {
@@ -152,14 +218,20 @@ async function topCategoryTrends(monthRange: string[], monthCount: number) {
   const top = catSpending.slice(0, 5);
 
   const lines: string[] = [
-    sectionHeader(`Top Category Trends (${monthCount} months)`),
+    sectionHeader(
+      `Top Category Trends (${monthCount} months to ${monthRange[0]}, ranked by ${refMonth})`,
+    ),
     '',
   ];
 
   for (const cat of top) {
     const values: number[] = [];
     for (const month of monthRange) {
-      const b = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+      const b = await budgetMonthOrMissing(month);
+      if (!b) {
+        values.push(0);
+        continue;
+      }
       let found: BudgetMonthCategory | undefined;
       for (const g of b.categoryGroups as BudgetMonthGroup[]) {
         if (!g.categories) continue;
