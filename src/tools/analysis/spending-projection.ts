@@ -44,6 +44,8 @@ export function registerSpendingProjection(server: McpServer): void {
         const headers = ['Category', 'Budgeted', 'Spent So Far', 'Projected', 'Status'];
         const rows: string[][] = [];
         let atRiskCount = 0;
+        let alreadyOver = 0;
+        let unbudgetedCount = 0;
         let projectedOverspend = 0;
 
         for (const grp of budget.categoryGroups as BudgetMonthGroup[]) {
@@ -55,6 +57,22 @@ export function registerSpendingProjection(server: McpServer): void {
             if (isIncome(grp, cat)) continue;
             if (cat.budgeted === 0 && cat.spent === 0) continue;
 
+            // Money came in rather than went out, so there is nothing to
+            // project. Measured (#131): a category that received 20,113.00 was
+            // projected as 20,113.00 **going out** and labelled OVER, because
+            // `Math.abs` took the size and the row printed `-projected`. Two
+            // wrongs on one line: the direction and the verdict.
+            if (cat.spent > 0) {
+              rows.push([
+                cat.name,
+                formatMoney(cat.budgeted),
+                formatMoney(cat.spent),
+                '--',
+                'money came in',
+              ]);
+              continue;
+            }
+
             const spent = Math.abs(cat.spent);
             let projected: number;
             let status: string;
@@ -65,13 +83,25 @@ export function registerSpendingProjection(server: McpServer): void {
               status = 'Paid';
             } else if (elapsed >= totalDays) {
               projected = spent;
-              status = spent > Math.abs(cat.budgeted) ? 'OVER' : 'OK';
+              if (spent > Math.abs(cat.budgeted)) {
+                status = 'OVER';
+                alreadyOver++;
+                if (cat.budgeted === 0) unbudgetedCount++;
+                projectedOverspend += spent - Math.abs(cat.budgeted);
+              } else {
+                status = 'OK';
+              }
             } else {
               const dailyRate = spent / elapsed;
               projected = Math.round(dailyRate * totalDays);
 
               if (cat.budgeted === 0) {
                 status = spent > 0 ? 'Unbudgeted' : '--';
+                if (spent > 0) {
+                  alreadyOver++;
+                  unbudgetedCount++;
+                  projectedOverspend += projected;
+                }
               } else if (projected > Math.abs(cat.budgeted)) {
                 status = 'AT RISK';
                 atRiskCount++;
@@ -95,7 +125,20 @@ export function registerSpendingProjection(server: McpServer): void {
           formatTable(headers, rows, ['left', 'right', 'right', 'right', 'left']),
         );
         lines.push('');
-        lines.push(`Categories at risk of exceeding budget: ${atRiskCount}`);
+        // The headline counted only the categories on course to exceed a
+        // budget, so a month with 24 categories overspent and nothing budgeted
+        // against them announced "0 at risk" (#131). A category overspent with
+        // no budget at all is the clearest case of needing attention, not an
+        // exception to it: there is no budget there to protect it.
+        const needsAttention = atRiskCount + alreadyOver;
+        const detail: string[] = [];
+        if (atRiskCount > 0) detail.push(`${atRiskCount} heading that way`);
+        if (alreadyOver > 0) detail.push(`${alreadyOver} already over`);
+        if (unbudgetedCount > 0) detail.push(`${unbudgetedCount} with nothing budgeted`);
+        lines.push(
+          `Categories over or heading over budget: ${needsAttention}` +
+            (detail.length > 0 ? ` (${detail.join(', ')})` : ''),
+        );
         if (projectedOverspend > 0) {
           lines.push(`Projected overspend: ${formatMoney(-projectedOverspend)}`);
         }

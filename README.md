@@ -648,13 +648,13 @@ Writes are enabled by default. Read-only is opt-in.
 <details>
 <summary>Parameters</summary>
 
-**budget_vs_actual** - `month` (optional): YYYY-MM or natural language | `group` (optional): filter by category group
+**budget_vs_actual** - a category whose net for the month is positive says money came in rather than being listed as under budget, and is left out of the under-budget total. `month` (optional): YYYY-MM or natural language | `group` (optional): filter by category group
 
-**spending_projection** - `month` (optional): YYYY-MM or natural language
+**spending_projection** - money coming in is not projected as going out, and the headline counts categories already over budget, including those with nothing budgeted at all. `month` (optional): YYYY-MM or natural language
 
 **category_trends** - `category` (optional): specific category or top spending if omitted | `months` (optional, default 6): how many months the window covers, and the default is a default, not a limit | `month` (optional): the month the window ends in, defaulting to this month. Months earlier than the budget file are named in the reply rather than ending the call
 
-**spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20). The share column is a share **of spending**, so a category whose net for the period is positive (a refund, a reimbursement) is still listed but carries no share, and the footer separates spending, money in and the net. Otherwise a single incoming row shrinks the denominator and the shares add up to more than 100%.
+**spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20). It counts each half of a split against its own category and leaves off-budget accounts out, using the same sum as the month cross-check. The share column is a share **of spending**, so a category whose net for the period is positive (a refund, a reimbursement) is still listed but carries no share, and the footer separates spending, money in and the net. Otherwise a single incoming row shrinks the denominator and the shares add up to more than 100%.
 
 **monthly_summary** - `months` (optional, default 3): number of months to show
 

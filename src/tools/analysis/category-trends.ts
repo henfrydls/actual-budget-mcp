@@ -114,8 +114,14 @@ async function singleCategoryTrend(
       if (found) break;
     }
 
-    const spent = found ? Math.abs(found.spent) : 0;
-    spentValues.push(spent);
+    // The figure as it stands, not its size. Taking the absolute value and
+    // printing it negated turned a month that only **received** money into one
+    // that spent it: measured, a category holding 20,113.00 of reimbursements
+    // was reported as -20,113.00 of spending, average included (#131).
+    //
+    // The month-on-month change is unaffected for ordinary months, since two
+    // negatives divide to the same ratio two positives would.
+    spentValues.push(found ? found.spent : 0);
   }
 
   for (let i = 0; i < months.length; i++) {
@@ -129,7 +135,7 @@ async function singleCategoryTrend(
       change += ' (in progress)';
     }
 
-    rows.push([months[i], formatMoney(-spentValues[i]), change]);
+    rows.push([months[i], formatMoney(spentValues[i]), change]);
   }
 
   lines.push(formatTable(headers, rows, ['left', 'right', 'right']));
@@ -140,13 +146,22 @@ async function singleCategoryTrend(
     );
   }
 
-  const validValues = spentValues.filter((v) => v > 0);
+  // Months with no activity are not part of an average of what was spent; a
+  // month that received money is not either, and would drag the average
+  // towards zero as if less had been spent.
+  const validValues = spentValues.filter((v) => v < 0);
   if (validValues.length > 0) {
     const avg = Math.round(
       validValues.reduce((sum, v) => sum + v, 0) / validValues.length,
     );
     lines.push('');
-    lines.push(`Average: ${formatMoney(-avg)}`);
+    // Not `-avg`. That was right while `spentValues` held magnitudes, and
+    // became a sign inversion the moment they started carrying the real
+    // figure: a category that spent 400.00 a month reported an average of
+    // 400.00 positive, reading as money received. Introduced by the sign fix
+    // in this same change and caught by reading the output of a probe, not by
+    // any test — which is why there is one now.
+    lines.push(`Average: ${formatMoney(avg)}`);
 
     // Trend direction
     if (validValues.length >= 3) {
@@ -208,7 +223,11 @@ async function topCategoryTrends(
       // The category's own flag; see #116. A salary here would rank as one of
       // the largest "spending" categories.
       if (isIncome(group, cat)) continue;
-      if (cat.spent !== 0) {
+      // Only categories that actually spent. A category whose net is positive
+      // received money, and ranking it among the top spenders by the size of
+      // what came in is the same mistake as giving it a share of spending
+      // (#128, #131).
+      if (cat.spent < 0) {
         catSpending.push({ id: cat.id, name: cat.name, spent: Math.abs(cat.spent) });
       }
     }
