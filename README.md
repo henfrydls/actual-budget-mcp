@@ -629,7 +629,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **get_category_balance** - `category` (required): category name or ID | `months` (optional, default 3): how many months the window covers, and the default is a default, not a limit | `month` (optional): the month the window ends in, defaulting to this month, so a past period can be asked for directly
 
-**get_budget_summary** - `month` (optional): YYYY-MM or natural language
+**get_budget_summary** - `month` (optional): YYYY-MM or natural language. A group with nothing budgeted against it gets no percentage: a share of a non-positive budget has no correct reading, so the row says what it is instead.
 
 **balance_history** - `account` (required): account name or ID | `start_date` (optional, default 3 months ago) | `end_date` (optional, default today)
 
@@ -654,7 +654,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **category_trends** - `category` (optional): specific category or top spending if omitted | `months` (optional, default 6): how many months the window covers, and the default is a default, not a limit | `month` (optional): the month the window ends in, defaulting to this month. Months earlier than the budget file are named in the reply rather than ending the call
 
-**spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20)
+**spending_by_category** - `start_date` / `end_date` (optional): date range | `include_income` (optional, default false) | `limit` (optional, default 20). The share column is a share **of spending**, so a category whose net for the period is positive (a refund, a reimbursement) is still listed but carries no share, and the footer separates spending, money in and the net. Otherwise a single incoming row shrinks the denominator and the shares add up to more than 100%.
 
 **monthly_summary** - `months` (optional, default 3): number of months to show
 
