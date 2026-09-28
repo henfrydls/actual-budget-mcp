@@ -14,6 +14,57 @@ function matchByName<T>(items: T[], nameOrId: string, getName: (item: T) => stri
   return items.filter((item) => getName(item).toLowerCase().includes(lower));
 }
 
+/**
+ * The same resolution, against a list already in hand.
+ *
+ * A batch resolves many names at once (#83), and calling the loading versions
+ * per row would fetch every account and category once per transaction: for the
+ * 22 movements of one day, 44 round trips to answer questions whose answers
+ * cannot change between them. The loading versions below now call these, so
+ * there is one rule rather than two that can drift.
+ */
+export function resolveAccountIn(
+  accounts: Array<{ id: string; name: string; closed?: boolean }>,
+  nameOrId: string,
+): string {
+  const byId = accounts.find((a) => a.id === nameOrId);
+  if (byId) return byId.id;
+
+  const candidates = accounts.filter((a) => !a.closed);
+  const matches = matchByName(candidates, nameOrId, (a) => a.name);
+
+  if (matches.length === 0) {
+    const names = candidates.map((a) => a.name).join(', ');
+    throw new Error(`No account found matching "${nameOrId}". Available: ${names}`);
+  }
+  if (matches.length > 1) {
+    const names = matches.map((a) => a.name).join(', ');
+    throw new Error(`Ambiguous account name "${nameOrId}". Matches: ${names}`);
+  }
+  return matches[0].id;
+}
+
+export function resolveCategoryIn(
+  categories: Array<{ id: string; name: string; hidden?: boolean; group_id?: string }>,
+  nameOrId: string,
+): string {
+  const byId = categories.find((c) => c.id === nameOrId);
+  if (byId) return byId.id;
+
+  const candidates = categories.filter((c) => 'group_id' in c && !c.hidden);
+  const cats = matchByName(candidates, nameOrId, (c) => c.name);
+
+  if (cats.length === 0) {
+    const names = candidates.map((c) => c.name).join(', ');
+    throw new Error(`No category found matching "${nameOrId}". Available: ${names}`);
+  }
+  if (cats.length > 1) {
+    const names = cats.map((c) => c.name).join(', ');
+    throw new Error(`Ambiguous category name "${nameOrId}". Matches: ${names}`);
+  }
+  return cats[0].id;
+}
+
 export async function resolveAccountId(nameOrId: string): Promise<string> {
   await ensureConnection();
   const accounts = await api.getAccounts();

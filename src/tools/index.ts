@@ -23,6 +23,7 @@ import { registerReconcileAccount } from './read/reconcile-account.js';
 
 // Write tools
 import { registerCreateTransaction } from './write/create-transaction.js';
+import { registerCreateTransactions } from './write/create-transactions.js';
 import { registerCreateSplitTransaction } from './write/create-split-transaction.js';
 import { registerReconcileCurrencyResidual } from './write/reconcile-currency-residual.js';
 import { registerUpdateBudgetAmount } from './write/update-budget-amount.js';
@@ -87,6 +88,7 @@ export function registerAllTools(server: McpServer): void {
 
   // Write
   registerCreateTransaction(server);
+  registerCreateTransactions(server);
   registerCreateSplitTransaction(server);
   registerReconcileCurrencyResidual(server);
   registerUpdateBudgetAmount(server);
