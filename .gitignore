@@ -1,4 +1,7 @@
-node_modules/
+# No trailing slash: with one this matches a directory only, and a worktree
+# that links node_modules to a sibling checkout has a symlink here instead.
+# One of those was committed before anyone noticed (#128 review).
+node_modules
 dist/
 .env
 .mcp.json

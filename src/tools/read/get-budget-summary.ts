@@ -60,13 +60,26 @@ export function registerGetBudgetSummary(server: McpServer): void {
             groupSpent += cat.spent;
           }
 
-          const pct =
-            groupBudgeted !== 0
-              ? Math.abs(centsToAmount(groupSpent) / centsToAmount(groupBudgeted)) * 100
-              : 0;
+          // A share of a budget that is not positive has no correct reading,
+          // and `Math.abs` gave it one that looked plausible: measured,
+          // -140.00 budgeted against 190.00 "spent" printed as 135.7% (#128).
+          // Printing it with its sign would not help either — "I spent -136%
+          // of the budget" means nothing — so the row says what it is instead.
+          //
+          // Two unusual things are true of such a row at once: the budget was
+          // moved below zero, and money arrived in a spending category. Naming
+          // them is more use than any number.
+          const notes: string[] = [];
+          if (groupBudgeted <= 0) notes.push('nothing budgeted to measure against');
+          if (groupSpent > 0) notes.push('money came in rather than went out');
+
+          const trailer =
+            notes.length > 0
+              ? `(${notes.join('; ')})`
+              : `(${formatPercent(Math.abs(centsToAmount(groupSpent) / centsToAmount(groupBudgeted)) * 100)})`;
 
           lines.push(
-            `  ${group.name.padEnd(28)} ${formatMoney(groupBudgeted).padStart(12)} budgeted | ${formatMoney(groupSpent).padStart(12)} spent (${formatPercent(pct)})`,
+            `  ${group.name.padEnd(28)} ${formatMoney(groupBudgeted).padStart(12)} budgeted | ${formatMoney(groupSpent).padStart(12)} spent ${trailer}`,
           );
         }
 

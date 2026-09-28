@@ -88,29 +88,62 @@ export function registerSpendingByCategory(server: McpServer): void {
           };
         }
 
-        const totalSpending = sorted.reduce((sum, [_, amount]) => sum + amount, 0);
+        // The share is a share **of spending**, so only the rows that are
+        // spending go into its denominator.
+        //
+        // It used to divide each row by the algebraic total of every row, so a
+        // category whose net for the period was positive — a refund, a
+        // reimbursement landing in a spending category, a transfer booked
+        // there — shrank the denominator and inflated everything else. Measured
+        // on the figures in #128: -100.00, -50.00 and +30.00 came out as 83.3%,
+        // 41.7% and 25.0%, adding up to 150%, with the row that brought money
+        // in carrying a quarter of "spending". On a real budget one such
+        // category produced shares summing to 135.8% over eight rows.
+        //
+        // The other way out was to divide by the sum of absolute values. It
+        // makes the column add to 100% and keeps the part that is wrong: the
+        // refund still carries a share of spending, 16.7% of it. It also
+        // separates the denominator from the printed total, so 55.6% of
+        // -120.00 is -66.72 rather than -100.00 and nobody can check the
+        // arithmetic by hand.
+        //
+        // Rows that brought money in are still shown, because a reimbursement
+        // in a spending category is worth noticing and dropping it is how it
+        // goes unnoticed. They carry no share, and the footer separates the
+        // three figures.
+        const spendingRows = sorted.filter(([, amount]) => amount < 0);
+        const moneyInRows = sorted.filter(([, amount]) => amount > 0);
+        const totalSpending = spendingRows.reduce((sum, [, amount]) => sum + amount, 0);
+        const totalMoneyIn = moneyInRows.reduce((sum, [, amount]) => sum + amount, 0);
 
         const lines: string[] = [
           sectionHeader(`Spending by Category: ${startDate} to ${endDate}`),
           '',
         ];
 
-        const headers = ['Category', 'Group', 'Amount', '% of Total'];
+        const headers = ['Category', 'Group', 'Amount', '% of spending'];
         const rows = sorted.map(([catId, amount]) => {
           const cat = categoryMap.get(catId);
           const group = cat && 'group_id' in cat ? groupMap.get((cat as any).group_id) : undefined;
-          const pct = totalSpending !== 0 ? (Math.abs(amount) / Math.abs(totalSpending)) * 100 : 0;
-          return [
-            cat?.name || catId,
-            group?.name || '',
-            formatMoney(amount),
-            formatPercent(pct),
-          ];
+          const share =
+            amount < 0 && totalSpending !== 0
+              ? formatPercent((Math.abs(amount) / Math.abs(totalSpending)) * 100)
+              : 'money in, not spending';
+          return [cat?.name || catId, group?.name || '', formatMoney(amount), share];
         });
 
         lines.push(formatTable(headers, rows, ['left', 'left', 'right', 'right']));
         lines.push('');
-        lines.push(`Total: ${formatMoney(totalSpending)}`);
+        if (moneyInRows.length > 0) {
+          // Three figures rather than one, because with money coming in they
+          // are three different questions and a single "Total" answered none
+          // of them clearly.
+          lines.push(`Spending: ${formatMoney(totalSpending)}`);
+          lines.push(`Money in: ${formatMoney(totalMoneyIn)}`);
+          lines.push(`Net:      ${formatMoney(totalSpending + totalMoneyIn)}`);
+        } else {
+          lines.push(`Total: ${formatMoney(totalSpending)}`);
+        }
         lines.push(`Categories shown: ${sorted.length}`);
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
