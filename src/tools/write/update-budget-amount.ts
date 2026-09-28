@@ -7,6 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
+import { makeQueue } from '../../utils/serialize.js';
 
 /**
  * Set a category's budgeted amount, absolutely or by adding to it.
@@ -54,28 +55,10 @@ import { describeError } from '../../utils/errors.js';
  */
 
 /**
- * Run the work one at a time, in call order, within this process.
- *
- * The `catch` does both jobs, and a first version had a second mechanism next
- * to it that did neither. It keeps the queue moving, because what is stored is
- * always a settled-successfully promise, so the next piece of work runs after a
- * failed one. And it means the stored promise, which nobody awaits, cannot
- * carry a rejection with no handler: that surfaces as an unhandled rejection,
- * which this server takes seriously enough to install a process guard for
- * (#39). The caller still gets its own error, from `next`.
- *
- * The version before this also wrote `then(work, work)`, and a comment saying
- * that was what kept the queue moving. It was not: with the `catch` in place
- * the queue never rejects, so the second handler never ran. Mutating it away
- * changed nothing, which is how it was found.
+ * This tool's own queue, so two deltas cannot race each other. The mechanism
+ * and the reasoning live in `makeQueue` (#121).
  */
-let deltaQueue: Promise<unknown> = Promise.resolve();
-
-export function serializeDelta<T>(work: () => Promise<T>): Promise<T> {
-  const next = deltaQueue.then(work);
-  deltaQueue = next.catch(() => undefined);
-  return next;
-}
+export const serializeDelta = makeQueue();
 export function registerUpdateBudgetAmount(server: McpServer): void {
   server.tool(
     'update_budget_amount',

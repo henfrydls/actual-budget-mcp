@@ -601,7 +601,7 @@ budget data, and hiding it would leave a desynced budget with no way to recover.
 
 Writes are enabled by default. Read-only is opt-in.
 
-## Tools (40)
+## Tools (41)
 
 ### Read (10)
 
@@ -660,11 +660,12 @@ Writes are enabled by default. Read-only is opt-in.
 
 </details>
 
-### Write: Transactions (10)
+### Write: Transactions (11)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
 | `create_transaction` | Add a new transaction | "I spent 500 on groceries from Cartera today" |
+| `create_transactions` | Add several at once, all or nothing | "Record these 22 movements from the 18th" |
 | `create_split_transaction` | One charge across several categories | "Split that 3,000 charge: 2,000 groceries, 1,000 household" |
 | `update_transaction` | Edit an existing transaction | "Change the amount on that transaction to 600" |
 | `delete_transaction` | Remove a transaction (previews first, see [Safety](#safety)) | "Delete that test transaction" |
@@ -677,6 +678,8 @@ Writes are enabled by default. Read-only is opt-in.
 
 <details>
 <summary>Parameters</summary>
+
+**create_transactions** - `transactions` (required): an array of `{account, amount, payee?, category?, date?, notes?, cleared?, imported_id?}` | `allow_duplicate` (optional). **This is the way to record more than one.** Every row is resolved and checked before anything is written, and if any row is unusable nothing is created: the reply names the rows that failed and why, and says the rest were fine but not written either. Calling `create_transaction` many times in parallel is what this replaces — nine at once took the server down, which is how that limit was learned. A row whose payee names an account is refused, since a transfer needs `create_transfer`. A row whose `imported_id` is already in the budget is refused, so resending a batch cannot duplicate it.
 
 **create_transaction** - `account` (required): account name | `amount` (required): negative for expenses, positive for income | `payee` (optional) | `category` (optional) | `date` (optional) | `notes` (optional) | `cleared` (optional) | `allow_duplicate` (optional): create it even though one with the same account, date and amount exists
 
