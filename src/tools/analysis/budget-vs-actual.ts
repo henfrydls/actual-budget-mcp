@@ -57,7 +57,21 @@ export function registerBudgetVsActual(server: McpServer): void {
             const variance = cat.budgeted + cat.spent; // spent is negative
             let status: string;
 
-            if (cat.budgeted === 0 && cat.spent === 0) {
+            // A category whose net for the month is positive did not spend
+            // anything: money came in, through a refund, a reimbursement, or a
+            // transfer booked against it. Calling that "Under Budget" by the
+            // whole amount is wrong twice over (#131). Measured: a category
+            // that received 20,113.00 was listed as under budget by 20,113.00
+            // **and counted into the footer**, which then read "Under budget:
+            // 2 categories (total: 20,613.00)" — a figure that was almost
+            // entirely one reimbursement, and the figure anyone would quote.
+            //
+            // So it is left out of both the status and the totals. Excluding
+            // it from the list while leaving it in the sum would look correct
+            // and still mislead.
+            if (cat.spent > 0) {
+              status = 'money came in';
+            } else if (cat.budgeted === 0 && cat.spent === 0) {
               status = '--';
             } else if (variance < 0) {
               status = 'OVER BUDGET';

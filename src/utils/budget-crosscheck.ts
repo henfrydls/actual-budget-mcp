@@ -18,7 +18,7 @@ export interface SpendingDivergence {
 }
 
 /**
- * Add up what a month's transactions actually say each category spent.
+ * Add up what a period's transactions actually say each category spent.
  *
  * Two details decide whether this is right, and both were checked against a
  * real budget rather than assumed:
@@ -26,15 +26,31 @@ export interface SpendingDivergence {
  *  - `getTransactions` returns split parents only, with the children nested in
  *    `subtransactions`. The parent carries the full amount and no category, so
  *    summing rows naively would attribute a split to nothing and count its
- *    total twice over. Every split would then look like a divergence, and a
- *    warning that cries wolf on healthy data is worse than no warning.
+ *    total twice over.
  *  - Off-budget accounts do not count towards a budget category. Closed
  *    accounts do: their history still belongs to the months it happened in.
  *
  * Verified on four consecutive months of a real budget: zero divergences, to
- * the cent. So a divergence here is a signal, not noise.
+ * the cent.
+ *
+ * ## Why this takes a date range and has two callers
+ *
+ * It was written for the month-shaped cross-check (#92), and
+ * `spending_by_category` grew its own loop over accounts that did neither
+ * thing. Measured on a budget holding one split and one off-budget row, for
+ * figures whose truth was Comida -800 and Transporte -400: the cross-check and
+ * the budget module both said -800 and -400, while `spending_by_category` said
+ * -5,200 for Comida and **left Transporte out of the report altogether**,
+ * because both halves of the split were invisible to it (#130). On the real
+ * budget the gap was 35,718.22 in one month.
+ *
+ * So there is one rule with two callers rather than a second copy that can
+ * drift from the first, which is what #116 was.
  */
-export async function sumTransactionsByCategory(month: string): Promise<Map<string, number>> {
+export async function sumTransactionsInRange(
+  startDate: string,
+  endDate: string,
+): Promise<Map<string, number>> {
   const accounts = await api.getAccounts();
   const sums = new Map<string, number>();
   const add = (category: string | null | undefined, amount: number) => {
@@ -42,29 +58,26 @@ export async function sumTransactionsByCategory(month: string): Promise<Map<stri
     sums.set(category, (sums.get(category) ?? 0) + amount);
   };
 
-  // The whole month. Actual accepts a day past the end of a short month: AQL
-  // validates the shape of the date and compares YYYYMMDD as integers.
-  const start = `${month}-01`;
-  const end = `${month}-31`;
-
   // One query for every account rather than one per account. Each call costs
   // about 28 ms regardless of how many rows it returns, so asking per account
   // made the check scale with the number of accounts rather than the data:
   // 312 ms against 34 ms on a budget with 14 accounts, for identical sums.
   // Running them in parallel does not help, since the query engine serialises.
+  //
   // An inclusion set, not an exclusion one. `getAccounts()` only returns live
-  // accounts (tombstone = 0) while the month-wide query returns rows from any
+  // accounts (tombstone = 0) while the range-wide query returns rows from any
   // account, so excluding "the off-budget ones I know about" silently counts
-  // rows belonging to a deleted account that still has live transactions. That
-  // is not hypothetical here: it is a half-synced delete, where the message
-  // removing the account arrived and the ones removing its transactions did
-  // not, which is exactly the local inconsistency this check exists to find.
+  // rows belonging to a deleted account that still has live transactions.
   const onBudget = new Set(accounts.filter((a) => !a.offbudget).map((a) => a.id));
   // No `?? []`: `getTransactions` returns an array or throws, and a failed
   // read must surface rather than be counted as "no transactions" — that would
   // report every category as diverging, precisely when something is wrong and
   // people are most likely to believe it.
-  const rows = await api.getTransactions(undefined as unknown as string, start, end);
+  const rows = await api.getTransactions(
+    undefined as unknown as string,
+    startDate,
+    endDate,
+  );
 
   for (const row of rows as Array<Record<string, any>>) {
     // Only accounts known to be on budget. Anything else, including rows whose
@@ -79,6 +92,16 @@ export async function sumTransactionsByCategory(month: string): Promise<Map<stri
   }
 
   return sums;
+}
+
+/**
+ * The month-shaped caller.
+ *
+ * Actual accepts a day past the end of a short month: AQL validates the shape
+ * of the date and compares YYYYMMDD as integers.
+ */
+export async function sumTransactionsByCategory(month: string): Promise<Map<string, number>> {
+  return await sumTransactionsInRange(`${month}-01`, `${month}-31`);
 }
 
 /**

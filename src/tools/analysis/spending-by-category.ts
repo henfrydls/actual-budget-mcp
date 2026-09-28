@@ -7,6 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import { isIncome } from '../../utils/income.js';
+import { sumTransactionsInRange } from '../../utils/budget-crosscheck.js';
 
 export function registerSpendingByCategory(server: McpServer): void {
   server.tool(
@@ -40,8 +41,6 @@ export function registerSpendingByCategory(server: McpServer): void {
         const startDate = resolveDate(start_date || 'start of month');
         const endDate = resolveDate(end_date);
 
-        // Get all accounts and their transactions
-        const accounts = await api.getAccounts();
         const categories = await api.getCategories();
         const categoryMap = new Map(
           categories.filter((c) => 'group_id' in c).map((c) => [c.id, c]),
@@ -49,26 +48,26 @@ export function registerSpendingByCategory(server: McpServer): void {
         const groups = await api.getCategoryGroups();
         const groupMap = new Map(groups.map((g) => [g.id, g]));
 
-        // Collect spending by category
+        // The same sum the cross-check uses (#92), rather than a loop of its
+        // own. This had one, and it neither walked `subtransactions` nor
+        // skipped off-budget accounts: measured on a budget with one split and
+        // one off-budget row, it reported -5,200 where the truth was -800 and
+        // **left a whole category out of the report**, because both halves of
+        // the split were invisible to it. On the real budget the gap was
+        // 35,718.22 in a single month (#130).
+        const summed = await sumTransactionsInRange(startDate, endDate);
+
         const spending = new Map<string, number>();
-
-        for (const acct of accounts) {
-          if (acct.closed) continue;
-          const txns = await api.getTransactions(acct.id, startDate, endDate);
-          for (const t of txns) {
-            if (!t.category) continue;
-            const cat = categoryMap.get(t.category);
-            if (!cat || !('group_id' in cat)) continue;
-            const group = groupMap.get((cat as any).group_id);
-            // The category's own flag, not only the group's. This is the site
-            // in #116 whose output made it visible: a salary listed as
-            // spending, `include_income: false` not excluding it, and a share
-            // column reading 104.2% of a total it was inflating.
-            if (!include_income && isIncome(group, cat)) continue;
-
-            const current = spending.get(t.category) || 0;
-            spending.set(t.category, current + t.amount);
-          }
+        for (const [categoryId, amount] of summed) {
+          const cat = categoryMap.get(categoryId);
+          if (!cat || !('group_id' in cat)) continue;
+          const group = groupMap.get((cat as any).group_id);
+          // The category's own flag, not only the group's. This is the site
+          // in #116 whose output made it visible: a salary listed as
+          // spending, `include_income: false` not excluding it, and a share
+          // column reading 104.2% of a total it was inflating.
+          if (!include_income && isIncome(group, cat)) continue;
+          spending.set(categoryId, amount);
         }
 
         // Sort by absolute spending (most spent first)
