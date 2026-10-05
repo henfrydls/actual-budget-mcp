@@ -96,12 +96,7 @@ interface Problem {
   reason: string;
 }
 
-/**
- * The queue every transaction write shares (#111). It was this tool's own at
- * first, which stopped two batches interleaving but left a batch free to race
- * a single create or a delete.
- */
-const queue = queueTransactionWrite;
+
 
 function describeRow(row: BatchInput, index: number): string {
   const bits = [`row ${index + 1}`, row.account, formatMoney(amountToCents(row.amount))];
@@ -262,7 +257,14 @@ export async function createTransactions(input: {
     return lines;
   }
 
-  return await queue(() => writeBatch(resolved, rows.length));
+  // The queue every transaction write shares (#111). It was this tool's own
+  // at first, which stopped two batches interleaving but left a batch free to
+  // race a single create or a delete.
+  //
+  // Called here rather than around the handler: `createTransactions` is
+  // exported and used directly, and wrapping both would have the outer call
+  // waiting on an inner one that cannot start.
+  return await queueTransactionWrite(() => writeBatch(resolved, rows.length));
 }
 
 async function writeBatch(resolved: ResolvedRow[], total: number): Promise<string[]> {

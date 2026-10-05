@@ -34,12 +34,40 @@
 /** Long enough that only a stuck request reaches it, short of Node's five minutes. */
 export const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 
+/** Below this, every request fails; the value is a mistake rather than a choice. */
+export const MIN_HTTP_TIMEOUT_MS = 1_000;
+/** `setTimeout` takes a 32-bit signed delay; past it, Node fires immediately. */
+export const MAX_HTTP_TIMEOUT_MS = 2_147_483_647;
+
 export function resolveTimeoutMs(raw: string | undefined): number {
   const parsed = Number(raw);
   // A nonsense value is not a reason to leave requests with no deadline at
   // all, which is the state this exists to fix.
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_HTTP_TIMEOUT_MS;
-  return Math.round(parsed);
+
+  const rounded = Math.round(parsed);
+
+  // Both ends produce the same failure, and it is the worst one: every request
+  // aborts at once and the server is reported as unreachable, so a healthy
+  // setup reads as a network problem.
+  //
+  // Measured against a server that answered instantly: `0.4` rounds to 0 and
+  // aborted in 2 ms; `3000000000` overflowed `setTimeout`'s 32-bit delay,
+  // printed `TimeoutOverflowWarning` and aborted in 6 ms. Raising the value is
+  // exactly what the README invites someone to do for a slow bank sync.
+  if (rounded < MIN_HTTP_TIMEOUT_MS) {
+    console.error(
+      `[actual-budget-mcp] ACTUAL_HTTP_TIMEOUT_MS=${raw} is below ${MIN_HTTP_TIMEOUT_MS}ms, which would abort every request. Using ${MIN_HTTP_TIMEOUT_MS}ms.`,
+    );
+    return MIN_HTTP_TIMEOUT_MS;
+  }
+  if (rounded > MAX_HTTP_TIMEOUT_MS) {
+    console.error(
+      `[actual-budget-mcp] ACTUAL_HTTP_TIMEOUT_MS=${raw} is larger than a timer can hold, which would abort every request immediately. Using ${MAX_HTTP_TIMEOUT_MS}ms.`,
+    );
+    return MAX_HTTP_TIMEOUT_MS;
+  }
+  return rounded;
 }
 
 type FetchFn = typeof globalThis.fetch;
@@ -61,12 +89,36 @@ export function installHttpTimeout(timeoutMs: number): () => void {
   const original = globalThis.fetch;
   installed = { original };
 
-  globalThis.fetch = ((input: Parameters<FetchFn>[0], init?: Parameters<FetchFn>[1]) => {
-    // Respect a caller that already decided. `AbortSignal.any` would let both
-    // apply, but adding a deadline to a request that was given one on purpose
-    // is overruling a decision rather than filling a gap.
+  globalThis.fetch = (async (
+    input: Parameters<FetchFn>[0],
+    init?: Parameters<FetchFn>[1],
+  ) => {
+    // Respect a caller that already decided. Adding a deadline to a request
+    // that was given one on purpose is overruling a decision rather than
+    // filling a gap.
     if (init?.signal) return original(input, init);
-    return original(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+
+    // The deadline covers the wait for a reply, not the reply itself.
+    //
+    // `AbortSignal.timeout` would cover both, and that breaks healthy work:
+    // measured, a 6 MB download that streams for 6.5 s was aborted at 3 s with
+    // `TimeoutError`, which the SDK reports as
+    // `Downloading the file failed. Check your network connection.` A first
+    // budget download, a Docker start with no volume, and a second concurrent
+    // agent sent to an empty data directory all download in full, so a slow
+    // link would have turned a working setup into a network error that blames
+    // the network.
+    //
+    // `fetch` resolves when the headers arrive, so clearing the timer there
+    // leaves the body to stream at its own pace. Node still cuts an idle body
+    // off on its own.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await original(input, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
   }) as FetchFn;
 
   return () => {

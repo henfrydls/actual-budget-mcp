@@ -101,6 +101,14 @@ describe.skipIf(skip)('tool calls that arrive together', () => {
   }, 60_000);
 
   it('applies both calls, in the order they arrived', async () => {
+    // The new row deliberately matches the one being deleted. That is what
+    // makes the order observable: delete first and the create sees nothing to
+    // warn about, so one row is left; create first and it finds the original,
+    // refuses, and the delete then leaves none.
+    //
+    // A first version used a different date and amount, where the two calls
+    // commute: the same single row came out whichever ran first, so the test
+    // was named for an order it could not see.
     await budgetWithOneRow('pipelined-order');
     const remove = handlerFor(registerDeleteTransaction);
     const create = handlerFor(registerCreateTransaction);
@@ -108,11 +116,13 @@ describe.skipIf(skip)('tool calls that arrive together', () => {
     const account = (await api.getAccounts()).find((a) => a.name === 'Checking')!.id;
     await Promise.all([
       remove({ transaction_id: ROW_ID, confirm: true }),
-      create({ account: 'Checking', amount: -77, date: '2026-09-11', payee: 'Otro' }),
+      create({ account: 'Checking', amount: -50, date: '2026-09-10', payee: 'Colmado' }),
     ]);
 
     const rows = await api.getTransactions(account, '1900-01-01', '2999-12-31');
-    // The original is gone and the new one is there: one in, one out.
-    expect(rows.map((r) => r.amount).sort()).toEqual([-7700]);
+    expect(rows).toHaveLength(1);
+    // The one that is there is the new one: the original carried the marker.
+    expect(rows[0].id).not.toBe(ROW_ID);
+    expect(rows[0].amount).toBe(-5000);
   }, 60_000);
 });

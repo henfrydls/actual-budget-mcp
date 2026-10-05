@@ -808,7 +808,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 ### Environment
 
-**`ACTUAL_HTTP_TIMEOUT_MS`** (optional, default 60000) - how long a request to your Actual server may take before it is abandoned. Without one, a server that accepts the connection and never answers holds every write for five minutes, Node's own header timeout. It applies to all requests the server makes, including a bank sync, which is why it can be raised.
+**`ACTUAL_HTTP_TIMEOUT_MS`** (optional, default 60000) - how long to wait for your Actual server to **start** replying. The reply itself is then free to take as long as it takes, so a slow budget download is not cut off. Without this, a server that accepts the connection and never answers holds every write for five minutes, which is Node's own limit. It applies to every request the server makes, including the ones a bank sync starts, so raise it if a provider is slow to respond; values below 1000 or larger than a timer can hold are refused, with a line on stderr saying so.
 
 </details>
 

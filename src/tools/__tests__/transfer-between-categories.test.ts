@@ -339,7 +339,7 @@ describe('transfer_between_categories (#86)', () => {
     // The tool also asks the engine for the budget's currency (#115), through
     // the same `send`. Only the transfer counts as the write here.
     sendMock.mockImplementation(async (method: string) => {
-      if (method === 'load-prefs') return {};
+      if (method === 'preferences/get' || method === 'load-prefs') return {};
       order.push('write');
       return undefined;
     });

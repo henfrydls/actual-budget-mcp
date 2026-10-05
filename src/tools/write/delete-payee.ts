@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolvePayeeId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 const ALL_TIME_START = '1900-01-01';
 const ALL_TIME_END = '9999-12-31';
@@ -75,7 +76,9 @@ export function registerDeletePayee(server: McpServer): void {
         .describe("The payee's exact name, echoed back as a safeguard."),
     },
     { title: 'Delete payee', readOnlyHint: false, destructiveHint: true },
-    async (input) => {
+    async input =>
+      // Deleting a payee rewrites the transactions that referenced it (#111).
+      queueTransactionWrite(async () => {
       try {
         const { deleted, lines } = await deletePayeeGuarded(input);
         return {
@@ -88,6 +91,7 @@ export function registerDeletePayee(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

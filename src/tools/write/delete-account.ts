@@ -6,6 +6,7 @@ import { resolveAccountId } from '../../utils/resolvers.js';
 import { formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 // Same trick as list-accounts: a far-future cutoff yields the full balance
 // instead of only transactions dated up to today (#21).
@@ -126,7 +127,10 @@ export function registerDeleteAccount(server: McpServer): void {
         ),
     },
     { title: 'Delete account', readOnlyHint: false, destructiveHint: true },
-    async (input) => {
+    async input =>
+      // Closing an account moves or deletes its transactions, so it changes
+      // the same table the duplicate check reads (#111).
+      queueTransactionWrite(async () => {
       try {
         const { deleted, lines } = await deleteAccountGuarded(input);
         return {
@@ -142,6 +146,7 @@ export function registerDeleteAccount(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

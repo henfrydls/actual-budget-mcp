@@ -15,6 +15,19 @@ import { makeQueue } from './serialize.js';
  * of chained microtasks or any engine call, and a sequential pair of tool calls
  * clears it. Here both handlers are genuinely in flight at once.
  *
+ * ## Which tools, and how that is kept honest
+ *
+ * Thirteen of them, and the list is checked against `src/tools/write/` by a
+ * test rather than kept in anyone's head. When this sentence was first
+ * written it was not true: two audits found `run_bank_sync` outside the queue
+ * independently of each other, one of them found three more, and the test
+ * written afterwards found a fifth, `delete_category_group`, which moves every
+ * transaction of every category in the group.
+ *
+ * `run_bank_sync` is in, and it can hold the others up for as long as a bank
+ * takes. That is the right way round: writing transactions while the bank's
+ * are arriving is what duplicates them.
+ *
  * ## Why one queue rather than one each
  *
  * They compete for the same thing: what the transactions table says between a

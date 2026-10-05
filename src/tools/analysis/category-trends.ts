@@ -279,18 +279,44 @@ async function topCategoryTrends(
         found = g.categories.find((c) => c.id === cat.id);
         if (found) break;
       }
-      values.push(found ? Math.abs(found.spent) : 0);
+      // The figure as it stands, like the single-category mode. The same
+      // #133 bug lived in both: an audit found this one still negating a
+      // magnitude, so a month that received 2,430.00 read as -2,430.00 spent
+      // with a change of +507.5%.
+      values.push(found ? found.spent : 0);
     }
 
-    const avg = Math.round(
-      values.reduce((sum, v) => sum + v, 0) / values.length,
-    );
+    // Only the months that spent, as in the single-category mode. Averaging a
+    // month that received money in with the rest does not dilute the figure,
+    // it reverses it: measured, a category that spent 950.00 in the ranking
+    // month and had been reimbursed 2,430.00 the month before came out at
+    // `Avg: 740.00` positive, reading as money coming in every month. A month
+    // with no activity is not part of an average of what was spent either.
+    //
+    // There is always at least one such month: a category reaches this loop
+    // only by having spent in the reference month, which is inside the window.
+    // The guard is there because that is an argument, not a check.
+    const spendingMonths = values.filter((v) => v < 0);
+    const avg = spendingMonths.length
+      ? Math.round(spendingMonths.reduce((sum, v) => sum + v, 0) / spendingMonths.length)
+      : 0;
     const latest = values[0];
-    const previous = values[1] || 0;
-    const change = previous > 0 ? ((latest - previous) / previous) * 100 : 0;
+    const previous = values[1] ?? 0;
+
+    // A ratio between figures of opposite sign has no reading, the same as in
+    // the single-category mode (#133).
+    let change: string;
+    if (previous === 0) {
+      change = '---';
+    } else if (latest !== 0 && latest < 0 !== previous < 0) {
+      change = latest > 0 ? 'now receiving' : 'now spending';
+    } else {
+      const pct = ((latest - previous) / previous) * 100;
+      change = `${pct >= 0 ? '+' : ''}${formatPercent(pct)}`;
+    }
 
     lines.push(
-      `${cat.name.padEnd(25)} Avg: ${formatMoney(-avg).padStart(12)}  Latest: ${formatMoney(-latest).padStart(12)}  Change: ${change >= 0 ? '+' : ''}${formatPercent(change)}`,
+      `${cat.name.padEnd(25)} Avg: ${formatMoney(avg).padStart(12)}  Latest: ${formatMoney(latest).padStart(12)}  Change: ${change}`,
     );
   }
 

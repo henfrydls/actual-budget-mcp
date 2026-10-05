@@ -1,9 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import net from 'node:net';
+import http from 'node:http';
 import {
   installHttpTimeout,
   resolveTimeoutMs,
   DEFAULT_HTTP_TIMEOUT_MS,
+  MIN_HTTP_TIMEOUT_MS,
+  MAX_HTTP_TIMEOUT_MS,
 } from '../http-timeout.js';
 
 /** A server that accepts the connection and then says nothing: the #99 shape. */
@@ -88,6 +91,77 @@ describe('a hung server does not hold a request for five minutes (#99)', () => {
     expect(Date.now() - started).toBeLessThan(5000);
   }, 20_000);
 
+  it('changes nothing about the request but the signal', async () => {
+    // The wrapper sits in front of every request the SDK makes, so what it
+    // does *not* do matters as much as what it does. Adding a header nobody
+    // asked for left the whole suite green, which is how this gap was found:
+    // mutating by addition rather than by removal.
+    const seen: Array<[unknown, RequestInit | undefined]> = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      seen.push([input, init]);
+      return new Response('ok');
+    }) as typeof globalThis.fetch;
+    const restoreSpy = () => {
+      globalThis.fetch = original;
+    };
+
+    try {
+      const uninstall = installHttpTimeout(5000);
+      await fetch('http://example.test/path', {
+        method: 'POST',
+        body: 'payload',
+        headers: { 'X-Mine': 'kept' },
+      });
+      uninstall();
+
+      expect(seen).toHaveLength(1);
+      const [url, init] = seen[0];
+      expect(url).toBe('http://example.test/path');
+      expect(init?.method).toBe('POST');
+      expect(init?.body).toBe('payload');
+      expect(init?.headers).toEqual({ 'X-Mine': 'kept' });
+      // Exactly one thing added, and it is the signal.
+      expect(Object.keys(init ?? {}).sort()).toEqual(['body', 'headers', 'method', 'signal']);
+    } finally {
+      restoreSpy();
+    }
+  });
+
+  it('lets a slow body finish, because the deadline is for the reply', async () => {
+    // The deadline covers the wait for a reply, not the reply itself. With
+    // `AbortSignal.timeout` it covered both, and a healthy 6 MB download that
+    // streams for seconds was aborted mid-body: the SDK reports that as
+    // "Downloading the file failed. Check your network connection", so a slow
+    // link read as a broken one. A first budget download, a Docker start with
+    // no volume and a second concurrent agent all download in full.
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+      let sent = 0;
+      const chunk = Buffer.alloc(100_000);
+      const timer = setInterval(() => {
+        if (sent >= 600_000) {
+          clearInterval(timer);
+          res.end();
+          return;
+        }
+        res.write(chunk);
+        sent += chunk.length;
+      }, 120);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as import('node:net').AddressInfo).port;
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+    // Headers arrive at once; the body takes about 0.7 s, well past this.
+    cleanups.push(installHttpTimeout(300));
+
+    const response = await fetch(`http://127.0.0.1:${port}/download-user-file`);
+    const body = await response.arrayBuffer();
+
+    expect(body.byteLength).toBe(600_000);
+  }, 20_000);
+
   it('puts the original fetch back', async () => {
     const before = globalThis.fetch;
     const uninstall = installHttpTimeout(500);
@@ -98,8 +172,25 @@ describe('a hung server does not hold a request for five minutes (#99)', () => {
 });
 
 describe('resolveTimeoutMs', () => {
-  it('takes a number from the environment', () => {
+  it('refuses a value a timer cannot hold', () => {
+    // Measured against a server that answered instantly: 3000000000 overflows
+    // `setTimeout`'s 32-bit delay, so Node warns and fires at once, and every
+    // request aborts and is reported as the server being unreachable. Raising
+    // the value is what the README invites for a slow bank sync.
+    expect(resolveTimeoutMs('3000000000')).toBe(MAX_HTTP_TIMEOUT_MS);
+    expect(resolveTimeoutMs('9999999999')).toBe(MAX_HTTP_TIMEOUT_MS);
+  });
+
+  it('refuses a value too small to let anything through', () => {
+    // `0.4` rounded to 0 and aborted every request in 2 ms.
+    expect(resolveTimeoutMs('0.4')).toBe(MIN_HTTP_TIMEOUT_MS);
+    expect(resolveTimeoutMs('1')).toBe(MIN_HTTP_TIMEOUT_MS);
+    expect(resolveTimeoutMs('999')).toBe(MIN_HTTP_TIMEOUT_MS);
+  });
+
+  it('keeps a sensible value as it is', () => {
     expect(resolveTimeoutMs('5000')).toBe(5000);
+    expect(resolveTimeoutMs('300000')).toBe(300000);
   });
 
   it('falls back rather than leaving requests with no deadline', () => {

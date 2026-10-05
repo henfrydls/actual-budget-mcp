@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveCategoryId, resolveCategoryGroupId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export interface DeleteCategoryGroupInput {
   group: string;
@@ -85,7 +86,12 @@ export function registerDeleteCategoryGroup(server: McpServer): void {
         .describe("The group's exact name, echoed back as a safeguard."),
     },
     { title: 'Delete category group', readOnlyHint: false, destructiveHint: true },
-    async (input) => {
+    async (input) =>
+      // `deleteCategoryGroup(groupId, transferId)` moves the transactions of
+      // every category in the group to another one, so it writes to the
+      // transactions table (#111). Neither audit listed it; the guard over the
+      // directory did.
+      queueTransactionWrite(async () => {
       try {
         const { deleted, lines } = await deleteCategoryGroupGuarded(input);
         return {
@@ -98,6 +104,7 @@ export function registerDeleteCategoryGroup(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

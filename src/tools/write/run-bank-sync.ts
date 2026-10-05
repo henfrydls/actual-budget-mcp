@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export function registerRunBankSync(server: McpServer): void {
   server.tool(
@@ -16,7 +17,13 @@ export function registerRunBankSync(server: McpServer): void {
         .describe('Account name or ID to sync. If omitted, syncs all linked accounts.'),
     },
     { title: 'Sync with bank', readOnlyHint: false },
-    async ({ account }) => {
+    async ({ account }) =>
+      // Queued with every other transaction write. A bank sync imports rows,
+      // so a create running beside it checks for duplicates against a table
+      // being filled underneath it — the /actualiza case. It can take a while,
+      // and other writes wait: that is the point, since writing transactions
+      // while the bank's are arriving is what duplicates them (#111).
+      queueTransactionWrite(async () => {
       try {
         await ensureConnection();
 
@@ -72,6 +79,7 @@ export function registerRunBankSync(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }
