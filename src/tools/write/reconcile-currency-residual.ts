@@ -10,6 +10,7 @@ import { pullBeforeReading, isDuplicatePreview } from '../../utils/duplicate-che
 import { rowsDatedAfterToday, describeFutureRows } from '../../utils/future-dated.js';
 import { describeError } from '../../utils/errors.js';
 import { WriteReportedError } from '../../utils/write-outcome.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export interface ReconcileResidualInput {
   account: string;
@@ -281,7 +282,10 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
         ),
     },
     { title: 'Reconcile currency residual', readOnlyHint: false },
-    async (input) => {
+    async (input) =>
+      // Serialised with every other transaction write: this books one through
+      // the same path `create_transaction` uses (#111).
+      queueTransactionWrite(async () => {
       try {
         const lines = await reconcileCurrencyResidual(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -298,6 +302,7 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

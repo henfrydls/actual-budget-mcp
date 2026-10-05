@@ -6,6 +6,7 @@ import { formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { transactionsQuery } from '../../utils/transaction-query.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export interface DeleteTransactionInput {
   transaction_id: string;
@@ -180,7 +181,11 @@ export function registerDeleteTransaction(server: McpServer): void {
         .describe('Must be true to delete. Without it, the tool only previews.'),
     },
     { title: 'Delete transaction', readOnlyHint: false, destructiveHint: true },
-    async (input) => {
+    async (input) =>
+      // Serialised with every other transaction write, so two calls
+      // sent without awaiting the first cannot read each other half
+      // done (#111).
+      queueTransactionWrite(async () => {
       try {
         const { deleted, lines } = await deleteTransactionGuarded(input);
         return {
@@ -193,6 +198,7 @@ export function registerDeleteTransaction(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

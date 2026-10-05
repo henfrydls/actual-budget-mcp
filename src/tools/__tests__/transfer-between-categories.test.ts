@@ -336,8 +336,12 @@ describe('transfer_between_categories (#86)', () => {
       reads += 1;
       return (reads === 1 ? month(20000, 5000) : month(15000, 10000)) as never;
     });
-    sendMock.mockImplementation(async () => {
+    // The tool also asks the engine for the budget's currency (#115), through
+    // the same `send`. Only the transfer counts as the write here.
+    sendMock.mockImplementation(async (method: string) => {
+      if (method === 'load-prefs') return {};
       order.push('write');
+      return undefined;
     });
 
     const result = await handlerFor()({

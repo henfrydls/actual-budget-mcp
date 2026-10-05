@@ -8,6 +8,7 @@ import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
 import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -26,7 +27,11 @@ export function registerCreateTransfer(server: McpServer): void {
       notes: z.string().optional().describe('Transfer notes'),
     },
     { title: 'Transfer between accounts', readOnlyHint: false },
-    async ({ from_account, to_account, amount, date, notes }) => {
+    async ({ from_account, to_account, amount, date, notes }) =>
+      // Serialised with every other transaction write, so two calls
+      // sent without awaiting the first cannot read each other half
+      // done (#111).
+      queueTransactionWrite(async () => {
       try {
         await ensureConnection();
 
@@ -115,6 +120,7 @@ export function registerCreateTransfer(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

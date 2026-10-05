@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
 import 'dotenv/config';
+// Before anything that imports `@actual-app/api`: the bundle captures
+// `globalThis.fetch` when it loads, so a wrapper installed later is never
+// seen. Gives every SDK request a deadline it otherwise does not have (#99).
+import './utils/http-timeout.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerAllTools } from './tools/index.js';

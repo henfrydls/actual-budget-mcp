@@ -9,7 +9,7 @@ import { transactionsQuery } from '../../utils/transaction-query.js';
 import { newWriteMarker } from '../../utils/write-marker.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { findPossibleDuplicates, pullBeforeReading } from '../../utils/duplicate-check.js';
-import { makeQueue } from '../../utils/serialize.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { describeError } from '../../utils/errors.js';
 
 /**
@@ -96,8 +96,12 @@ interface Problem {
   reason: string;
 }
 
-/** Writes are serialised so two batches cannot interleave their reads (#121). */
-const queue = makeQueue();
+/**
+ * The queue every transaction write shares (#111). It was this tool's own at
+ * first, which stopped two batches interleaving but left a batch free to race
+ * a single create or a delete.
+ */
+const queue = queueTransactionWrite;
 
 function describeRow(row: BatchInput, index: number): string {
   const bits = [`row ${index + 1}`, row.account, formatMoney(amountToCents(row.amount))];

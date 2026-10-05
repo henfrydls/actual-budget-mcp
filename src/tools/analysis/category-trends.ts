@@ -126,10 +126,21 @@ async function singleCategoryTrend(
 
   for (let i = 0; i < months.length; i++) {
     let change = '---';
-    if (i < months.length - 1 && spentValues[i + 1] !== 0) {
-      const pctChange =
-        ((spentValues[i] - spentValues[i + 1]) / spentValues[i + 1]) * 100;
-      change = `${pctChange >= 0 ? '+' : ''}${formatPercent(pctChange)}`;
+    const now = spentValues[i];
+    const before = spentValues[i + 1];
+    if (i < months.length - 1 && before !== 0) {
+      // A ratio between figures of opposite sign has no reading. Measured
+      // (#133): a category that spent 400.00 and then received 2,430.00 printed
+      // -707.5%, which looks like a figure and is not one — spending did not
+      // fall by seven hundred percent, the category stopped spending and
+      // started receiving. Same family as the percentage over a negative
+      // budget in #128: the arithmetic answers a question nobody asked.
+      if (now !== 0 && now < 0 !== before < 0) {
+        change = now > 0 ? 'now receiving' : 'now spending';
+      } else {
+        const pctChange = ((now - before) / before) * 100;
+        change = `${pctChange >= 0 ? '+' : ''}${formatPercent(pctChange)}`;
+      }
     }
     if (i === 0 && months[0] === resolveMonth()) {
       change += ' (in progress)';

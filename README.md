@@ -806,6 +806,10 @@ Writes are enabled by default. Read-only is opt-in.
 
 **repair_sync** - no parameters
 
+### Environment
+
+**`ACTUAL_HTTP_TIMEOUT_MS`** (optional, default 60000) - how long a request to your Actual server may take before it is abandoned. Without one, a server that accepts the connection and never answers holds every write for five minutes, Node's own header timeout. It applies to all requests the server makes, including a bank sync, which is why it can be raised.
+
 </details>
 
 ## Prompts
