@@ -29,6 +29,9 @@ const FROZEN_TITLES: Record<string, string> = {
   session_token: 'Session token (optional, OIDC servers only)',
   encryption_password: 'Encryption password (optional)',
   read_only: 'Read-only mode',
+  // New in 0.10.1. Nobody has answered it yet, so freezing it now costs
+  // nothing and means the next rewording is a deliberate act like the rest.
+  http_timeout_ms: 'Server reply timeout (ms)',
 };
 
 describe('the configuration titles a user has already answered', () => {

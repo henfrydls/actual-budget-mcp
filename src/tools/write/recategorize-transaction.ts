@@ -6,6 +6,7 @@ import { formatMoney } from '../../utils/money.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export function registerRecategorizeTransaction(server: McpServer): void {
   server.tool(
@@ -16,7 +17,11 @@ export function registerRecategorizeTransaction(server: McpServer): void {
       category: z.string().describe('New category name or ID'),
     },
     { title: 'Recategorize transaction', readOnlyHint: false, idempotentHint: true },
-    async ({ transaction_id, category }) => {
+    async ({ transaction_id, category }) =>
+      // Serialised with every other transaction write, so two calls
+      // sent without awaiting the first cannot read each other half
+      // done (#111).
+      queueTransactionWrite(async () => {
       try {
         await ensureConnection();
 
@@ -47,6 +52,7 @@ export function registerRecategorizeTransaction(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

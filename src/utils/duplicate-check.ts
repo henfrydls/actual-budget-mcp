@@ -81,8 +81,18 @@ export async function findPossibleDuplicates(
   accountId: string,
   date: string,
   amountCents: number,
+  // A batch checks one row after another and the pull is a full network round
+  // trip, so doing it per row costs rows x the timeout against a server that
+  // has stopped answering: measured, ten rows held the write queue for twelve
+  // seconds with a one-second deadline, and would hold it twelve minutes with
+  // the default. Nothing another client writes in between would be seen
+  // anyway, because the rows are checked in one pass. The default is
+  // unchanged, so a single-row caller still pulls.
+  options: { alreadyPulled?: boolean } = {},
 ): Promise<ExistingTransaction[]> {
-  await pullBeforeReading('checking whether this transaction already exists');
+  if (!options.alreadyPulled) {
+    await pullBeforeReading('checking whether this transaction already exists');
+  }
 
   const result = await api.runQuery(
     transactionsQuery('all')

@@ -8,6 +8,7 @@ import { resolveAccountId, resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
 import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export interface SplitInput {
   category: string;
@@ -163,7 +164,11 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         .describe('Whether the transaction is cleared'),
     },
     { title: 'Add split transaction', readOnlyHint: false },
-    async (input) => {
+    async (input) =>
+      // Serialised with every other transaction write, so two calls
+      // sent without awaiting the first cannot read each other half
+      // done (#111).
+      queueTransactionWrite(async () => {
       try {
         const lines = await createSplitTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -180,6 +185,7 @@ export function registerCreateSplitTransaction(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

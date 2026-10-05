@@ -8,6 +8,7 @@ import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { isIncome } from '../../utils/income.js';
+import { budgetCurrencyCode } from '../../utils/currency.js';
 
 /**
  * Move budgeted money between two categories, creating no transaction.
@@ -188,15 +189,44 @@ export function registerTransferBetweenCategories(server: McpServer): void {
           }
         }
 
-        // The bundled types mark `currencyCode` as required; the implementation
-        // reads it with `getCurrency(currencyCode)`, which is
-        // `currencies.find((c) => c.code === code) || currencies[0]`. With
-        // nothing passed that is the first entry, which has two decimals, not
-        // the budget's own currency as this comment claimed before anyone read
-        // it. It decides how the note is formatted and nothing else, so in a
-        // budget whose currency has no decimals the note reads 100.00 where the
-        // app writes 100. Tracked in #115; the figures are unaffected.
-        const payload = { month, amount: cents, from: fromId, to: toId };
+        // The budget's own currency, read rather than left to a fallback.
+        //
+        // `getCurrency(code)` is `currencies.find((c) => c.code === code) ||
+        // currencies[0]`, and `currencies[0]` is `{code: "", name: "None",
+        // decimalPlaces: 2}`. That decimal count is the **divisor** the note is
+        // formatted with, so on a zero-decimal currency the figure came out
+        // wrong by a factor of a hundred: measured, 10,000 cents moved in a JPY
+        // budget wrote `100.00` into the month's note instead of `10,000`
+        // (#115).
+        //
+        // Three of the engine's currencies have no decimal places — IRR, JPY,
+        // KRW — so nobody on DOP could hit it, which is why it went unnoticed.
+        //
+        // The engine does not read the preference itself: measured, with
+        // `defaultCurrencyCode: "JPY"` saved and nothing passed, the note still
+        // said `100.00`. The preference comes from the **synced** store,
+        // `preferences/get`; an earlier version of this comment said the
+        // opposite, from a measurement taken after writing to the metadata
+        // store instead of the one the app writes to. `budgetCurrencyCode`
+        // reads both, synced first, and says why.
+        //
+        // What this does not fix is the trailing `.00`. `integerToCurrency`
+        // takes the decimal count for the divisor only; how many decimals are
+        // shown comes from the budget's number format, which is a different
+        // setting and not this tool's to decide.
+        // `undefined` when the budget has no currency set, which is what a
+        // fresh one looks like. Passed either way: the engine's `getCurrency`
+        // treats an absent key and an undefined value identically, both
+        // falling back to its own default, so a conditional spread here would
+        // be a branch with nothing behind it. Mutating one into the other
+        // changed no test, which is how that was found.
+        const payload = {
+          month,
+          amount: cents,
+          from: fromId,
+          to: toId,
+          currencyCode: await budgetCurrencyCode(),
+        };
         try {
           await getInternal().send('budget/transfer-category', payload as never);
         } catch (error) {

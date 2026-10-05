@@ -7,6 +7,7 @@ import { resolveDate } from '../../utils/dates.js';
 import { resolveCategoryId, resolvePayeeName } from '../../utils/resolvers.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { describeError } from '../../utils/errors.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export interface UpdateTransactionInput {
   transaction_id: string;
@@ -114,7 +115,11 @@ export function registerUpdateTransaction(server: McpServer): void {
       cleared: z.boolean().optional().describe('Whether the transaction is cleared'),
     },
     { title: 'Edit transaction', readOnlyHint: false, idempotentHint: true },
-    async (input) => {
+    async (input) =>
+      // Serialised with every other transaction write, so two calls
+      // sent without awaiting the first cannot read each other half
+      // done (#111).
+      queueTransactionWrite(async () => {
       try {
         const lines = await updateTransactionFields(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -125,6 +130,7 @@ export function registerUpdateTransaction(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

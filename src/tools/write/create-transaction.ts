@@ -13,6 +13,7 @@ import {
   describePossibleDuplicates,
 } from '../../utils/duplicate-check.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 export interface CreateTransactionInput {
   /** Go ahead even though a transaction with the same account, date and amount exists. */
@@ -243,7 +244,11 @@ export function registerCreateTransaction(server: McpServer): void {
         ),
     },
     { title: 'Add transaction', readOnlyHint: false },
-    async (input) => {
+    async (input) =>
+      // Serialised with every other transaction write, so two calls
+      // sent without awaiting the first cannot read each other half
+      // done (#111).
+      queueTransactionWrite(async () => {
       try {
         const lines = await createTransaction(input);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -261,6 +266,7 @@ export function registerCreateTransaction(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }

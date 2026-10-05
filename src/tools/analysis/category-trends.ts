@@ -5,8 +5,16 @@ import { ensureConnection } from '../../connection.js';
 import { formatMoney, centsToAmount } from '../../utils/money.js';
 import { resolveMonth, getMonthRange } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
-import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
-import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
+import {
+  sectionHeader,
+  formatTable,
+  formatPercent,
+} from '../../utils/formatters.js';
+import type {
+  BudgetMonth,
+  BudgetMonthGroup,
+  BudgetMonthCategory,
+} from '../../types.js';
 import { describeError } from '../../utils/errors.js';
 import { isIncome } from '../../utils/income.js';
 import { readWindow, budgetMonthOrMissing } from '../../utils/budget-month.js';
@@ -34,7 +42,9 @@ export function registerCategoryTrends(server: McpServer): void {
       category: z
         .string()
         .optional()
-        .describe('Category name or ID. If omitted, shows trends for top spending categories.'),
+        .describe(
+          'Category name or ID. If omitted, shows trends for top spending categories.',
+        ),
       months: z
         .number()
         .optional()
@@ -126,10 +136,21 @@ async function singleCategoryTrend(
 
   for (let i = 0; i < months.length; i++) {
     let change = '---';
-    if (i < months.length - 1 && spentValues[i + 1] !== 0) {
-      const pctChange =
-        ((spentValues[i] - spentValues[i + 1]) / spentValues[i + 1]) * 100;
-      change = `${pctChange >= 0 ? '+' : ''}${formatPercent(pctChange)}`;
+    const now = spentValues[i];
+    const before = spentValues[i + 1];
+    if (i < months.length - 1 && before !== 0) {
+      // A ratio between figures of opposite sign has no reading. Measured
+      // (#133): a category that spent 400.00 and then received 2,430.00 printed
+      // -707.5%, which looks like a figure and is not one — spending did not
+      // fall by seven hundred percent, the category stopped spending and
+      // started receiving. Same family as the percentage over a negative
+      // budget in #128: the arithmetic answers a question nobody asked.
+      if (now !== 0 && now < 0 !== before < 0) {
+        change = now > 0 ? 'now receiving' : 'now spending';
+      } else {
+        const pctChange = ((now - before) / before) * 100;
+        change = `${pctChange >= 0 ? '+' : ''}${formatPercent(pctChange)}`;
+      }
     }
     if (i === 0 && months[0] === resolveMonth()) {
       change += ' (in progress)';
@@ -176,7 +197,12 @@ async function singleCategoryTrend(
       if (changes.length > 0) {
         const avgChange =
           changes.reduce((sum, c) => sum + c, 0) / changes.length;
-        const direction = avgChange > 2 ? 'Increasing' : avgChange < -2 ? 'Decreasing' : 'Stable';
+        const direction =
+          avgChange > 2
+            ? 'Increasing'
+            : avgChange < -2
+              ? 'Decreasing'
+              : 'Stable';
         lines.push(
           `Trend: ${direction} (${avgChange >= 0 ? '+' : ''}${formatPercent(avgChange)} avg monthly change)`,
         );
@@ -184,7 +210,7 @@ async function singleCategoryTrend(
     }
   }
 
-  return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+  return { content: [{ type: 'text' as const, text: lines.join("\n") }] };
 }
 
 async function topCategoryTrends(
@@ -202,7 +228,8 @@ async function topCategoryTrends(
   // With an anchor the caller named the month they care about, and it is
   // already complete if it is in the past. Ranking by the month before the one
   // they asked for would answer a question nobody asked.
-  const refMonth = anchored || monthRange.length === 1 ? monthRange[0] : monthRange[1];
+  const refMonth =
+    anchored || monthRange.length === 1 ? monthRange[0] : monthRange[1];
   const budget = await budgetMonthOrMissing(refMonth);
   if (!budget) {
     return {
@@ -228,7 +255,11 @@ async function topCategoryTrends(
       // what came in is the same mistake as giving it a share of spending
       // (#128, #131).
       if (cat.spent < 0) {
-        catSpending.push({ id: cat.id, name: cat.name, spent: Math.abs(cat.spent) });
+        catSpending.push({
+          id: cat.id,
+          name: cat.name,
+          spent: Math.abs(cat.spent),
+        });
       }
     }
   }
@@ -251,7 +282,7 @@ async function topCategoryTrends(
     lines.push(
       `Nothing was spent in ${refMonth}, so there is nothing to rank. The window still covers ${monthCount} month${monthCount === 1 ? '' : 's'} to ${monthRange[0]}; name a category to see it, or anchor on a month with spending in it.`,
     );
-    return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    return { content: [{ type: 'text' as const, text: lines.join("\n") }] };
   }
 
   for (const cat of top) {
@@ -268,20 +299,56 @@ async function topCategoryTrends(
         found = g.categories.find((c) => c.id === cat.id);
         if (found) break;
       }
-      values.push(found ? Math.abs(found.spent) : 0);
+      // The figure as it stands, like the single-category mode. The same
+      // #133 bug lived in both: an audit found this one still negating a
+      // magnitude, so a month that received 2,430.00 read as -2,430.00 spent
+      // with a change of +507.5%.
+      values.push(found ? found.spent : 0);
     }
 
-    const avg = Math.round(
-      values.reduce((sum, v) => sum + v, 0) / values.length,
-    );
+    // Only the months that spent, as in the single-category mode. Averaging a
+    // month that received money in with the rest does not dilute the figure,
+    // it reverses it: measured, a category that spent 950.00 in the ranking
+    // month and had been reimbursed 2,430.00 the month before came out at
+    // `Avg: 740.00` positive, reading as money coming in every month. A month
+    // with no activity is not part of an average of what was spent either.
+    //
+    // There is always at least one such month: a category reaches this loop
+    // only by having spent in the reference month, which is inside the window.
+    // The guard is there because that is an argument, not a check.
+    const spendingMonths = values.filter((v) => v < 0);
+    const avg = spendingMonths.length
+      ? Math.round(
+          spendingMonths.reduce((sum, v) => sum + v, 0) / spendingMonths.length,
+        )
+      : 0;
     const latest = values[0];
-    const previous = values[1] || 0;
-    const change = previous > 0 ? ((latest - previous) / previous) * 100 : 0;
+    const previous = values[1] ?? 0;
+
+    // A ratio between figures of opposite sign has no reading, the same as in
+    // the single-category mode (#133).
+    let change: string;
+    if (previous === 0) {
+      change = '---';
+      // `latest !== 0` is not dead code, though it takes one shape to reach:
+      // with no anchor the ranking month is the month *before* the window's
+      // last, so the most recent figure is the current month and can be empty
+      // while the category still ranks on the one before it. Zero is not
+      // negative, so without this a quiet month would be announced as a change
+      // of direction instead of a fall to nothing. Covered by a test that
+      // computes the months rather than naming them, since which ones they are
+      // changes every month.
+    } else if (latest !== 0 && latest < 0 !== previous < 0) {
+      change = latest > 0 ? 'now receiving' : 'now spending';
+    } else {
+      const pct = ((latest - previous) / previous) * 100;
+      change = `${pct >= 0 ? '+' : ''}${formatPercent(pct)}`;
+    }
 
     lines.push(
-      `${cat.name.padEnd(25)} Avg: ${formatMoney(-avg).padStart(12)}  Latest: ${formatMoney(-latest).padStart(12)}  Change: ${change >= 0 ? '+' : ''}${formatPercent(change)}`,
+      `${cat.name.padEnd(25)} Avg: ${formatMoney(avg).padStart(12)}  Latest: ${formatMoney(latest).padStart(12)}  Change: ${change}`,
     );
   }
 
-  return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+  return { content: [{ type: 'text' as const, text: lines.join("\n") }] };
 }

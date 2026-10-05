@@ -497,11 +497,11 @@ local copy and the write is not blocked, so an offline session keeps working
 with a weaker check rather than no writes. It says so on stderr, with the
 reason, so a weakened check is never silent.
 
-A server that accepts the connection and then never answers is the slow case:
-the Actual library sets no timeout of its own, so the call falls back to Node's
-own five-minute header timeout before failing. This PR adds a second place
-where that can happen, now before the write rather than after it, so a hung
-server can cost twice as long as it used to. Tracked in #99.
+A server that accepts the connection and then never answers used to be the slow
+case: the Actual library sets no timeout of its own, so the call fell back to
+Node's own five-minute header timeout, and there are two places that can happen,
+before the write and after it. `ACTUAL_HTTP_TIMEOUT_MS`, below, now ends those
+waits at 60 seconds by default (#99).
 
 What it does not catch:
 
@@ -805,6 +805,22 @@ Writes are enabled by default. Read-only is opt-in.
 <summary>Parameters</summary>
 
 **repair_sync** - no parameters
+
+### Environment
+
+**`ACTUAL_HTTP_TIMEOUT_MS`** (optional, default 60000) - how long to wait for your Actual server to **start** replying. The reply itself is then free to take as long as it takes, so a slow budget download is not cut off. Without this, a server that accepts the connection and never answers holds every write for five minutes, which is Node's own limit.
+
+A value below 1000, above what a timer can hold, or `Infinity` is brought to the nearest limit rather than used, with a line on stderr saying which and why. A value that is not a number, or is zero or negative, leaves the default in place without saying anything: there is nothing useful to tell someone who never set it.
+
+What it reaches, read off the SDK rather than assumed:
+
+- **SimpleFIN, Pluggy, Akahu and Enable Banking set their own limit** on the call that fetches transactions, so this setting does not shorten them. It is 60 seconds, except for SimpleFIN syncing several accounts at once, which is **300 seconds** and is what the default bank sync does. Those limits cover the whole reply, not just the start of it, which is why they are larger than this one.
+- **GoCardless sets none**, so its transaction download is governed by this setting. **Raise it if your bank is slow and a sync is being cut off.**
+- Everything else the server does, which is every ordinary read and write against your own Actual server.
+
+If you installed the `.mcpb` extension, the same setting is in its configuration as *Server reply timeout (ms)*.
+
+One case it does not cover, deliberately: a server that sends its headers and then stops sending the body. The deadline has already been met by then, so what ends that request is Node's own five-minute body timeout. Covering it would mean putting a deadline on the transfer itself, which is what cut off healthy downloads before this was fixed.
 
 </details>
 

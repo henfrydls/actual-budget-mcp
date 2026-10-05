@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 
 const ALL_TIME_START = '1900-01-01';
 const ALL_TIME_END = '9999-12-31';
@@ -102,7 +103,10 @@ export function registerDeleteCategory(server: McpServer): void {
         .describe("The category's exact name, echoed back as a safeguard."),
     },
     { title: 'Delete category', readOnlyHint: false, destructiveHint: true },
-    async (input) => {
+    async input =>
+      // With `transfer_to` this recategorises rows in bulk, which is a write
+      // to the transactions table (#111).
+      queueTransactionWrite(async () => {
       try {
         const { deleted, lines } = await deleteCategoryGuarded(input);
         return {
@@ -115,6 +119,7 @@ export function registerDeleteCategory(server: McpServer): void {
           isError: true,
         };
       }
-    },
+      },
+    ),
   );
 }
