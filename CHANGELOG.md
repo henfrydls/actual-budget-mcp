@@ -2,15 +2,15 @@
 
 ## 0.10.1
 
-A patch release. Four things that went wrong while the server was in use, and
+A patch release. Four things that went wrong while this server was in use, and
 one that is still open.
 
 ### Fixes
 
-- A server that accepted the connection and then stopped answering held every
-  write for five minutes. There is now a 60-second limit on how long the server
-  waits for a reply to *start*; the reply itself can take as long as it needs,
-  so a slow budget download is not cut off. Raise it with
+- An Actual server that accepted the connection and then stopped answering held
+  every write for five minutes. There is now a 60-second limit on how long this
+  server waits for your Actual server to *start* replying; the reply itself can
+  take as long as it needs, so a slow budget download is not cut off. Raise it with
   `ACTUAL_HTTP_TIMEOUT_MS`, or with *Server reply timeout (ms)* if you use the
   desktop extension. Worth knowing if your bank is slow: of the bank sync
   providers, GoCardless was the only one without a limit of its own, so it is
@@ -23,8 +23,12 @@ one that is still open.
   view can show. Every tool that changes transactions now takes its turn,
   including batches, bank syncs and deletes. One consequence to expect: while a
   bank sync runs, other writes wait for it. (#111)
-- In a budget whose currency has no decimal places, the note left by
-  `transfer_between_categories` was written in the wrong one. (#115)
+- `transfer_between_categories` leaves a note on the month saying what moved,
+  and it formatted the amount as though every currency had two decimal places.
+  In a currency that has none, the note read a hundred times too small: moving
+  10,000 was written down as 100.00. It uses the budget's own currency now.
+  This was the note's wording only; in those same currencies the amount you ask
+  for is still converted wrongly, which is the open bug listed below. (#115)
 - `category_trends` divided one month by the next even when the sign had
   changed, so a category that stopped spending and started receiving money was
   reported as a fall of 707.5%. It now says the direction changed, in both the
