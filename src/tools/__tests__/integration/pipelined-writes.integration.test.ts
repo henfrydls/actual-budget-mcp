@@ -349,6 +349,36 @@ describe.skipIf(skip)('tool calls that arrive together', () => {
     expect(written).toHaveLength(6);
   }, 60_000);
 
+  it('pulls before the single-row tool checks for duplicates', async () => {
+    // The batch tells `findPossibleDuplicates` the pull already happened,
+    // because it does one for the whole pass. Nothing stopped the single-row
+    // tool from being changed to say the same thing, and it has no pull of its
+    // own to fall back on: it would then decide whether a transaction is a
+    // duplicate from whatever its last sync happened to leave behind, which is
+    // #88 exactly.
+    //
+    // The default inside `findPossibleDuplicates` is covered by its own tests.
+    // What this covers is the caller.
+    const account = await emptyBudget('single-pull');
+    const create = handlerFor(registerCreateTransaction);
+    const sync = vi.mocked(api.sync);
+
+    sync.mockClear();
+    const result = await create({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-10',
+      payee: 'Colmado',
+    });
+    expect(result.content[0].text, result.content[0].text).toContain('Transaction created');
+
+    // One to pull before reading, one to push after writing. Bounded on both
+    // sides: a ceiling alone cannot see the pull disappear.
+    expect(sync.mock.calls.length, `synced ${sync.mock.calls.length} times for one row`).toBe(2);
+    const written = await api.getTransactions(account, '1900-01-01', '2999-12-31');
+    expect(written).toHaveLength(1);
+  }, 60_000);
+
   it('applies both calls, in the order they arrived', async () => {
     // The new row deliberately matches the one being deleted. That is what
     // makes the order observable: delete first and the create sees nothing to
