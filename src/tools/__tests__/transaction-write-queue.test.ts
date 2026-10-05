@@ -78,6 +78,99 @@ function usesQueue(file: string): boolean {
   return found;
 }
 
+/**
+ * The reads a write depends on, which have to be inside the queue with it.
+ *
+ * Asking whether the module calls the queue somewhere is not the claim. The
+ * claim is that nothing else can change the table between the moment a handler
+ * reads it and the moment it writes what it read. `create_transactions` called
+ * the queue, passed this test, and still had the gap: its queue opened around
+ * the write alone, so the duplicate checks ran outside it and an audit
+ * reproduced the original #111 failure against it — a delete removing the row
+ * the batch was checking, and the batch refusing every row it had been given.
+ *
+ * So the position is checked too. These are the calls that read the
+ * transactions table in order to decide what to write; a queue that starts
+ * after one of them is a queue around the wrong thing.
+ */
+const DECIDING_READS = ['findPossibleDuplicates', 'pullBeforeReading', 'runQuery'];
+
+/**
+ * Deciding reads that sit outside every `queueTransactionWrite` call.
+ *
+ * It follows calls, because position alone is wrong here. Most of these
+ * handlers queue the whole handler and do the work in an exported function
+ * below it, so the reads are textually far from the queue and inside it at run
+ * time. A first version of this check reported all three of those as offences,
+ * which is the failure mode where a guard that cries about correct code gets
+ * deleted.
+ *
+ * So: start from the body of each queued call, and whenever something inside
+ * it calls a function declared in the same module, that function's body counts
+ * as inside too, to a fixed point.
+ */
+function readsOutsideQueue(file: string): string[] {
+  const source = readFileSync(`src/tools/write/${file}`, 'utf8');
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true);
+
+  /** Module-level functions, by name, so a call can be followed into one. */
+  const functions = new Map<string, [number, number]>();
+  const collect = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+      functions.set(node.name.text, [node.body.getStart(parsed), node.body.end]);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const init = node.initializer;
+      if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
+        functions.set(node.name.text, [init.getStart(parsed), init.end]);
+      }
+    }
+    ts.forEachChild(node, collect);
+  };
+  ts.forEachChild(parsed, collect);
+
+  const calleeName = (node: ts.CallExpression): string | undefined => {
+    const callee = node.expression;
+    if (ts.isIdentifier(callee)) return callee.text;
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    return undefined;
+  };
+
+  const calls: Array<{ name: string; pos: number; line: number }> = [];
+  const inside: Array<[number, number]> = [];
+  const walk = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node);
+      const pos = node.getStart(parsed);
+      if (name === 'queueTransactionWrite') inside.push([pos, node.end]);
+      if (name) {
+        calls.push({ name, pos, line: parsed.getLineAndCharacterOfPosition(pos).line + 1 });
+      }
+    }
+    ts.forEachChild(node, walk);
+  };
+  ts.forEachChild(parsed, walk);
+
+  const covered = (pos: number) => inside.some(([a, b]) => pos > a && pos < b);
+
+  // Follow calls out of the queue's body and into this module's own functions.
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const call of calls) {
+      if (!covered(call.pos)) continue;
+      const body = functions.get(call.name);
+      if (body && !inside.some(([a, b]) => a === body[0] && b === body[1])) {
+        inside.push(body);
+        grew = true;
+      }
+    }
+  }
+
+  return calls
+    .filter((c) => DECIDING_READS.includes(c.name) && !covered(c.pos))
+    .map((c) => `${c.name}() at line ${c.line}`);
+}
+
 describe('the transaction-write queue covers what it claims', () => {
   const files = readdirSync('src/tools/write').filter((f) => f.endsWith('.ts'));
 
@@ -97,7 +190,44 @@ describe('the transaction-write queue covers what it claims', () => {
     it(`${file} goes through the queue`, () => {
       expect(usesQueue(file)).toBe(true);
     });
+
+    it(`${file} reads the table inside the queue, not before it`, () => {
+      expect(
+        readsOutsideQueue(file),
+        'a read that decides whether to write has to be inside the queue, ' +
+          'or another call can change the table between the two',
+      ).toEqual([]);
+    });
   }
+
+  it('would notice a read left outside, so the check is not vacuous', () => {
+    // The guard above passes when nobody does the thing it forbids, which is
+    // indistinguishable from a guard that cannot see it. This is the shape it
+    // is meant to catch, checked directly.
+    const offending = `
+      import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+      async function handler() {
+        const existing = await findPossibleDuplicates(a, b, c);
+        if (existing.length > 0) return 'already exists';
+        return await queueTransactionWrite(() => write());
+      }
+    `;
+    const parsed = ts.createSourceFile('x.ts', offending, ts.ScriptTarget.ES2022, true);
+    let queueStart = -1;
+    let readPos = -1;
+    const walk = (node: ts.Node) => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+        if (node.expression.text === 'queueTransactionWrite') queueStart = node.getStart(parsed);
+        if (node.expression.text === 'findPossibleDuplicates') readPos = node.getStart(parsed);
+      }
+      ts.forEachChild(node, walk);
+    };
+    ts.forEachChild(parsed, walk);
+    expect(readPos).toBeGreaterThan(-1);
+    expect(queueStart).toBeGreaterThan(-1);
+    // Outside: the read comes before the queue call even opens.
+    expect(readPos).toBeLessThan(queueStart);
+  });
 
   for (const [file, reason] of [...NOT_QUEUED].sort()) {
     it(`${file} stays out of the queue: ${reason}`, () => {

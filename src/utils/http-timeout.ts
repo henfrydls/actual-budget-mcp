@@ -43,9 +43,15 @@ export function resolveTimeoutMs(raw: string | undefined): number {
   const parsed = Number(raw);
   // A nonsense value is not a reason to leave requests with no deadline at
   // all, which is the state this exists to fix.
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_HTTP_TIMEOUT_MS;
+  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_HTTP_TIMEOUT_MS;
 
-  const rounded = Math.round(parsed);
+  // `Infinity` is not nonsense, it is a request: no limit. It used to fall
+  // into the line above and quietly become 60 seconds, so the one value
+  // someone would write to turn this off was the one that said nothing. It is
+  // simply a value above the maximum, and it is treated like any other, with
+  // the same warning: there is no way to turn the deadline off, and the
+  // largest a timer can hold is 24 days, which is the same thing in practice.
+  const rounded = parsed === Infinity ? Infinity : Math.round(parsed);
 
   // Both ends produce the same failure, and it is the worst one: every request
   // aborts at once and the server is reported as unreachable, so a healthy
@@ -57,13 +63,13 @@ export function resolveTimeoutMs(raw: string | undefined): number {
   // exactly what the README invites someone to do for a slow bank sync.
   if (rounded < MIN_HTTP_TIMEOUT_MS) {
     console.error(
-      `[actual-budget-mcp] ACTUAL_HTTP_TIMEOUT_MS=${raw} is below ${MIN_HTTP_TIMEOUT_MS}ms, which would abort every request. Using ${MIN_HTTP_TIMEOUT_MS}ms.`,
+      `[actual-budget-mcp] ACTUAL_HTTP_TIMEOUT_MS=${raw} is below ${MIN_HTTP_TIMEOUT_MS}ms. A server that takes longer than that to start replying would be reported as unreachable, which over anything but a local network is most of them. Using ${MIN_HTTP_TIMEOUT_MS}ms.`,
     );
     return MIN_HTTP_TIMEOUT_MS;
   }
   if (rounded > MAX_HTTP_TIMEOUT_MS) {
     console.error(
-      `[actual-budget-mcp] ACTUAL_HTTP_TIMEOUT_MS=${raw} is larger than a timer can hold, which would abort every request immediately. Using ${MAX_HTTP_TIMEOUT_MS}ms.`,
+      `[actual-budget-mcp] ACTUAL_HTTP_TIMEOUT_MS=${raw} is larger than a timer can hold, and a timer given one fires at once, so every request would abort immediately. Using ${MAX_HTTP_TIMEOUT_MS}ms, which is 24 days.`,
     );
     return MAX_HTTP_TIMEOUT_MS;
   }

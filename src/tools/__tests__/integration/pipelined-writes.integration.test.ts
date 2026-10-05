@@ -16,6 +16,8 @@ vi.mock('../../../connection.js', async () => {
 import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './actual-engine.js';
 import { registerCreateTransaction } from '../../write/create-transaction.js';
 import { registerDeleteTransaction } from '../../write/delete-transaction.js';
+import { registerCreateTransactions } from '../../write/create-transactions.js';
+import { queueTransactionWrite } from '../../../utils/transaction-writes.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
 
@@ -51,6 +53,15 @@ describe.skipIf(skip)('tool calls that arrive together', () => {
   afterAll(async () => {
     await shutdownTestEngine();
   });
+
+  /** No rows at all: these tests must not write before the call under test. */
+  async function emptyBudget(name: string) {
+    let account = '';
+    await createFreshBudget(async () => {
+      account = await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+    }, name);
+    return account;
+  }
 
   async function budgetWithOneRow(name: string) {
     let account = '';
@@ -98,6 +109,88 @@ describe.skipIf(skip)('tool calls that arrive together', () => {
     });
 
     expect(created.content[0].text).toContain('already exists');
+  }, 60_000);
+
+  // The batch tool had the gap the single-row tool never had. Its queue opened
+  // around the write alone, so the duplicate checks — which read the
+  // transactions table and decide whether the write happens at all — ran
+  // outside it. An audit reproduced all three of these against the engine.
+
+  it('does not refuse a batch over a row another call is deleting', async () => {
+    // Measured with the queue around the write alone: `Nothing was created.
+    // 1 of 1 rows could not be used`, naming a row the delete had removed
+    // before the batch got to write. Nothing was created at all.
+    await budgetWithOneRow('batch-race-delete');
+    const remove = handlerFor(registerDeleteTransaction);
+    const batch = handlerFor(registerCreateTransactions);
+
+    const [, created] = await Promise.all([
+      remove({ transaction_id: ROW_ID, confirm: true }),
+      batch({
+        transactions: [
+          { account: 'Checking', amount: -50, date: '2026-09-10', payee: 'Colmado' },
+        ],
+      }),
+    ]);
+
+    const text = created.content[0].text;
+    expect(text).not.toContain('could not be used');
+    expect(text).toContain('Created 1 transaction');
+  }, 60_000);
+
+  it('does not write the same movement twice when a batch races a single create', async () => {
+    // The other direction, and worse: measured with the old boundary, both
+    // calls reported success and the budget ended with two rows for one
+    // movement. Which of the two refuses is not the point and is not asserted;
+    // that only one row exists is.
+    const account = await emptyBudget('batch-race-create');
+    const create = handlerFor(registerCreateTransaction);
+    const batch = handlerFor(registerCreateTransactions);
+
+    const row = { account: 'Checking', amount: -50, date: '2026-09-10', payee: 'Colmado' };
+    const [single, bulk] = await Promise.all([
+      create({ ...row }),
+      batch({ transactions: [{ ...row }] }),
+    ]);
+
+    const rows = await api.getTransactions(account, '1900-01-01', '2999-12-31');
+    expect(
+      rows,
+      `single: ${single.content[0].text}\nbatch: ${bulk.content[0].text}`,
+    ).toHaveLength(1);
+  }, 60_000);
+
+  it('refuses a batch retried while the first one is still queued', async () => {
+    // The shape an MCP client creates on its own: a slow write holds the
+    // queue, the client's own request timeout fires, the agent retries, and
+    // the first call is still in the queue and will write. Measured with the
+    // old boundary: `Created 1 transaction.` twice and two rows, because the
+    // retry read the table before the first write had happened.
+    //
+    // The three seconds are the hold, not a timeout: what matters is that the
+    // retry is sent while the first is queued behind something.
+    const account = await emptyBudget('batch-retry');
+    const batch = handlerFor(registerCreateTransactions);
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const blocker = queueTransactionWrite(() => held);
+
+    const row = { account: 'Checking', amount: -50, date: '2026-09-10', payee: 'Colmado' };
+    const first = batch({ transactions: [{ ...row }] });
+    const retry = batch({ transactions: [{ ...row }] });
+
+    release();
+    await blocker;
+    const [a, b] = await Promise.all([first, retry]);
+
+    const rows = await api.getTransactions(account, '1900-01-01', '2999-12-31');
+    expect(
+      rows,
+      `first: ${a.content[0].text}\nretry: ${b.content[0].text}`,
+    ).toHaveLength(1);
   }, 60_000);
 
   it('applies both calls, in the order they arrived', async () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import http from 'node:http';
 import {
@@ -181,6 +182,33 @@ describe('resolveTimeoutMs', () => {
     expect(resolveTimeoutMs('9999999999')).toBe(MAX_HTTP_TIMEOUT_MS);
   });
 
+  it('treats Infinity as the request it is, and says so', () => {
+    // It used to fall in with the unparseable values and become 60 seconds in
+    // silence — the one value someone would write to turn the deadline off was
+    // the one that said nothing back. It is a value above the maximum and is
+    // handled like any other, warning included.
+    const warnings: string[] = [];
+    const original = console.error;
+    console.error = (msg: unknown) => void warnings.push(String(msg));
+    try {
+      expect(resolveTimeoutMs('Infinity')).toBe(MAX_HTTP_TIMEOUT_MS);
+    } finally {
+      console.error = original;
+    }
+    expect(warnings.join(' ')).toContain('Infinity');
+    // Still silent for a value that is simply not a number: there is nothing
+    // to tell someone who never set it.
+    const quiet: string[] = [];
+    console.error = (msg: unknown) => void quiet.push(String(msg));
+    try {
+      resolveTimeoutMs(undefined);
+      resolveTimeoutMs('soon');
+    } finally {
+      console.error = original;
+    }
+    expect(quiet).toEqual([]);
+  });
+
   it('refuses a value too small to let anything through', () => {
     // `0.4` rounded to 0 and aborted every request in 2 ms.
     expect(resolveTimeoutMs('0.4')).toBe(MIN_HTTP_TIMEOUT_MS);
@@ -201,5 +229,49 @@ describe('resolveTimeoutMs', () => {
         DEFAULT_HTTP_TIMEOUT_MS,
       );
     }
+  });
+
+  it('survives what the extension can put in the variable', () => {
+    // `manifest.json` maps this to `${user_config.http_timeout_ms}`, and the
+    // field is optional, so what arrives when nobody fills it in is not
+    // something this code decides. These are the forms that came out of the
+    // packaged extension and the host around it, including the placeholder
+    // arriving unsubstituted. Every one of them has to mean "use the default",
+    // because the alternative is a server that refuses to start over a field
+    // the person never touched.
+    for (const raw of ['   ', '${user_config.http_timeout_ms}', 'null', 'undefined']) {
+      expect(resolveTimeoutMs(raw), `for ${JSON.stringify(raw)}`).toBe(
+        DEFAULT_HTTP_TIMEOUT_MS,
+      );
+    }
+    // And a value the person did fill in is honoured, so the test above is not
+    // passing because everything falls back.
+    expect(resolveTimeoutMs('300000')).toBe(300_000);
+  });
+});
+
+describe('the packaged extension can reach the deadline (#99)', () => {
+  it('exposes the variable and keeps the documented default', async () => {
+    // Without this the extension's user has no way to raise the limit, and
+    // raising it is the only remedy when a bank is slower than the deadline:
+    // GoCardless downloads transactions through a call that carries no timeout
+    // of its own, so the global one governs it.
+    const manifest = JSON.parse(
+      await readFile(new URL('../../../manifest.json', import.meta.url), 'utf8'),
+    ) as {
+      server: { mcp_config: { env: Record<string, string> } };
+      user_config: Record<string, { type: string; default?: unknown; required?: boolean }>;
+    };
+
+    expect(manifest.server.mcp_config.env.ACTUAL_HTTP_TIMEOUT_MS).toBe(
+      '${user_config.http_timeout_ms}',
+    );
+    const field = manifest.user_config.http_timeout_ms;
+    expect(field).toBeDefined();
+    expect(field.type).toBe('number');
+    // Not required: someone who never opens the field must still get a server.
+    expect(field.required).toBe(false);
+    // One default, not two that drift apart.
+    expect(field.default).toBe(DEFAULT_HTTP_TIMEOUT_MS);
   });
 });

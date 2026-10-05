@@ -37,7 +37,8 @@
         "ACTUAL_SESSION_TOKEN": "${user_config.session_token}",
         "ACTUAL_BUDGET_ID": "${user_config.sync_id}",
         "ACTUAL_ENCRYPTION_PASSWORD": "${user_config.encryption_password}",
-        "ACTUAL_READ_ONLY": "${user_config.read_only}"
+        "ACTUAL_READ_ONLY": "${user_config.read_only}",
+        "ACTUAL_HTTP_TIMEOUT_MS": "${user_config.http_timeout_ms}"
       }
     }
   },
@@ -81,6 +82,13 @@
       "title": "Read-only mode",
       "description": "Expose only the reading and analysis tools. The write tools are not registered at all, so Claude never sees them.",
       "default": false,
+      "required": false
+    },
+    "http_timeout_ms": {
+      "type": "number",
+      "title": "Server reply timeout (ms)",
+      "description": "How long to wait for your Actual server to start replying before giving up. Raise it if your bank is slow: GoCardless transaction downloads have no limit of their own, so this one governs them. Leave it alone for 60000.",
+      "default": 60000,
       "required": false
     }
   },
