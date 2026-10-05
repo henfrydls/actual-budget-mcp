@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.10.1
+
+A patch release. Four things that went wrong while the server was in use, and
+one that is still open.
+
+### Fixes
+
+- A server that accepted the connection and then stopped answering held every
+  write for five minutes. There is now a 60-second limit on how long the server
+  waits for a reply to *start*; the reply itself can take as long as it needs,
+  so a slow budget download is not cut off. Raise it with
+  `ACTUAL_HTTP_TIMEOUT_MS`, or with *Server reply timeout (ms)* if you use the
+  desktop extension. Worth knowing if your bank is slow: of the bank sync
+  providers, GoCardless was the only one without a limit of its own, so it is
+  the one this setting governs. (#99)
+- Two tool calls arriving together could each act on a budget the other was
+  halfway through changing. A delete and a create sent at once refused the new
+  transaction as a duplicate of the row the delete had just removed; a batch
+  sent beside a single create wrote the same movement twice; and a batch could
+  write into an account that had just been deleted, leaving a row no account
+  view can show. Every tool that changes transactions now takes its turn,
+  including batches, bank syncs and deletes. One consequence to expect: while a
+  bank sync runs, other writes wait for it. (#111)
+- In a budget whose currency has no decimal places, the note left by
+  `transfer_between_categories` was written in the wrong one. (#115)
+- `category_trends` divided one month by the next even when the sign had
+  changed, so a category that stopped spending and started receiving money was
+  reported as a fall of 707.5%. It now says the direction changed, in both the
+  single-category and the top-categories view, and the average no longer mixes
+  reimbursements in with what was spent. (#133)
+
+### Known, and not fixed here
+
+- In a currency with no decimal places (JPY, KRW, IRR), amounts are out by a
+  factor of a hundred in both directions: asking to spend 100 records 10,000,
+  and a real 1,000 is reported as 10.00. Budgets in any other currency are
+  unaffected. (#141)
+
 ## 0.10.0
 
 Most of this release comes from using the server against a real budget and
