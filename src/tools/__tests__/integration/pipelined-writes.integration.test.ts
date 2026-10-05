@@ -17,6 +17,8 @@ import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './ac
 import { registerCreateTransaction } from '../../write/create-transaction.js';
 import { registerDeleteTransaction } from '../../write/delete-transaction.js';
 import { registerCreateTransactions } from '../../write/create-transactions.js';
+import { registerDeleteAccount } from '../../write/delete-account.js';
+import { registerDeleteCategory } from '../../write/delete-category.js';
 import { queueTransactionWrite } from '../../../utils/transaction-writes.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
@@ -191,6 +193,160 @@ describe.skipIf(skip)('tool calls that arrive together', () => {
       rows,
       `first: ${a.content[0].text}\nretry: ${b.content[0].text}`,
     ).toHaveLength(1);
+  }, 60_000);
+
+  // Resolving a name is a read of the budget like any other, and a delete
+  // running first invalidates what it found. The batch loaded accounts and
+  // categories before the queue, so it held ids that had stopped existing.
+
+  it('does not write a row into an account another call just deleted', async () => {
+    // Measured before the move: `Account "Vieja" deleted.` and `Created 1
+    // transaction.`, with the row landing as `account: null` — invisible in
+    // every account view, and reported as a success.
+    await createFreshBudget(async () => {
+      await api.createAccount({ name: 'Vieja', offbudget: false } as never, 0);
+    }, 'batch-account-vanishes');
+
+    const remove = handlerFor(registerDeleteAccount);
+    const batch = handlerFor(registerCreateTransactions);
+
+    const [, created] = await Promise.all([
+      remove({ account: 'Vieja', confirm: true, confirm_name: 'Vieja' }),
+      batch({
+        transactions: [
+          { account: 'Vieja', amount: -50, date: '2026-09-10', payee: 'Colmado' },
+        ],
+      }),
+    ]);
+
+    const text = created.content[0].text;
+    expect(text, text).not.toContain('Created 1 transaction');
+
+    // And no orphan was left behind: every row in the budget belongs to an
+    // account that exists.
+    const accounts = await api.getAccounts();
+    for (const account of accounts) {
+      const rows = await api.getTransactions(account.id, '1900-01-01', '2999-12-31');
+      expect(rows).toHaveLength(0);
+    }
+  }, 60_000);
+
+  it('does not resolve a category another call is deleting', async () => {
+    // With `transfer_to`, the row ended up in the other category and the reply
+    // said `Created 1 transaction.` without mentioning it. The single-row tool
+    // resolves inside its queue and refuses by name; this now matches it.
+    await createFreshBudget(async () => {
+      await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+      await api.createCategory({ name: 'Comida', group_id: group } as never);
+      await api.createCategory({ name: 'Otros', group_id: group } as never);
+    }, 'batch-category-vanishes');
+
+    const remove = handlerFor(registerDeleteCategory);
+    const batch = handlerFor(registerCreateTransactions);
+
+    const [removed, created] = await Promise.all([
+      // `confirm_name` as well as `confirm`: without it the delete is refused
+      // and the category never goes away, so the first version of this test
+      // was asserting about a race that had not happened.
+      remove({ category: 'Comida', transfer_to: 'Otros', confirm: true, confirm_name: 'Comida' }),
+      batch({
+        transactions: [
+          {
+            account: 'Checking',
+            amount: -50,
+            date: '2026-09-10',
+            payee: 'Colmado',
+            category: 'Comida',
+          },
+        ],
+      }),
+    ]);
+
+    const text = created.content[0].text;
+    // The delete has to have actually happened, or this proves nothing.
+    expect(removed.content[0].text, removed.content[0].text).not.toContain('Nothing was deleted');
+    // Either it refuses by name, or it says where the row went. What it must
+    // not do is report plain success while the category it names is gone.
+    if (text.includes('Created 1 transaction')) {
+      expect(text, text).toContain('Otros');
+    } else {
+      expect(text, text).toMatch(/Comida/);
+    }
+  }, 60_000);
+
+  it('writes a row with the same imported_id once, not twice', async () => {
+    // The `imported_id` check had no race test of its own: taking just that
+    // one read out of the queue was caught only by the structural guard, and a
+    // guard is not evidence about behaviour. This is the shape a bank sync
+    // retried by two callers produces.
+    const account = await emptyBudget('batch-imported-id');
+    const batch = handlerFor(registerCreateTransactions);
+
+    // The two rows differ in date and amount on purpose, so the account/date/
+    // amount duplicate heuristic cannot be what refuses the second one: the
+    // only thing they share is the bank's id. `allow_duplicate` is not used,
+    // because the `imported_id` check lives inside that same branch and
+    // passing it would switch off the very thing under test.
+    const first = batch({
+      transactions: [
+        {
+          account: 'Checking',
+          amount: -50,
+          date: '2026-09-10',
+          payee: 'Colmado',
+          imported_id: 'bank-ref-99',
+        },
+      ],
+    });
+    const second = batch({
+      transactions: [
+        {
+          account: 'Checking',
+          amount: -75,
+          date: '2026-09-11',
+          payee: 'Colmado',
+          imported_id: 'bank-ref-99',
+        },
+      ],
+    });
+    const [a, b] = await Promise.all([first, second]);
+
+    const rows = await api.getTransactions(account, '1900-01-01', '2999-12-31');
+    expect(
+      rows,
+      `first: ${a.content[0].text}\nsecond: ${b.content[0].text}`,
+    ).toHaveLength(1);
+  }, 60_000);
+
+  it('pulls once for the batch, not once for every row', async () => {
+    // Each pull is a full network round trip, and the batch holds the write
+    // queue while it runs. Per row, against a server that has stopped
+    // answering, that is rows x the deadline: measured at ten rows with a
+    // one-second deadline the queue was held twelve seconds, which is twelve
+    // minutes with the default. The cost has to be flat in the number of rows.
+    const account = await emptyBudget('batch-one-pull');
+    const batch = handlerFor(registerCreateTransactions);
+    const sync = vi.mocked(api.sync);
+
+    const rows = Array.from({ length: 6 }, (_, i) => ({
+      account: 'Checking',
+      amount: -(i + 1) * 100,
+      date: `2026-09-0${i + 1}`,
+      payee: `Colmado ${i}`,
+    }));
+
+    sync.mockClear();
+    const result = await batch({ transactions: rows });
+    expect(result.content[0].text, result.content[0].text).toContain('Created 6 transactions');
+
+    // Exactly two: one to pull before the checks read the table, one to push
+    // after the write. A ceiling alone was not enough — removing the pull
+    // altogether left this green, and that pull is what stops the duplicate
+    // check reading a table another client has already added to, which is #88.
+    expect(sync.mock.calls.length, `synced ${sync.mock.calls.length} times for 6 rows`).toBe(2);
+    const written = await api.getTransactions(account, '1900-01-01', '2999-12-31');
+    expect(written).toHaveLength(6);
   }, 60_000);
 
   it('applies both calls, in the order they arrived', async () => {

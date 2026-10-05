@@ -810,9 +810,15 @@ Writes are enabled by default. Read-only is opt-in.
 
 **`ACTUAL_HTTP_TIMEOUT_MS`** (optional, default 60000) - how long to wait for your Actual server to **start** replying. The reply itself is then free to take as long as it takes, so a slow budget download is not cut off. Without this, a server that accepts the connection and never answers holds every write for five minutes, which is Node's own limit.
 
-A value below 1000, above what a timer can hold, or `Infinity` is brought to the nearest limit rather than used, with a line on stderr saying which and why. Anything that is not a number at all leaves the default in place, silently, because there is nothing to tell someone who never set it.
+A value below 1000, above what a timer can hold, or `Infinity` is brought to the nearest limit rather than used, with a line on stderr saying which and why. A value that is not a number, or is zero or negative, leaves the default in place without saying anything: there is nothing useful to tell someone who never set it.
 
-What it reaches, measured rather than assumed. SimpleFIN, Pluggy and Akahu already carry a 60-second limit of their own inside the Actual SDK, and a request that brings its own is left alone, so this setting does not shorten them. GoCardless downloads transactions through a call with no limit of its own, so that one is governed by this setting: **raise it if your bank is slow and a sync is being cut off**. If you installed the `.mcpb` extension, the same setting is in its configuration as *Server reply timeout (ms)*.
+What it reaches, read off the SDK rather than assumed:
+
+- **SimpleFIN, Pluggy, Akahu and Enable Banking set their own limit** on the call that fetches transactions, so this setting does not shorten them. It is 60 seconds, except for SimpleFIN syncing several accounts at once, which is **300 seconds** and is what the default bank sync does. Those limits cover the whole reply, not just the start of it, which is why they are larger than this one.
+- **GoCardless sets none**, so its transaction download is governed by this setting. **Raise it if your bank is slow and a sync is being cut off.**
+- Everything else the server does, which is every ordinary read and write against your own Actual server.
+
+If you installed the `.mcpb` extension, the same setting is in its configuration as *Server reply timeout (ms)*.
 
 One case it does not cover, deliberately: a server that sends its headers and then stops sending the body. The deadline has already been met by then, so what ends that request is Node's own five-minute body timeout. Covering it would mean putting a deadline on the transfer itself, which is what cut off healthy downloads before this was fixed.
 

@@ -291,13 +291,26 @@ describe('the knob is wired to the variable, not just defined', () => {
       // Re-imported so the side effect runs again, now with the variable set.
       await import('../http-timeout.js');
       const started = Date.now();
-      await expect(fetch(server.url)).rejects.toThrow();
+      // Raced against a short limit of its own. Without it, the mutation that
+      // matters here — installing with the default instead of the variable —
+      // makes the request hang for the full 60 seconds and the test fails on
+      // vitest's timeout, which reports a slow test rather than a broken knob.
+      const outcome = await Promise.race([
+        fetch(server.url).then(
+          () => 'answered' as const,
+          () => 'rejected' as const,
+        ),
+        new Promise<'still waiting'>((resolve) =>
+          setTimeout(() => resolve('still waiting'), 6_000),
+        ),
+      ]);
       const elapsed = Date.now() - started;
 
       // Comfortably inside the 60-second default and nowhere near instant, so
       // neither "it ignored the variable" nor "it aborts everything" passes.
+      expect(outcome, `after ${elapsed}ms`).toBe('rejected');
       expect(elapsed, `aborted after ${elapsed}ms`).toBeGreaterThan(900);
-      expect(elapsed, `aborted after ${elapsed}ms`).toBeLessThan(8_000);
+      expect(elapsed, `aborted after ${elapsed}ms`).toBeLessThan(6_000);
     } finally {
       globalThis.fetch = original;
       vi.unstubAllEnvs();

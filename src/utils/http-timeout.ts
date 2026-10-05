@@ -21,11 +21,17 @@
  * wrapper installed before importing the SDK, a request to a hung server came
  * through it and carried the URL; the SDK's own `post()` already accepts a
  * timeout argument, and almost every caller leaves it at `null`. Not quite
- * every one: the SimpleFIN, Pluggy and Akahu `/accounts` calls pass 60
- * seconds, which is also the only reason this file's own default is that
- * number rather than one somebody liked. Those three bring their own signal
- * and are left alone here; what has no limit of its own is everything else,
- * including the GoCardless transaction download.
+ * every one: SimpleFIN, Pluggy, Akahu and Enable Banking pass 60 seconds on
+ * the call that fetches transactions, and SimpleFIN passes **300** when it is
+ * given several accounts at once, which is what the ordinary bank sync does
+ * (`Array.isArray(acctId) ? 3e5 : 6e4`). Those are the SDK's own numbers and
+ * the reason this file's default is 60 seconds rather than one somebody liked.
+ *
+ * They also cover the whole reply rather than its start, which is a different
+ * measurement from this one and why they are larger. A request that brings its
+ * own signal is left alone here, so none of them are shortened. What has no
+ * limit of its own is everything else, the GoCardless transaction download
+ * included.
  *
  * ## What it does not do
  *

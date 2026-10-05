@@ -57,6 +57,31 @@ const NOT_QUEUED = new Map([
   ['repair-sync.ts', 'rebuilds sync bookkeeping, not budget data'],
 ]);
 
+/**
+ * What this check cannot see, measured rather than guessed.
+ *
+ * It works on names and on syntactic scope, so an audit got all of these past
+ * it with the whole suite green:
+ *
+ *   the queue call inside `if (false)`        syntactically present, never run
+ *   a local function named `queueTransactionWrite`, or an import of that
+ *     name from somewhere else                the name is all it matches on
+ *   a helper called both inside the queue and outside it
+ *                                             following calls marks the body
+ *                                             as covered, so the call outside
+ *                                             stops being visible
+ *
+ * And one false positive, which fails the safe way: a handler passed as a
+ * variable rather than written inline at `server.tool` is not recognised as a
+ * handler, so the file is reported as unqueued.
+ *
+ * None of these are defended against, on purpose. Each needs more analysis
+ * than the thing is worth, and all of them are deliberate acts rather than the
+ * mistake this exists for, which is someone adding a write tool and not
+ * thinking about the queue at all. What covers the rest is the integration
+ * tests: the helper case was caught by one of those and by nothing here.
+ */
+
 /** The pieces of a module this check reasons about, parsed once. */
 interface Parsed {
   file: ts.SourceFile;
@@ -69,8 +94,8 @@ interface Parsed {
   handlers: Array<[number, number]>;
 }
 
-function parse(file: string): Parsed {
-  const source = readFileSync(`src/tools/write/${file}`, 'utf8');
+function parse(file: string, given?: string): Parsed {
+  const source = given ?? readFileSync(`src/tools/write/${file}`, 'utf8');
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true);
   const functions = new Map<string, [number, number]>();
   const calls: Parsed['calls'] = [];
@@ -137,8 +162,8 @@ function follow(p: Parsed, seed: Array<[number, number]>): (pos: number) => bool
 }
 
 /** True when the module calls `queueTransactionWrite` anywhere in it. */
-function usesQueue(file: string): boolean {
-  return parse(file).queued.length > 0;
+function usesQueue(file: string, source?: string): boolean {
+  return parse(file, source).queued.length > 0;
 }
 
 /**
@@ -152,8 +177,8 @@ function usesQueue(file: string): boolean {
  * their own and rest on this check alone, so the check has to be about the
  * handler and not about the file.
  */
-function handlerReachesQueue(file: string): boolean {
-  const p = parse(file);
+function handlerReachesQueue(file: string, source?: string): boolean {
+  const p = parse(file, source);
   if (p.handlers.length === 0 || p.queued.length === 0) return false;
   const reachable = follow(p, p.handlers);
   return p.queued.some(([start]) => reachable(start));
@@ -168,10 +193,21 @@ function handlerReachesQueue(file: string): boolean {
  * delete removing the row the batch was checking, and the batch refusing every
  * row it had been given.
  */
-const DECIDING_READS = ['findPossibleDuplicates', 'pullBeforeReading', 'runQuery'];
+const DECIDING_READS = [
+  'findPossibleDuplicates',
+  'pullBeforeReading',
+  'runQuery',
+  // Resolving a name is a read of the budget too, and the write depends on
+  // what it found. `create_transactions` loaded these before its queue, so a
+  // `delete_account` running first left it holding an id that had stopped
+  // existing: measured, the row went in with `account: null`, invisible in
+  // every account view, and the tool reported `Created 1 transaction.`
+  'getAccounts',
+  'getCategories',
+];
 
-function readsOutsideQueue(file: string): string[] {
-  const p = parse(file);
+function readsOutsideQueue(file: string, source?: string): string[] {
+  const p = parse(file, source);
   const inside = follow(p, p.queued);
   return p.calls
     .filter((c) => DECIDING_READS.includes(c.name) && !inside(c.pos))
@@ -215,33 +251,88 @@ describe('the transaction-write queue covers what it claims', () => {
     });
   }
 
-  it('would notice a read left outside, so the check is not vacuous', () => {
-    // The guard above passes when nobody does the thing it forbids, which is
-    // indistinguishable from a guard that cannot see it. This is the shape it
-    // is meant to catch, checked directly.
-    const offending = `
+  describe('the checks above can see an offence when there is one', () => {
+    // The first version of this re-implemented the walk over a fixture and
+    // asserted about its own result, so it never called the guard: making
+    // `readsOutsideQueue` return `[]` and `handlerReachesQueue` return `true`
+    // left all of it green. It passes the fixtures to the real functions now.
+    const good = `
       import { queueTransactionWrite } from '../../utils/transaction-writes.js';
-      async function handler() {
-        const existing = await findPossibleDuplicates(a, b, c);
-        if (existing.length > 0) return 'already exists';
-        return await queueTransactionWrite(() => write());
+      export function register(server) {
+        server.tool('t', 'd', {}, {}, async (input) =>
+          queueTransactionWrite(async () => {
+            const existing = await findPossibleDuplicates(a, b, c);
+            return existing.length > 0 ? 'already exists' : await write();
+          }),
+        );
       }
     `;
-    const parsed = ts.createSourceFile('x.ts', offending, ts.ScriptTarget.ES2022, true);
-    let queueStart = -1;
-    let readPos = -1;
-    const walk = (node: ts.Node) => {
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-        if (node.expression.text === 'queueTransactionWrite') queueStart = node.getStart(parsed);
-        if (node.expression.text === 'findPossibleDuplicates') readPos = node.getStart(parsed);
-      }
-      ts.forEachChild(node, walk);
-    };
-    ts.forEachChild(parsed, walk);
-    expect(readPos).toBeGreaterThan(-1);
-    expect(queueStart).toBeGreaterThan(-1);
-    // Outside: the read comes before the queue call even opens.
-    expect(readPos).toBeLessThan(queueStart);
+
+    it('passes the shape it is meant to allow', () => {
+      expect(readsOutsideQueue('fixture.ts', good)).toEqual([]);
+      expect(handlerReachesQueue('fixture.ts', good)).toBe(true);
+    });
+
+    it('names a read left outside the queue', () => {
+      const offending = `
+        import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+        export function register(server) {
+          server.tool('t', 'd', {}, {}, async (input) => {
+            const existing = await findPossibleDuplicates(a, b, c);
+            if (existing.length > 0) return 'already exists';
+            return await queueTransactionWrite(() => write());
+          });
+        }
+      `;
+      expect(readsOutsideQueue('fixture.ts', offending)).toEqual([
+        'findPossibleDuplicates() at line 5',
+      ]);
+    });
+
+    it('names resolution left outside the queue', () => {
+      // The shape `create_transactions` actually had: names resolved before
+      // the queue, so a delete running first invalidated them.
+      const offending = `
+        import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+        export function register(server) {
+          server.tool('t', 'd', {}, {}, async (input) => {
+            const accounts = await api.getAccounts();
+            return await queueTransactionWrite(() => write(accounts));
+          });
+        }
+      `;
+      expect(readsOutsideQueue('fixture.ts', offending)).toEqual(['getAccounts() at line 5']);
+    });
+
+    it('refuses a queue call the handler cannot reach', () => {
+      // The audit's mutation: the handler does the work unqueued and a dead
+      // call at module level keeps the name in the file.
+      const offending = `
+        import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+        void queueTransactionWrite(async () => undefined);
+        export function register(server) {
+          server.tool('t', 'd', {}, {}, async (input) => await write());
+        }
+      `;
+      // The module does mention it, which is exactly why the weaker check passed.
+      expect(usesQueue('fixture.ts', offending)).toBe(true);
+      expect(handlerReachesQueue('fixture.ts', offending)).toBe(false);
+    });
+
+    it('follows the queue through a function the handler calls', () => {
+      // Most of these tools are written this way, and a check that did not
+      // follow calls would report every one of them as an offence.
+      const indirect = `
+        import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+        export async function doIt() {
+          return await queueTransactionWrite(async () => await write());
+        }
+        export function register(server) {
+          server.tool('t', 'd', {}, {}, async (input) => await doIt());
+        }
+      `;
+      expect(handlerReachesQueue('fixture.ts', indirect)).toBe(true);
+    });
   });
 
   for (const [file, reason] of [...NOT_QUEUED].sort()) {

@@ -1,19 +1,19 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
-import * as api from "@actual-app/api";
-import { ensureConnection } from "../../connection.js";
-import { amountToCents, formatMoney } from "../../utils/money.js";
-import { resolveDate } from "../../utils/dates.js";
-import { resolveAccountIn, resolveCategoryIn } from "../../utils/resolvers.js";
-import { transactionsQuery } from "../../utils/transaction-query.js";
-import { newWriteMarker } from "../../utils/write-marker.js";
-import { updatePreservingChildAmount } from "../../utils/transactions.js";
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import * as api from '@actual-app/api';
+import { ensureConnection } from '../../connection.js';
+import { amountToCents, formatMoney } from '../../utils/money.js';
+import { resolveDate } from '../../utils/dates.js';
+import { resolveAccountIn, resolveCategoryIn } from '../../utils/resolvers.js';
+import { transactionsQuery } from '../../utils/transaction-query.js';
+import { newWriteMarker } from '../../utils/write-marker.js';
+import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import {
   findPossibleDuplicates,
   pullBeforeReading,
-} from "../../utils/duplicate-check.js";
-import { queueTransactionWrite } from "../../utils/transaction-writes.js";
-import { describeError } from "../../utils/errors.js";
+} from '../../utils/duplicate-check.js';
+import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { describeError } from '../../utils/errors.js';
 
 /**
  * Create many transactions in one call.
@@ -107,7 +107,7 @@ function describeRow(row: BatchInput, index: number): string {
   ];
   if (row.payee) bits.push(row.payee);
   if (row.date) bits.push(row.date);
-  return bits.join("  ");
+  return bits.join('  ');
 }
 
 export async function createTransactions(input: {
@@ -118,85 +118,94 @@ export async function createTransactions(input: {
 
   const rows = input.transactions;
   if (!Array.isArray(rows) || rows.length === 0) {
-    throw new Error("No transactions were given, so nothing was created.");
+    throw new Error('No transactions were given, so nothing was created.');
   }
 
-  // Loaded once for the whole batch rather than once per row: for 22 rows that
-  // is the difference between 2 reads and 44.
-  const accounts = await api.getAccounts();
-  const categories = await api.getCategories();
-
-  const problems: Problem[] = [];
-  const resolved: ResolvedRow[] = [];
-
-  for (const [index, row] of rows.entries()) {
-    try {
-      if (!row || typeof row !== "object") {
-        throw new Error("is not a transaction object");
-      }
-      if (!Number.isFinite(row.amount)) {
-        throw new Error(
-          `amount must be a number, got ${JSON.stringify(row.amount)}`,
-        );
-      }
-      const accountId = resolveAccountIn(accounts, row.account);
-      const accountName =
-        accounts.find((a) => a.id === accountId)?.name ?? row.account;
-
-      // A payee naming another account means a transfer, which needs both
-      // sides linked and `runTransfers` on the write. That is a per-call flag,
-      // not a per-row one, so a batch cannot carry a mix. Refused rather than
-      // written as an ordinary payee, which would leave one-legged movements.
-      if (row.payee) {
-        const lower = row.payee.toLowerCase();
-        const target = accounts.find(
-          (a) =>
-            !a.closed && (a.id === row.payee || a.name.toLowerCase() === lower),
-        );
-        if (target) {
-          throw new Error(
-            `payee "${row.payee}" names an account, which makes this a transfer. ` +
-              `Use create_transfer for it; a batch cannot mix transfers and ordinary rows.`,
-          );
-        }
-      }
-
-      const categoryId = row.category
-        ? resolveCategoryIn(categories, row.category)
-        : undefined;
-
-      resolved.push({
-        index,
-        accountId,
-        accountName,
-        date: resolveDate(row.date),
-        amountCents: amountToCents(row.amount),
-        categoryId,
-        payee: row.payee,
-        notes: row.notes,
-        cleared: row.cleared ?? false,
-        importedId: row.imported_id,
-        marker: newWriteMarker(),
-      });
-    } catch (error) {
-      problems.push({ index, reason: describeError(error) });
-    }
-  }
-
-  // The queue every transaction write shares (#111), opened here rather
-  // than around the write alone. The duplicate checks below read the
-  // transactions table and the write depends on what they found, so a
-  // queue that starts after them leaves exactly the window #111 is about:
-  // measured, a delete running against the same row while this batch was
-  // between its read and its write produced `Nothing was created. 1 of 1
-  // rows could not be used`, refusing a row that no longer existed. The
-  // single-row tool never had the gap because its check is inside.
+  // Everything that touches the budget is inside the queue: not only the
+  // write and the duplicate checks, but resolving the names too.
+  //
+  // Measured with calls sent together, and it is the same promise as the
+  // rest of #111. `delete_account` finishing first left the batch holding
+  // an id that no longer exists: it reported `Created 1 transaction.` and
+  // the row went into the budget with `account: null` — an orphan nobody
+  // can see, reported as a success. With `delete_category` and a
+  // `transfer_to`, the row quietly landed in the other category and the
+  // reply did not say so. The single-row tool resolves inside its own
+  // queue and answers `No category found matching "Comida"` instead,
+  // which is the behaviour this now matches.
   //
   // Called here rather than around the handler: `createTransactions` is
-  // exported and used directly, and wrapping both would have the outer call
-  // waiting on an inner one that cannot start.
+  // exported and used directly, and wrapping both would have the outer
+  // call waiting on an inner one that cannot start.
   return await queueTransactionWrite(async () => {
+    // Loaded once for the whole batch rather than once per row: for 22 rows that
+    // is the difference between 2 reads and 44.
+    const accounts = await api.getAccounts();
+    const categories = await api.getCategories();
+
+    const problems: Problem[] = [];
+    const resolved: ResolvedRow[] = [];
+
+    for (const [index, row] of rows.entries()) {
+      try {
+        if (!row || typeof row !== 'object') {
+          throw new Error('is not a transaction object');
+        }
+        if (!Number.isFinite(row.amount)) {
+          throw new Error(
+            `amount must be a number, got ${JSON.stringify(row.amount)}`,
+          );
+        }
+        const accountId = resolveAccountIn(accounts, row.account);
+        const accountName =
+          accounts.find((a) => a.id === accountId)?.name ?? row.account;
+
+        // A payee naming another account means a transfer, which needs both
+        // sides linked and `runTransfers` on the write. That is a per-call flag,
+        // not a per-row one, so a batch cannot carry a mix. Refused rather than
+        // written as an ordinary payee, which would leave one-legged movements.
+        if (row.payee) {
+          const lower = row.payee.toLowerCase();
+          const target = accounts.find(
+            (a) =>
+              !a.closed && (a.id === row.payee || a.name.toLowerCase() === lower),
+          );
+          if (target) {
+            throw new Error(
+              `payee "${row.payee}" names an account, which makes this a transfer. ` +
+                `Use create_transfer for it; a batch cannot mix transfers and ordinary rows.`,
+            );
+          }
+        }
+
+        const categoryId = row.category
+          ? resolveCategoryIn(categories, row.category)
+          : undefined;
+
+        resolved.push({
+          index,
+          accountId,
+          accountName,
+          date: resolveDate(row.date),
+          amountCents: amountToCents(row.amount),
+          categoryId,
+          payee: row.payee,
+          notes: row.notes,
+          cleared: row.cleared ?? false,
+          importedId: row.imported_id,
+          marker: newWriteMarker(),
+        });
+      } catch (error) {
+        problems.push({ index, reason: describeError(error) });
+      }
+    }
+
     if (!input.allow_duplicate) {
+      // Once for the batch, not once per row. Both checks below read the
+      // transactions table, and this is the one thing that makes their reads
+      // current; doing it per row costs a full round trip each time.
+      await pullBeforeReading('checking for transactions already recorded');
+
       // Two rows in the same call that are the same movement. The existing
       // duplicate check asks about rows already in the budget (#88), and two
       // identical rows arriving together is a case it has never seen, because
@@ -227,11 +236,10 @@ export async function createTransactions(input: {
         .map((r) => r.importedId)
         .filter((id): id is string => !!id);
       if (importedIds.length > 0) {
-        await pullBeforeReading("checking for transactions already imported");
         const existing = await api.runQuery(
-          transactionsQuery("all")
+          transactionsQuery('all')
             .filter({ imported_id: { $oneof: importedIds } })
-            .select(["imported_id"]),
+            .select(['imported_id']),
         );
         const found = new Set(
           (
@@ -253,6 +261,7 @@ export async function createTransactions(input: {
           row.accountId,
           row.date,
           row.amountCents,
+          { alreadyPulled: true },
         );
         if (existing.length > 0) {
           problems.push({
@@ -270,7 +279,7 @@ export async function createTransactions(input: {
       const failed = new Set(problems.map((p) => p.index));
       const lines = [
         `Nothing was created. ${problems.length} of ${rows.length} rows could not be used:`,
-        "",
+        '',
       ];
       for (const problem of problems) {
         lines.push(`  ${describeRow(rows[problem.index], problem.index)}`);
@@ -279,9 +288,9 @@ export async function createTransactions(input: {
       const untouched = rows.length - failed.size;
       if (untouched > 0) {
         lines.push(
-          "",
-          `The other ${untouched} row${untouched === 1 ? " was" : "s were"} fine and ${untouched === 1 ? "was" : "were"} not written either: the batch is all or nothing,`,
-          "so fixing the rows above and sending the same list again creates every one of them.",
+          '',
+          `The other ${untouched} row${untouched === 1 ? ' was' : 's were'} fine and ${untouched === 1 ? 'was' : 'were'} not written either: the batch is all or nothing,`,
+          'so fixing the rows above and sending the same list again creates every one of them.',
         );
       }
       return lines;
@@ -309,8 +318,8 @@ async function writeBatch(
   for (const accountId of byAccount.keys()) {
     const rows = await api.getTransactions(
       accountId,
-      "1900-01-01",
-      "2999-12-31",
+      '1900-01-01',
+      '2999-12-31',
     );
     before.set(accountId, rows.length);
   }
@@ -356,9 +365,9 @@ async function writeBatch(
   const wantCategory = written.filter((row) => row.categoryId);
   if (wantCategory.length > 0) {
     const result = await api.runQuery(
-      transactionsQuery("all")
+      transactionsQuery('all')
         .filter({ id: { $oneof: wantCategory.map((r) => r.marker) } })
-        .select(["id", "category", "amount", "is_parent"]),
+        .select(['id', 'category', 'amount', 'is_parent']),
     );
     const found =
       (result as { data?: Array<Record<string, unknown>> }).data ?? [];
@@ -388,8 +397,8 @@ async function writeBatch(
   for (const accountId of byAccount.keys()) {
     const rows = await api.getTransactions(
       accountId,
-      "1900-01-01",
-      "2999-12-31",
+      '1900-01-01',
+      '2999-12-31',
     );
     const name = byAccount.get(accountId)![0].accountName;
     counts.push(`  ${name}: ${before.get(accountId)} -> ${rows.length}`);
@@ -398,21 +407,21 @@ async function writeBatch(
   if (failure) {
     lines.push(
       `The batch stopped part way through, at ${failure.accountName}: ${failure.message}`,
-      "",
+      '',
       `${written.length} of ${total} rows were written before it stopped, and they are still there.`,
-      "A write that reports failure may have applied (#79), so these are the counts as they",
-      "stand now rather than what was intended:",
+      'A write that reports failure may have applied (#79), so these are the counts as they',
+      'stand now rather than what was intended:',
       ...counts,
-      "",
-      "Do not resend the whole list: the rows above would be created a second time.",
+      '',
+      'Do not resend the whole list: the rows above would be created a second time.',
     );
     return lines;
   }
 
   lines.push(
-    `Created ${written.length} transaction${written.length === 1 ? "" : "s"}.`,
-    "",
-    "Transactions on each account, before and after:",
+    `Created ${written.length} transaction${written.length === 1 ? '' : 's'}.`,
+    '',
+    'Transactions on each account, before and after:',
     ...counts,
   );
   return lines;
@@ -420,31 +429,31 @@ async function writeBatch(
 
 export function registerCreateTransactions(server: McpServer): void {
   server.tool(
-    "create_transactions",
-    "Create several transactions in one call. This is the way to record more than one: " +
-      "the rows are validated first and written together, so nothing is created unless every " +
-      "row is usable. Calling create_transaction many times in parallel is what this replaces.",
+    'create_transactions',
+    'Create several transactions in one call. This is the way to record more than one: ' +
+      'the rows are validated first and written together, so nothing is created unless every ' +
+      'row is usable. Calling create_transaction many times in parallel is what this replaces.',
     {
       transactions: z
         .array(
           z.object({
-            account: z.string().describe("Account name or ID"),
+            account: z.string().describe('Account name or ID'),
             amount: z
               .number()
               .describe(
-                "Human-readable amount, negative for expenses, positive for income",
+                'Human-readable amount, negative for expenses, positive for income',
               ),
             payee: z
               .string()
               .optional()
               .describe(
-                "Payee name. Naming an account is a transfer, which a batch refuses: use create_transfer.",
+                'Payee name. Naming an account is a transfer, which a batch refuses: use create_transfer.',
               ),
-            category: z.string().optional().describe("Category name or ID"),
+            category: z.string().optional().describe('Category name or ID'),
             date: z
               .string()
               .optional()
-              .describe("YYYY-MM-DD or natural language. Defaults to today."),
+              .describe('YYYY-MM-DD or natural language. Defaults to today.'),
             notes: z.string().optional(),
             cleared: z.boolean().optional(),
             imported_id: z
@@ -456,27 +465,27 @@ export function registerCreateTransactions(server: McpServer): void {
           }),
         )
         .describe(
-          "The transactions to create. All of them are written, or none.",
+          'The transactions to create. All of them are written, or none.',
         ),
       allow_duplicate: z
         .boolean()
         .optional()
         .describe(
-          "Create the rows even though some repeat each other or match transactions already in the budget. Without this, such a batch is reported and nothing is written.",
+          'Create the rows even though some repeat each other or match transactions already in the budget. Without this, such a batch is reported and nothing is written.',
         ),
     },
     {
-      title: "Create several transactions",
+      title: 'Create several transactions',
       readOnlyHint: false,
       idempotentHint: false,
     },
     async (input) => {
       try {
         const lines = await createTransactions(input as never);
-        return { content: [{ type: "text", text: lines.join("\n") }] };
+        return { content: [{ type: 'text', text: lines.join("\n") }] };
       } catch (error) {
         return {
-          content: [{ type: "text", text: `Error: ${describeError(error)}` }],
+          content: [{ type: 'text', text: `Error: ${describeError(error)}` }],
           isError: true,
         };
       }
