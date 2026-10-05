@@ -204,8 +204,11 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         //
         // The engine does not read the preference itself: measured, with
         // `defaultCurrencyCode: "JPY"` saved and nothing passed, the note still
-        // said `100.00`. And it is `load-prefs` that returns it, not
-        // `preferences/get`, which answers `{}` whatever it is asked.
+        // said `100.00`. The preference comes from the **synced** store,
+        // `preferences/get`; an earlier version of this comment said the
+        // opposite, from a measurement taken after writing to the metadata
+        // store instead of the one the app writes to. `budgetCurrencyCode`
+        // reads both, synced first, and says why.
         //
         // What this does not fix is the trailing `.00`. `integerToCurrency`
         // takes the decimal count for the divisor only; how many decimals are

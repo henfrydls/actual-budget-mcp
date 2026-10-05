@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import http from 'node:http';
@@ -31,6 +31,19 @@ async function hungServer() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+/** Whatever the call writes to stderr, so a dropped warning fails a test. */
+function capturing(fn: () => void): string[] {
+  const said: string[] = [];
+  const original = console.error;
+  console.error = (msg: unknown) => void said.push(String(msg));
+  try {
+    fn();
+  } finally {
+    console.error = original;
+  }
+  return said;
 }
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -178,8 +191,14 @@ describe('resolveTimeoutMs', () => {
     // `setTimeout`'s 32-bit delay, so Node warns and fires at once, and every
     // request aborts and is reported as the server being unreachable. Raising
     // the value is what the README invites for a slow bank sync.
-    expect(resolveTimeoutMs('3000000000')).toBe(MAX_HTTP_TIMEOUT_MS);
-    expect(resolveTimeoutMs('9999999999')).toBe(MAX_HTTP_TIMEOUT_MS);
+    const said = capturing(() => {
+      expect(resolveTimeoutMs('3000000000')).toBe(MAX_HTTP_TIMEOUT_MS);
+      expect(resolveTimeoutMs('9999999999')).toBe(MAX_HTTP_TIMEOUT_MS);
+    });
+    // Silently clamping is the half of this that helps nobody: the value was
+    // set on purpose and the person has to learn it did not take.
+    expect(said).toHaveLength(2);
+    expect(said[0]).toContain('3000000000');
   });
 
   it('treats Infinity as the request it is, and says so', () => {
@@ -211,9 +230,13 @@ describe('resolveTimeoutMs', () => {
 
   it('refuses a value too small to let anything through', () => {
     // `0.4` rounded to 0 and aborted every request in 2 ms.
-    expect(resolveTimeoutMs('0.4')).toBe(MIN_HTTP_TIMEOUT_MS);
-    expect(resolveTimeoutMs('1')).toBe(MIN_HTTP_TIMEOUT_MS);
-    expect(resolveTimeoutMs('999')).toBe(MIN_HTTP_TIMEOUT_MS);
+    const said = capturing(() => {
+      expect(resolveTimeoutMs('0.4')).toBe(MIN_HTTP_TIMEOUT_MS);
+      expect(resolveTimeoutMs('1')).toBe(MIN_HTTP_TIMEOUT_MS);
+      expect(resolveTimeoutMs('999')).toBe(MIN_HTTP_TIMEOUT_MS);
+    });
+    expect(said).toHaveLength(3);
+    expect(said[0]).toContain('0.4');
   });
 
   it('keeps a sensible value as it is', () => {
@@ -248,6 +271,39 @@ describe('resolveTimeoutMs', () => {
     // passing because everything falls back.
     expect(resolveTimeoutMs('300000')).toBe(300_000);
   });
+});
+
+describe('the knob is wired to the variable, not just defined', () => {
+  it('installs with what is in ACTUAL_HTTP_TIMEOUT_MS', async () => {
+    // The module installs itself on import, with
+    // `resolveTimeoutMs(process.env.ACTUAL_HTTP_TIMEOUT_MS)`. Changing that
+    // argument to `undefined` leaves every other test in this file green: the
+    // deadline still works, it just stops being configurable, which is the one
+    // thing the README and the extension's own field promise. So it is
+    // measured through the variable rather than asserted about the source.
+    const server = await hungServer();
+    cleanups.push(server.close);
+
+    const original = globalThis.fetch;
+    vi.resetModules();
+    vi.stubEnv('ACTUAL_HTTP_TIMEOUT_MS', '1200');
+    try {
+      // Re-imported so the side effect runs again, now with the variable set.
+      await import('../http-timeout.js');
+      const started = Date.now();
+      await expect(fetch(server.url)).rejects.toThrow();
+      const elapsed = Date.now() - started;
+
+      // Comfortably inside the 60-second default and nowhere near instant, so
+      // neither "it ignored the variable" nor "it aborts everything" passes.
+      expect(elapsed, `aborted after ${elapsed}ms`).toBeGreaterThan(900);
+      expect(elapsed, `aborted after ${elapsed}ms`).toBeLessThan(8_000);
+    } finally {
+      globalThis.fetch = original;
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+  }, 30_000);
 });
 
 describe('the packaged extension can reach the deadline (#99)', () => {

@@ -20,7 +20,12 @@
  * wrapper installed afterwards is never seen. Measured both ways: with the
  * wrapper installed before importing the SDK, a request to a hung server came
  * through it and carried the URL; the SDK's own `post()` already accepts a
- * timeout argument and every caller leaves it at `null`.
+ * timeout argument, and almost every caller leaves it at `null`. Not quite
+ * every one: the SimpleFIN, Pluggy and Akahu `/accounts` calls pass 60
+ * seconds, which is also the only reason this file's own default is that
+ * number rather than one somebody liked. Those three bring their own signal
+ * and are left alone here; what has no limit of its own is everything else,
+ * including the GoCardless transaction download.
  *
  * ## What it does not do
  *

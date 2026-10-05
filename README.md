@@ -497,11 +497,11 @@ local copy and the write is not blocked, so an offline session keeps working
 with a weaker check rather than no writes. It says so on stderr, with the
 reason, so a weakened check is never silent.
 
-A server that accepts the connection and then never answers is the slow case:
-the Actual library sets no timeout of its own, so the call falls back to Node's
-own five-minute header timeout before failing. This PR adds a second place
-where that can happen, now before the write rather than after it, so a hung
-server can cost twice as long as it used to. Tracked in #99.
+A server that accepts the connection and then never answers used to be the slow
+case: the Actual library sets no timeout of its own, so the call fell back to
+Node's own five-minute header timeout, and there are two places that can happen,
+before the write and after it. `ACTUAL_HTTP_TIMEOUT_MS`, below, now ends those
+waits at 60 seconds by default (#99).
 
 What it does not catch:
 

@@ -57,65 +57,34 @@ const NOT_QUEUED = new Map([
   ['repair-sync.ts', 'rebuilds sync bookkeeping, not budget data'],
 ]);
 
-/** True when the module calls `queueTransactionWrite` anywhere in it. */
-function usesQueue(file: string): boolean {
-  const source = readFileSync(`src/tools/write/${file}`, 'utf8');
-  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true);
-  let found = false;
-  // Parsed rather than searched: a mention in a comment is not a call, which
-  // is the mistake the scanner in #110 made.
-  const walk = (node: ts.Node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === 'queueTransactionWrite'
-    ) {
-      found = true;
-    }
-    ts.forEachChild(node, walk);
-  };
-  ts.forEachChild(parsed, walk);
-  return found;
+/** The pieces of a module this check reasons about, parsed once. */
+interface Parsed {
+  file: ts.SourceFile;
+  /** Module-level functions by name, so a call can be followed into one. */
+  functions: Map<string, [number, number]>;
+  calls: Array<{ name: string; pos: number; line: number }>;
+  /** `queueTransactionWrite(...)` call ranges. */
+  queued: Array<[number, number]>;
+  /** The last argument of each `server.tool(...)`: the handler itself. */
+  handlers: Array<[number, number]>;
 }
 
-/**
- * The reads a write depends on, which have to be inside the queue with it.
- *
- * Asking whether the module calls the queue somewhere is not the claim. The
- * claim is that nothing else can change the table between the moment a handler
- * reads it and the moment it writes what it read. `create_transactions` called
- * the queue, passed this test, and still had the gap: its queue opened around
- * the write alone, so the duplicate checks ran outside it and an audit
- * reproduced the original #111 failure against it — a delete removing the row
- * the batch was checking, and the batch refusing every row it had been given.
- *
- * So the position is checked too. These are the calls that read the
- * transactions table in order to decide what to write; a queue that starts
- * after one of them is a queue around the wrong thing.
- */
-const DECIDING_READS = ['findPossibleDuplicates', 'pullBeforeReading', 'runQuery'];
-
-/**
- * Deciding reads that sit outside every `queueTransactionWrite` call.
- *
- * It follows calls, because position alone is wrong here. Most of these
- * handlers queue the whole handler and do the work in an exported function
- * below it, so the reads are textually far from the queue and inside it at run
- * time. A first version of this check reported all three of those as offences,
- * which is the failure mode where a guard that cries about correct code gets
- * deleted.
- *
- * So: start from the body of each queued call, and whenever something inside
- * it calls a function declared in the same module, that function's body counts
- * as inside too, to a fixed point.
- */
-function readsOutsideQueue(file: string): string[] {
+function parse(file: string): Parsed {
   const source = readFileSync(`src/tools/write/${file}`, 'utf8');
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.ES2022, true);
-
-  /** Module-level functions, by name, so a call can be followed into one. */
   const functions = new Map<string, [number, number]>();
-  const collect = (node: ts.Node) => {
+  const calls: Parsed['calls'] = [];
+  const queued: Array<[number, number]> = [];
+  const handlers: Array<[number, number]> = [];
+
+  const name = (node: ts.CallExpression): string | undefined => {
+    const callee = node.expression;
+    if (ts.isIdentifier(callee)) return callee.text;
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    return undefined;
+  };
+
+  const walk = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && node.name && node.body) {
       functions.set(node.name.text, [node.body.getStart(parsed), node.body.end]);
     }
@@ -125,49 +94,87 @@ function readsOutsideQueue(file: string): string[] {
         functions.set(node.name.text, [init.getStart(parsed), init.end]);
       }
     }
-    ts.forEachChild(node, collect);
-  };
-  ts.forEachChild(parsed, collect);
-
-  const calleeName = (node: ts.CallExpression): string | undefined => {
-    const callee = node.expression;
-    if (ts.isIdentifier(callee)) return callee.text;
-    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
-    return undefined;
-  };
-
-  const calls: Array<{ name: string; pos: number; line: number }> = [];
-  const inside: Array<[number, number]> = [];
-  const walk = (node: ts.Node) => {
     if (ts.isCallExpression(node)) {
-      const name = calleeName(node);
+      const called = name(node);
       const pos = node.getStart(parsed);
-      if (name === 'queueTransactionWrite') inside.push([pos, node.end]);
-      if (name) {
-        calls.push({ name, pos, line: parsed.getLineAndCharacterOfPosition(pos).line + 1 });
+      if (called === 'queueTransactionWrite') queued.push([pos, node.end]);
+      if (called === 'tool' && node.arguments.length > 0) {
+        const handler = node.arguments[node.arguments.length - 1];
+        handlers.push([handler.getStart(parsed), handler.end]);
+      }
+      if (called) {
+        calls.push({ name: called, pos, line: parsed.getLineAndCharacterOfPosition(pos).line + 1 });
       }
     }
     ts.forEachChild(node, walk);
   };
   ts.forEachChild(parsed, walk);
+  return { file: parsed, functions, calls, queued, handlers };
+}
 
-  const covered = (pos: number) => inside.some(([a, b]) => pos > a && pos < b);
-
-  // Follow calls out of the queue's body and into this module's own functions.
+/**
+ * Grow a set of ranges by following calls into this module's own functions.
+ *
+ * Both checks below need it. Most of these handlers queue the handler and do
+ * the work in an exported function underneath, so what matters is reachable
+ * from a range rather than written inside it.
+ */
+function follow(p: Parsed, seed: Array<[number, number]>): (pos: number) => boolean {
+  const ranges = [...seed];
+  const covered = (pos: number) => ranges.some(([a, b]) => pos > a && pos < b);
   for (let grew = true; grew; ) {
     grew = false;
-    for (const call of calls) {
+    for (const call of p.calls) {
       if (!covered(call.pos)) continue;
-      const body = functions.get(call.name);
-      if (body && !inside.some(([a, b]) => a === body[0] && b === body[1])) {
-        inside.push(body);
+      const body = p.functions.get(call.name);
+      if (body && !ranges.some(([a, b]) => a === body[0] && b === body[1])) {
+        ranges.push(body);
         grew = true;
       }
     }
   }
+  return covered;
+}
 
-  return calls
-    .filter((c) => DECIDING_READS.includes(c.name) && !covered(c.pos))
+/** True when the module calls `queueTransactionWrite` anywhere in it. */
+function usesQueue(file: string): boolean {
+  return parse(file).queued.length > 0;
+}
+
+/**
+ * True when the tool's own handler reaches the queue.
+ *
+ * Asking whether the module calls the queue is not enough, and an audit showed
+ * it with a mutation worth remembering: take the queue off `update_transaction`
+ * and add `void queueTransactionWrite(async () => undefined)` at module level.
+ * The call is there, it even runs, it protects nothing, and the whole suite
+ * stayed green. Ten of the thirteen queued tools have no behavioural test of
+ * their own and rest on this check alone, so the check has to be about the
+ * handler and not about the file.
+ */
+function handlerReachesQueue(file: string): boolean {
+  const p = parse(file);
+  if (p.handlers.length === 0 || p.queued.length === 0) return false;
+  const reachable = follow(p, p.handlers);
+  return p.queued.some(([start]) => reachable(start));
+}
+
+/**
+ * The reads a write depends on, which have to be inside the queue with it.
+ *
+ * `create_transactions` called the queue, passed the check above, and still had
+ * the gap: its queue opened around the write alone, so the duplicate checks ran
+ * outside it and an audit reproduced the original #111 failure against it — a
+ * delete removing the row the batch was checking, and the batch refusing every
+ * row it had been given.
+ */
+const DECIDING_READS = ['findPossibleDuplicates', 'pullBeforeReading', 'runQuery'];
+
+function readsOutsideQueue(file: string): string[] {
+  const p = parse(file);
+  const inside = follow(p, p.queued);
+  return p.calls
+    .filter((c) => DECIDING_READS.includes(c.name) && !inside(c.pos))
     .map((c) => `${c.name}() at line ${c.line}`);
 }
 
@@ -189,6 +196,14 @@ describe('the transaction-write queue covers what it claims', () => {
   for (const file of [...QUEUED].sort()) {
     it(`${file} goes through the queue`, () => {
       expect(usesQueue(file)).toBe(true);
+    });
+
+    it(`${file} queues the handler, not just something in the file`, () => {
+      expect(
+        handlerReachesQueue(file),
+        'the queue has to be reachable from the tool handler: a call somewhere ' +
+          'else in the module protects nothing',
+      ).toBe(true);
     });
 
     it(`${file} reads the table inside the queue, not before it`, () => {

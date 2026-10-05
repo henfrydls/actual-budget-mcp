@@ -49,11 +49,22 @@ describe('the fetch deadline installs itself, and says what it does', () => {
   });
 });
 
-describe('the fetch deadline is installed before the SDK loads (#99)', () => {
-  const source = readFileSync('src/index.ts', 'utf8');
-  const file = ts.createSourceFile('index.ts', source, ts.ScriptTarget.ES2022, true);
+/**
+ * Both entry points, not just the server.
+ *
+ * `test:connection` was left out of the first version and an audit found it:
+ * it is the command someone runs *because* the server is not answering, so it
+ * was the one place still waiting five minutes to say so. Listing them here
+ * rather than checking one means a third entry point has to be added on
+ * purpose.
+ */
+const ENTRY_POINTS = ['src/index.ts', 'src/test-connection.ts'];
 
-  /** Every module specifier in `src/index.ts`, in the order they are evaluated. */
+describe.each(ENTRY_POINTS)('the fetch deadline is installed before the SDK loads in %s (#99)', (entry) => {
+  const source = readFileSync(entry, 'utf8');
+  const file = ts.createSourceFile(entry, source, ts.ScriptTarget.ES2022, true);
+
+  /** Every module specifier in the entry point, in the order they are evaluated. */
   const specifiers = file.statements
     .filter(ts.isImportDeclaration)
     .map((node) => (node.moduleSpecifier as ts.StringLiteral).text);
@@ -118,7 +129,7 @@ describe('the fetch deadline is installed before the SDK loads (#99)', () => {
       return importsOf(target).some((child) => reaches(target, child, seen));
     };
 
-    const reachesSdk = specifiers.filter((spec) => reaches('src/index.ts', spec));
+    const reachesSdk = specifiers.filter((spec) => reaches(entry, spec));
 
     // The test must have something to check, or the loop below is vacuous.
     expect(reachesSdk.length, 'no import reaches the SDK at all').toBeGreaterThan(0);

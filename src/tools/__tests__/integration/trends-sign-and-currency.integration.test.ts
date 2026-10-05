@@ -235,6 +235,97 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
     expect(rankedAvg).toBe(singleAvg);
   }, 60_000);
 
+  it('calls a month with nothing in it a fall, not a change of direction', async () => {
+    // `now !== 0` in the single-category mode. Without it, a month that simply
+    // had no activity reads as a change of direction, because zero is not
+    // negative: a category that spent 1,200.00 and then nothing would be
+    // reported as `now spending`, which it had been doing all along. The
+    // honest answer is that spending fell to nothing.
+    let category = '';
+    await createFreshBudget(async () => {
+      const account = await api.createAccount(
+        { name: 'Checking', offbudget: false } as never,
+        0,
+      );
+      const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+      category = await api.createCategory({ name: 'Luz', group_id: group } as never);
+      await api.addTransactions(account, [{ date: '2026-07-10', amount: -120000, category }] as never);
+    }, 'trend-quiet-month');
+
+    const result = await handlerFor(registerCategoryTrends)({
+      category: 'Luz',
+      months: 2,
+      month: '2026-08',
+    });
+    const text = result.content[0].text;
+    const august = text.split('\n').find((l) => l.startsWith('2026-08')) ?? '';
+
+    expect(august).not.toBe('');
+    expect(august).not.toContain('now spending');
+    expect(august).not.toContain('now receiving');
+    expect(august).toContain('-100.0%');
+  }, 60_000);
+
+  it('says nothing rather than a percentage of nothing in the ranking', async () => {
+    // `previous === 0` in the top-categories mode. A ratio against a month with
+    // no activity is a division by zero: printing it gives `Infinity%` or
+    // `NaN%`, which is how this family of bugs looked in #128 and #133.
+    let category = '';
+    await createFreshBudget(async () => {
+      const account = await api.createAccount(
+        { name: 'Checking', offbudget: false } as never,
+        0,
+      );
+      const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+      category = await api.createCategory({ name: 'Luz', group_id: group } as never);
+      // Nothing in July, spending in August: the ranking month has a figure
+      // and the month it would compare against does not.
+      await api.addTransactions(account, [{ date: '2026-08-10', amount: -95000, category }] as never);
+    }, 'trend-no-previous');
+
+    const result = await handlerFor(registerCategoryTrends)({ months: 2, month: '2026-08' });
+    const line = result.content[0].text.split('\n').find((l) => l.startsWith('Luz')) ?? '';
+
+    expect(line).not.toBe('');
+    expect(line).toContain('Change: ---');
+    expect(line).not.toMatch(/Infinity|NaN/);
+  }, 60_000);
+
+  it('does not call an empty current month a change of direction either', async () => {
+    // `latest !== 0` in the top-categories mode, which an audit called dead
+    // code. It is not, and only one shape reaches it: with no anchor the
+    // ranking month is the *previous* month, so the most recent figure is the
+    // current month, which can be empty while the category still ranks. The
+    // months are computed rather than written down, because which ones they
+    // are changes every month.
+    const now = new Date();
+    const month = (back: number) => {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    };
+    let category = '';
+    await createFreshBudget(async () => {
+      const account = await api.createAccount(
+        { name: 'Checking', offbudget: false } as never,
+        0,
+      );
+      const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+      category = await api.createCategory({ name: 'Luz', group_id: group } as never);
+      // Last month only: it ranks on that, and this month is empty.
+      await api.addTransactions(account, [
+        { date: `${month(1)}-10`, amount: -95000, category },
+      ] as never);
+    }, 'trend-empty-current');
+
+    const result = await handlerFor(registerCategoryTrends)({ months: 2 });
+    const line = result.content[0].text.split('\n').find((l) => l.startsWith('Luz')) ?? '';
+
+    expect(line, result.content[0].text).not.toBe('');
+    expect(line).not.toContain('now spending');
+    expect(line).not.toContain('now receiving');
+    expect(line).toContain('-100.0%');
+  }, 60_000);
+
   it("writes the month note in the budget's own currency (#115)", async () => {
     // `getCurrency` falls back to `{code: "", decimalPlaces: 2}`, and that
     // decimal count is the divisor the note is formatted with. On a currency

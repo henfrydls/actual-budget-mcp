@@ -1,15 +1,23 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { z } from 'zod';
-import * as api from '@actual-app/api';
-import { ensureConnection } from '../../connection.js';
-import { formatMoney, centsToAmount } from '../../utils/money.js';
-import { resolveMonth, getMonthRange } from '../../utils/dates.js';
-import { resolveCategoryId } from '../../utils/resolvers.js';
-import { sectionHeader, formatTable, formatPercent } from '../../utils/formatters.js';
-import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
-import { describeError } from '../../utils/errors.js';
-import { isIncome } from '../../utils/income.js';
-import { readWindow, budgetMonthOrMissing } from '../../utils/budget-month.js';
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import * as api from "@actual-app/api";
+import { ensureConnection } from "../../connection.js";
+import { formatMoney, centsToAmount } from "../../utils/money.js";
+import { resolveMonth, getMonthRange } from "../../utils/dates.js";
+import { resolveCategoryId } from "../../utils/resolvers.js";
+import {
+  sectionHeader,
+  formatTable,
+  formatPercent,
+} from "../../utils/formatters.js";
+import type {
+  BudgetMonth,
+  BudgetMonthGroup,
+  BudgetMonthCategory,
+} from "../../types.js";
+import { describeError } from "../../utils/errors.js";
+import { isIncome } from "../../utils/income.js";
+import { readWindow, budgetMonthOrMissing } from "../../utils/budget-month.js";
 
 /**
  * Spending across a window of months, ending where the caller says.
@@ -28,19 +36,21 @@ import { readWindow, budgetMonthOrMissing } from '../../utils/budget-month.js';
  */
 export function registerCategoryTrends(server: McpServer): void {
   server.tool(
-    'category_trends',
-    'Show spending trends for a category across a window of months, ending in the month you name or this month. Identifies increasing/decreasing patterns.',
+    "category_trends",
+    "Show spending trends for a category across a window of months, ending in the month you name or this month. Identifies increasing/decreasing patterns.",
     {
       category: z
         .string()
         .optional()
-        .describe('Category name or ID. If omitted, shows trends for top spending categories.'),
+        .describe(
+          "Category name or ID. If omitted, shows trends for top spending categories.",
+        ),
       months: z
         .number()
         .optional()
         .default(6)
         .describe(
-          'How many months the window covers. Defaults to 6, which is a default and not a limit: ask for 24 or 36 if that is what you want.',
+          "How many months the window covers. Defaults to 6, which is a default and not a limit: ask for 24 or 36 if that is what you want.",
         ),
       month: z
         .string()
@@ -49,7 +59,7 @@ export function registerCategoryTrends(server: McpServer): void {
           'The month the window ends in (YYYY-MM or natural language). Defaults to this month. Use it to look at a past period: month "2026-06" with months 3 reads April, May and June.',
         ),
     },
-    { title: 'Category spending trends', readOnlyHint: true },
+    { title: "Category spending trends", readOnlyHint: true },
     async ({ category, months: monthCount, month: monthInput }) => {
       try {
         await ensureConnection();
@@ -70,7 +80,7 @@ export function registerCategoryTrends(server: McpServer): void {
       } catch (error) {
         const message = describeError(error);
         return {
-          content: [{ type: 'text', text: `Error: ${message}` }],
+          content: [{ type: "text", text: `Error: ${message}` }],
           isError: true,
         };
       }
@@ -92,10 +102,10 @@ async function singleCategoryTrend(
     sectionHeader(
       `Spending Trends: ${catName} (${monthCount} months, ${monthRange[monthRange.length - 1]} to ${monthRange[0]})`,
     ),
-    '',
+    "",
   ];
 
-  const headers = ['Month', 'Spent', 'Change'];
+  const headers = ["Month", "Spent", "Change"];
   const rows: string[][] = [];
   const spentValues: number[] = [];
 
@@ -125,7 +135,7 @@ async function singleCategoryTrend(
   }
 
   for (let i = 0; i < months.length; i++) {
-    let change = '---';
+    let change = "---";
     const now = spentValues[i];
     const before = spentValues[i + 1];
     if (i < months.length - 1 && before !== 0) {
@@ -136,24 +146,24 @@ async function singleCategoryTrend(
       // started receiving. Same family as the percentage over a negative
       // budget in #128: the arithmetic answers a question nobody asked.
       if (now !== 0 && now < 0 !== before < 0) {
-        change = now > 0 ? 'now receiving' : 'now spending';
+        change = now > 0 ? "now receiving" : "now spending";
       } else {
         const pctChange = ((now - before) / before) * 100;
-        change = `${pctChange >= 0 ? '+' : ''}${formatPercent(pctChange)}`;
+        change = `${pctChange >= 0 ? "+" : ""}${formatPercent(pctChange)}`;
       }
     }
     if (i === 0 && months[0] === resolveMonth()) {
-      change += ' (in progress)';
+      change += " (in progress)";
     }
 
     rows.push([months[i], formatMoney(spentValues[i]), change]);
   }
 
-  lines.push(formatTable(headers, rows, ['left', 'right', 'right']));
+  lines.push(formatTable(headers, rows, ["left", "right", "right"]));
   if (missing.length > 0) {
     lines.push(
-      '',
-      `${missing.length} month${missing.length === 1 ? '' : 's'} in that window ${missing.length === 1 ? 'is' : 'are'} before this budget starts and ${missing.length === 1 ? 'was' : 'were'} left out: ${missing.join(', ')}.`,
+      "",
+      `${missing.length} month${missing.length === 1 ? "" : "s"} in that window ${missing.length === 1 ? "is" : "are"} before this budget starts and ${missing.length === 1 ? "was" : "were"} left out: ${missing.join(", ")}.`,
     );
   }
 
@@ -165,7 +175,7 @@ async function singleCategoryTrend(
     const avg = Math.round(
       validValues.reduce((sum, v) => sum + v, 0) / validValues.length,
     );
-    lines.push('');
+    lines.push("");
     // Not `-avg`. That was right while `spentValues` held magnitudes, and
     // became a sign inversion the moment they started carrying the real
     // figure: a category that spent 400.00 a month reported an average of
@@ -187,15 +197,20 @@ async function singleCategoryTrend(
       if (changes.length > 0) {
         const avgChange =
           changes.reduce((sum, c) => sum + c, 0) / changes.length;
-        const direction = avgChange > 2 ? 'Increasing' : avgChange < -2 ? 'Decreasing' : 'Stable';
+        const direction =
+          avgChange > 2
+            ? "Increasing"
+            : avgChange < -2
+              ? "Decreasing"
+              : "Stable";
         lines.push(
-          `Trend: ${direction} (${avgChange >= 0 ? '+' : ''}${formatPercent(avgChange)} avg monthly change)`,
+          `Trend: ${direction} (${avgChange >= 0 ? "+" : ""}${formatPercent(avgChange)} avg monthly change)`,
         );
       }
     }
   }
 
-  return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 }
 
 async function topCategoryTrends(
@@ -213,13 +228,14 @@ async function topCategoryTrends(
   // With an anchor the caller named the month they care about, and it is
   // already complete if it is in the past. Ranking by the month before the one
   // they asked for would answer a question nobody asked.
-  const refMonth = anchored || monthRange.length === 1 ? monthRange[0] : monthRange[1];
+  const refMonth =
+    anchored || monthRange.length === 1 ? monthRange[0] : monthRange[1];
   const budget = await budgetMonthOrMissing(refMonth);
   if (!budget) {
     return {
       content: [
         {
-          type: 'text' as const,
+          type: "text" as const,
           text: `${refMonth} is before this budget starts, so there is nothing to rank by. Pick a month inside the budget with the month argument.`,
         },
       ],
@@ -239,7 +255,11 @@ async function topCategoryTrends(
       // what came in is the same mistake as giving it a share of spending
       // (#128, #131).
       if (cat.spent < 0) {
-        catSpending.push({ id: cat.id, name: cat.name, spent: Math.abs(cat.spent) });
+        catSpending.push({
+          id: cat.id,
+          name: cat.name,
+          spent: Math.abs(cat.spent),
+        });
       }
     }
   }
@@ -251,7 +271,7 @@ async function topCategoryTrends(
     sectionHeader(
       `Top Category Trends (${monthCount} months to ${monthRange[0]}, ranked by ${refMonth})`,
     ),
-    '',
+    "",
   ];
 
   // A heading over nothing reads like a failure. It is not: the ranking month
@@ -260,9 +280,9 @@ async function topCategoryTrends(
   // the reader deciding whether the tool broke.
   if (top.length === 0) {
     lines.push(
-      `Nothing was spent in ${refMonth}, so there is nothing to rank. The window still covers ${monthCount} month${monthCount === 1 ? '' : 's'} to ${monthRange[0]}; name a category to see it, or anchor on a month with spending in it.`,
+      `Nothing was spent in ${refMonth}, so there is nothing to rank. The window still covers ${monthCount} month${monthCount === 1 ? "" : "s"} to ${monthRange[0]}; name a category to see it, or anchor on a month with spending in it.`,
     );
-    return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
   }
 
   for (const cat of top) {
@@ -298,7 +318,9 @@ async function topCategoryTrends(
     // The guard is there because that is an argument, not a check.
     const spendingMonths = values.filter((v) => v < 0);
     const avg = spendingMonths.length
-      ? Math.round(spendingMonths.reduce((sum, v) => sum + v, 0) / spendingMonths.length)
+      ? Math.round(
+          spendingMonths.reduce((sum, v) => sum + v, 0) / spendingMonths.length,
+        )
       : 0;
     const latest = values[0];
     const previous = values[1] ?? 0;
@@ -307,12 +329,20 @@ async function topCategoryTrends(
     // the single-category mode (#133).
     let change: string;
     if (previous === 0) {
-      change = '---';
+      change = "---";
+      // `latest !== 0` is not dead code, though it takes one shape to reach:
+      // with no anchor the ranking month is the month *before* the window's
+      // last, so the most recent figure is the current month and can be empty
+      // while the category still ranks on the one before it. Zero is not
+      // negative, so without this a quiet month would be announced as a change
+      // of direction instead of a fall to nothing. Covered by a test that
+      // computes the months rather than naming them, since which ones they are
+      // changes every month.
     } else if (latest !== 0 && latest < 0 !== previous < 0) {
-      change = latest > 0 ? 'now receiving' : 'now spending';
+      change = latest > 0 ? "now receiving" : "now spending";
     } else {
       const pct = ((latest - previous) / previous) * 100;
-      change = `${pct >= 0 ? '+' : ''}${formatPercent(pct)}`;
+      change = `${pct >= 0 ? "+" : ""}${formatPercent(pct)}`;
     }
 
     lines.push(
@@ -320,5 +350,5 @@ async function topCategoryTrends(
     );
   }
 
-  return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+  return { content: [{ type: "text" as const, text: lines.join("\n") }] };
 }

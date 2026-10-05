@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
 import 'dotenv/config';
+// Before anything that imports `@actual-app/api`, for the reason given in
+// `src/index.ts`. This entry point needs it most: it is the command someone
+// runs *because* the server is not answering, and without the deadline it is
+// the one that waits five minutes to say so.
+import './utils/http-timeout.js';
 import { effectiveDataDir, ensureDataDirExists } from './utils/data-dir-lock.js';
 import * as api from '@actual-app/api';
 import { formatMoney } from './utils/money.js';
