@@ -90,7 +90,7 @@ jobs:
           cp "$RUNNER_TEMP/actual-budget-mcp.mcpb" "$RUNNER_TEMP/broken.mcpb"
           zip -q -d "$RUNNER_TEMP/broken.mcpb" \
             "node_modules/better-sqlite3/prebuilds/darwin-*.node"
-          if ./scripts/verify-mcpb.sh "$RUNNER_TEMP/broken.mcpb"; then
+          if bash ./scripts/verify-mcpb.sh "$RUNNER_TEMP/broken.mcpb"; then
             echo "::error::verify-mcpb.sh accepted a bundle with no darwin binary"
             exit 1
           fi

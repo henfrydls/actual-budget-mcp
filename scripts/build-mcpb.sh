@@ -160,6 +160,9 @@ npx --yes @anthropic-ai/mcpb@2.1.2 pack "$STAGE" "$OUT"
 # check and before the pack produced a bundle with none in it and exit 0. What
 # a user installs is the zip, so the zip is what gets inspected -- by its own
 # script, so CI can run it against a bundle broken on purpose.
-"$(dirname "${BASH_SOURCE[0]}")/verify-mcpb.sh" "$OUT"
+# Invoked through `bash` rather than directly: the execute bit is a property
+# of the checkout, not of the repository as every clone sees it, and CI caught
+# this the hard way with "Permission denied" after the bundle had been built.
+bash "$(dirname "${BASH_SOURCE[0]}")/verify-mcpb.sh" "$OUT"
 
 echo "built $OUT"
