@@ -77,6 +77,25 @@ jobs:
         run: ./scripts/build-mcpb.sh "$RUNNER_TEMP/actual-budget-mcp.mcpb"
       - name: Validate the packed bundle
         run: npx --yes @anthropic-ai/mcpb@2.1.2 info "$RUNNER_TEMP/actual-budget-mcp.mcpb"
+
+      # The build runs this check itself, and a check that only ever sees a
+      # good bundle cannot be shown to work: a review slipped three mutations
+      # past the earlier version, including deleting the binaries after the
+      # check and before the pack. So it is run against a bundle broken on
+      # purpose, and must refuse it. A real platform is removed rather than a
+      # fictional one declared, because `mcpb pack` rejects unknown platforms
+      # by schema and would fail for the wrong reason.
+      - name: The bundle check can fail
+        run: |
+          cp "$RUNNER_TEMP/actual-budget-mcp.mcpb" "$RUNNER_TEMP/broken.mcpb"
+          zip -q -d "$RUNNER_TEMP/broken.mcpb" \
+            "node_modules/better-sqlite3/prebuilds/darwin-*.node"
+          if ./scripts/verify-mcpb.sh "$RUNNER_TEMP/broken.mcpb"; then
+            echo "::error::verify-mcpb.sh accepted a bundle with no darwin binary"
+            exit 1
+          fi
+          echo "the check refused it, as it should"
+
       # The bundle now carries its own server, so an artifact built here does
       # run this commit. That was not true while it launched a pinned release
       # from npm, and the name said so; the warning can go with the pin.

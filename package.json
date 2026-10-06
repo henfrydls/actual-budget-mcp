@@ -42,7 +42,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.14.0"
   },
   "dependencies": {
     "@actual-app/api": "^26.10.0",

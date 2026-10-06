@@ -14,6 +14,20 @@ const pkg = read('package.json') as { engines: { node: string } };
 const floor = (range: string) => Number(range.replace(/[^0-9.]/g, '').split('.')[0]);
 
 /**
+ * Major and minor, because the minor is now load-bearing.
+ *
+ * better-sqlite3 13 needs N-API 10, which arrives in 22.14 and not before: on
+ * 22.13 the binary segfaults with no message at all (measured, exit 139). A
+ * check that only read the major would have called 22.0 acceptable.
+ */
+const floorParts = (range: string): [number, number] => {
+  const [major, minor] = range.replace(/[^0-9.]/g, '').split('.');
+  return [Number(major), Number(minor ?? 0)];
+};
+const atLeast = (a: [number, number], b: [number, number]) =>
+  a[0] > b[0] || (a[0] === b[0] && a[1] >= b[1]);
+
+/**
  * The bundle can only serve a Node whose ABI it carries a SQLite binary for.
  * better-sqlite3 publishes prebuilds for ABI 127, 137, 141 and 147, which is
  * Node 22, 24, 25 and 26. Node 20 and 23 have none, and a bundle cannot compile
@@ -24,7 +38,9 @@ const floor = (range: string) => Number(range.replace(/[^0-9.]/g, '').split('.')
  */
 describe('what the extension says it runs on', () => {
   it('claims no Node older than the oldest SQLite binary it ships', () => {
-    expect(manifest.compatibility.runtimes.node).toBe('>=22.0.0');
+    // 22.14, not 22. The binaries are N-API 10, which 22.13 does not have, and
+    // what happens there is a segfault rather than a refusal.
+    expect(manifest.compatibility.runtimes.node).toBe('>=22.14.0');
   });
 });
 
@@ -42,11 +58,11 @@ describe('the two floors we publish', () => {
     );
   });
 
-  it('keeps the package off versions with no SQLite prebuild', () => {
-    // 20 (ABI 115) and 23 (131) have none. Installing there compiles from
-    // source and needs a C++ toolchain, which is not a fair thing to require
-    // of someone adding a budgeting tool to their chat client.
-    expect(floor(pkg.engines.node)).toBeGreaterThanOrEqual(22);
+  it('keeps the package off versions the SQLite binary cannot serve', () => {
+    // It is N-API now, so the question is no longer which ABIs have a prebuild
+    // but which Node reports N-API 10. That is 22.14; 22.13 loads the binary
+    // and segfaults on the first database.
+    expect(atLeast(floorParts(pkg.engines.node), [22, 14])).toBe(true);
   });
 });
 
@@ -61,10 +77,12 @@ describe('what the README promises about Node', () => {
   const required = floor(pkg.engines.node);
 
   it('asks for no older a Node than the package accepts', () => {
-    const prose = /Node\.js\]\(https:\/\/nodejs\.org\/\) (\d+) or higher/.exec(readme);
+    const prose = /Node\.js\]\(https:\/\/nodejs\.org\/\) \*\*(\d+(?:\.\d+)?) or newer\*\*/.exec(
+      readme,
+    );
 
     expect(prose, 'the Prerequisites line changed shape; update this test').not.toBeNull();
-    expect(Number(prose![1])).toBeGreaterThanOrEqual(required);
+    expect(atLeast(floorParts(prose![1]), floorParts(pkg.engines.node))).toBe(true);
   });
 
   it('shows a badge that agrees with it', () => {

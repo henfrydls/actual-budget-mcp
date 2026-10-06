@@ -13,19 +13,28 @@
 #     real install Claude Desktop gave up first and showed "could not connect";
 #     the server finished installing minutes later and worked, by which time the
 #     user had been told it was broken.
-#   - better-sqlite3 publishes prebuilt binaries for ABI 127, 137, 141 and 147
-#     only. Node 20 (ABI 115) and Node 23 (131) compile from source, so they
-#     need a C++ toolchain, which a user of a desktop app has no reason to have.
-#     Node 20 is the floor this project advertises.
-#   - The Node that runs it is whatever the user has, so neither of those is
+#   - A user of a desktop app has no reason to have a C++ toolchain, so
+#     anything that compiles on install is out.
+#   - The Node that runs it is whatever the host ships, so neither of those is
 #     under our control.
 #
 # What the premise for that decision got wrong: it said better-sqlite3 ships no
-# prebuilt binaries. It ships plenty, one per ABI and platform, as ordinary
-# release downloads. So the bundle carries one for every ABI and platform it
-# supports, and picks the match at startup (src/utils/native-binding.ts). That
-# is what makes a single artifact correct whether the host runs it with its own
-# Node or with the user's, a question we could not answer and no longer need to.
+# prebuilt binaries. It ships them, and how it ships them has changed twice,
+# which is worth recording because the script changed with it.
+#
+#   up to 12.x  one binary per ABI and platform, as release downloads. The
+#               bundle carried all of them and chose the match at startup
+#               (src/utils/native-binding.ts), because a binary built for ABI
+#               137 will not load on a Node reporting 127.
+#   13.x on     N-API binaries inside the npm package, one per platform, no
+#               ABI in the name. Nothing is downloaded and nothing is chosen:
+#               `npm ci` puts them in place and better-sqlite3 resolves its own.
+#               The releases carry no assets at all from 13.0.0 (21 July 2026),
+#               so the old approach does not merely cost more, it finds nothing.
+#
+# The floor moved with it: N-API 10 arrives in Node 22.14, and on anything older
+# the binary loads and then segfaults. src/utils/runtime-check.ts refuses to
+# start there rather than letting that happen.
 #
 # The cost is honest and worth stating: the download is large, once, with a
 # progress bar. The alternative was small, every install, in silence.
@@ -143,4 +152,14 @@ cp "$ROOT/README.md" "$STAGE/README.md"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 
 npx --yes @anthropic-ai/mcpb@2.1.2 pack "$STAGE" "$OUT"
+
+# Read back out of the archive, which is the only thing that ships.
+#
+# Every check above this line looks at the staging directory, and a review got
+# three mutations past them for that reason: deleting the binaries after the
+# check and before the pack produced a bundle with none in it and exit 0. What
+# a user installs is the zip, so the zip is what gets inspected -- by its own
+# script, so CI can run it against a bundle broken on purpose.
+"$(dirname "${BASH_SOURCE[0]}")/verify-mcpb.sh" "$OUT"
+
 echo "built $OUT"

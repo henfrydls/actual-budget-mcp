@@ -135,34 +135,130 @@ function unreachableMessage(serverURL: string): string {
  * One text for both routes below, because there are two and they used to
  * disagree by one existing and the other not.
  */
-function migrationMismatchMessage(): string {
-  return (
-    'Your Actual Budget is newer than the Actual library this server uses ' +
-    `(${actualApiVersion()}), so it cannot open your budget: a budget migrated by a ` +
-    'newer Actual needs a matching library. Nothing is wrong with your password, ' +
-    'URL or Sync ID, and nothing in your budget is damaged. Update actual-budget-mcp, ' +
-    'or the Desktop Extension, to a version built against your Actual. If you are ' +
-    'already on the latest, this server has not caught up with your Actual yet: ' +
-    'please say so at https://github.com/henfrydls/actual-budget-mcp/issues.'
-  );
+/**
+ * What the engine says on its way to not opening the budget.
+ *
+ * `loadBudget` returns `{ error: <code> }` and `downloadBudget` **discards the
+ * value** (`await loadBudget$1({ id })` in the bundle), so the code never
+ * reaches a caller. Some of those paths log on their way out and some do not,
+ * which is why the budget being open is checked separately below: the markers
+ * improve the message, they are not what detects the failure.
+ */
+const ENGINE_MARKERS = [
+  { marker: 'out-of-sync-migrations', kind: 'migrations' },
+  { marker: 'out-of-sync-data', kind: 'data' },
+  { marker: 'Error updating budget', kind: 'loading' },
+  // Not a code of its own: the engine answers `opening-budget` without logging
+  // it, and this is what SQLite says underneath when the cached file is not a
+  // database.
+  { marker: 'SQLITE_NOTADB', kind: 'corrupt' },
+  { marker: 'file is not a database', kind: 'corrupt' },
+] as const;
+
+type FailureKind = (typeof ENGINE_MARKERS)[number]['kind'];
+
+/** Where the cached copy lives, which is what the reader has to delete. */
+function cacheHint(): string {
+  return claimedDataDir
+    ? `the budget's folder inside ${claimedDataDir}`
+    : 'the budget\'s folder inside your ACTUAL_DATA_DIR';
+}
+
+/**
+ * Why the budget did not open, and what to do about it.
+ *
+ * One text per cause, because the two likely ones need opposite actions and an
+ * earlier version named only the first. `out-of-sync-migrations` is no longer
+ * only a version gap: from 26.10 the engine accepts unknown migrations past its
+ * cutoff, so the same code now also means a local copy that is missing a
+ * migration it should have. Telling that person to update the server sends
+ * them nowhere; what fixes it is deleting the cached copy.
+ *
+ * It does not say the budget is undamaged. On the inconsistent-cache path the
+ * local copy *is* damaged, and the previous wording promised otherwise.
+ */
+function loadFailureMessage(kind: FailureKind | undefined, detail: string | undefined): string {
+  const version = actualApiVersion();
+  const report =
+    ' If neither fits, please say so at ' +
+    'https://github.com/henfrydls/actual-budget-mcp/issues with this message.';
+
+  switch (kind) {
+    case 'migrations':
+      return (
+        `This server could not open your budget. Its Actual library is ${version}, and the ` +
+        'budget has migrations that version does not recognise. Two things cause that, and ' +
+        'they need opposite fixes. Either your Actual is newer than this server, in which ' +
+        'case update actual-budget-mcp or the Desktop Extension to a version built against ' +
+        `it. Or the local copy is inconsistent, in which case delete ${cacheHint()} so it ` +
+        'is downloaded again. Nothing is wrong with your password, URL or Sync ID, and the ' +
+        'budget on your server is untouched either way.' +
+        report
+      );
+    case 'data':
+      return (
+        'This server could not open your budget: the local copy has drifted out of sync ' +
+        `with your server. Delete ${cacheHint()} so it is downloaded again. Nothing is ` +
+        'wrong with your password, URL or Sync ID, and the budget on your server is ' +
+        'untouched.' +
+        report
+      );
+    case 'corrupt':
+      return (
+        'This server could not open your budget: the cached copy is not a readable ' +
+        `database. Delete ${cacheHint()} so it is downloaded again. The budget on your ` +
+        'server is untouched.' +
+        report
+      );
+    case 'loading':
+      return (
+        'This server downloaded your budget but could not finish opening it. Delete ' +
+        `${cacheHint()} so it is downloaded again. The budget on your server is untouched.` +
+        report
+      );
+    default:
+      // Nothing recognised. Saying so, with whatever the engine did say, beats
+      // "No budget file is open" -- which is what the user in #139 had, and
+      // their complaint was that nothing said why.
+      return (
+        'This server connected to your Actual server but the budget did not open, and the ' +
+        'reason is not one it recognises. Your password, URL and Sync ID are fine, or the ' +
+        `connection would have failed earlier. Deleting ${cacheHint()} so it is downloaded ` +
+        'again is the usual fix.' +
+        (detail ? ` The engine said: ${detail}` : ' The engine said nothing at all.') +
+        report
+      );
+  }
 }
 
 /** Says it on stderr as well, because the tool reply is not always read. */
-function reportMigrationMismatch(): Error {
-  const message = migrationMismatchMessage();
+function reportLoadFailure(kind: FailureKind | undefined, detail: string | undefined): Error {
+  const message = loadFailureMessage(kind, detail);
   // stderr: stdout carries JSON-RPC.
   console.error(`[actual-budget-mcp] ${message}`);
   return new Error(message);
 }
 
+interface DownloadOutcome {
+  /** The first marker recognised, if any. */
+  kind?: FailureKind;
+  /** A line from the engine, for the message of last resort. */
+  detail?: string;
+}
+
 async function downloadBudgetWatchingMigrations(
   budgetId: string,
   encryptionPassword: string | undefined,
-): Promise<{ migrationsOutOfSync: boolean }> {
-  let migrationsOutOfSync = false;
+): Promise<DownloadOutcome> {
+  const outcome: DownloadOutcome = {};
   const seen = (args: unknown[]) => {
-    if (args.some((a) => String(a).includes('out-of-sync-migrations'))) {
-      migrationsOutOfSync = true;
+    const line = args.map((a) => String(a)).join(' ');
+    for (const { marker, kind } of ENGINE_MARKERS) {
+      if (line.includes(marker)) {
+        outcome.kind ??= kind;
+        outcome.detail ??= line.slice(0, 300);
+        return;
+      }
     }
   };
 
@@ -173,15 +269,82 @@ async function downloadBudgetWatchingMigrations(
 
   try {
     await api.downloadBudget(budgetId, { password: encryptionPassword });
-    return { migrationsOutOfSync };
+    return outcome;
   } catch (error) {
-    (error as { migrationsOutOfSync?: boolean }).migrationsOutOfSync = migrationsOutOfSync;
+    (error as { loadOutcome?: DownloadOutcome }).loadOutcome = outcome;
     throw error;
   } finally {
     console.log = originals.log;
     console.error = originals.error;
     console.warn = originals.warn;
   }
+}
+
+/**
+ * Whether a budget is actually open, rather than whether downloading threw.
+ *
+ * This is what detects the failure. The engine returns its reason and
+ * `downloadBudget` throws it away, so there is no error to inspect and some of
+ * the paths log nothing at all: #139 was a server that believed it had
+ * connected and a first tool call answering `No budget file is open`.
+ *
+ * `getBudgetMonths` is the cheapest read that needs an open budget and touches
+ * nothing.
+ */
+async function budgetIsOpen(): Promise<boolean> {
+  try {
+    await api.getBudgetMonths();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Warn before opening a budget this library would migrate past its server.
+ *
+ * Opening a budget runs any migration the library has and the file does not,
+ * and the next sync pushes the result. So a 26.10 library against a 26.9
+ * server quietly takes the budget somewhere the user's own 26.9 app can no
+ * longer follow: measured, 59 migrations become 60, and a 26.9 client
+ * downloading from scratch then fails exactly the way #139 did.
+ *
+ * Actual's own 26.10 client does the same thing, so this is not a fault to
+ * refuse -- it is a consequence nobody is told about. Hence a warning rather
+ * than a block: refusing would strand anyone deliberately on an older server,
+ * and the migration is what makes the budget readable at all here.
+ *
+ * Only the minor is compared. Actual releases month.minor and the migrations
+ * come with those; a patch has never carried one.
+ */
+async function warnIfServerIsOlder(): Promise<void> {
+  let serverVersion: string | undefined;
+  try {
+    const reported = (await api.getServerVersion()) as { version?: string } | undefined;
+    serverVersion = reported?.version;
+  } catch {
+    // Not every server answers this, and a missing version is not a reason to
+    // refuse to work.
+    return;
+  }
+  if (!serverVersion) return;
+
+  const parts = (v: string) => v.split('.').map(Number);
+  const [serverMajor, serverMinor] = parts(serverVersion);
+  const [libMajor, libMinor] = parts(actualApiVersion());
+  if (![serverMajor, serverMinor, libMajor, libMinor].every(Number.isFinite)) return;
+
+  const older = serverMajor < libMajor || (serverMajor === libMajor && serverMinor < libMinor);
+  if (!older) return;
+
+  // stderr: stdout carries JSON-RPC.
+  console.error(
+    `[actual-budget-mcp] your Actual server is ${serverVersion} and this server's Actual ` +
+      `library is ${actualApiVersion()}. Opening your budget here will migrate it to the ` +
+      'newer format and the next sync will upload that, after which an Actual app still on ' +
+      `${serverVersion} can no longer open it. Actual's own apps do this too when they ` +
+      'update. Update your Actual server and apps to match, or stop this server now.',
+  );
 }
 
 export async function ensureConnection(): Promise<void> {
@@ -270,20 +433,27 @@ export async function ensureConnection(): Promise<void> {
       throw error;
     }
 
+    // Before the download, because the download is what migrates it.
+    await warnIfServerIsOlder();
+
     try {
-      const { migrationsOutOfSync } = await downloadBudgetWatchingMigrations(
+      const outcome = await downloadBudgetWatchingMigrations(
         config.budgetId,
         config.encryptionPassword,
       );
       // The route this actually takes, measured against a 26.10 budget with the
-      // 26.9 library (#139): `downloadBudget` does **not** throw. It logs
-      // `out-of-sync-migrations` and resolves, so `ensureConnection` returned
-      // normally and the first tool answered `No budget file is open` — a
-      // message about a file, for a version problem. The flag was already being
-      // collected and handed back here; nothing read it. The `catch` below is
-      // kept because the engine may yet propagate it, and then it is the only
-      // place that fires.
-      if (migrationsOutOfSync) throw reportMigrationMismatch();
+      // 26.9 library (#139): `downloadBudget` does **not** throw. It logs the
+      // reason, discards the code `loadBudget` handed it, and resolves — so
+      // `ensureConnection` returned normally and the first tool answered `No
+      // budget file is open`, a message about a file for a version problem.
+      //
+      // So the budget being open is checked rather than assumed. Not the
+      // markers: some of those paths log nothing at all (`opening-budget` and
+      // `budget-not-found` return without a line), and a server that believes
+      // it connected is the whole failure. The markers only choose the wording.
+      if (!(await budgetIsOpen())) {
+        throw reportLoadFailure(outcome.kind, outcome.detail);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = errorCode(error);
@@ -291,13 +461,9 @@ export async function ensureConnection(): Promise<void> {
       // Checked before anything else: this one masquerades as every other
       // failure, because the message it arrives with mentions a file rather
       // than a version.
-      if ((error as { migrationsOutOfSync?: boolean })?.migrationsOutOfSync) {
-        throw reportMigrationMismatch();
-      }
-      // Thrown by the check above, already reported. Without this it would fall
-      // through to the heuristics below and be re-labelled as an auth problem.
-      if (error instanceof Error && error.message === migrationMismatchMessage()) {
-        throw error;
+      const loadOutcome = (error as { loadOutcome?: DownloadOutcome })?.loadOutcome;
+      if (loadOutcome?.kind) {
+        throw reportLoadFailure(loadOutcome.kind, loadOutcome.detail);
       }
 
       // Checked next: an unreachable server also throws an empty Error, and the
