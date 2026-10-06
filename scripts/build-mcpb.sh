@@ -65,85 +65,61 @@ rm -f "$STAGE/package-lock.json"
 # ~10 MB of SQLite C sources, needed only to compile. The bundle never compiles.
 rm -rf "$STAGE/node_modules/better-sqlite3/deps"
 
-# One binary per ABI and platform, laid out the way native-binding.ts looks for
-# them.
+# The SQLite binaries, which now come inside the npm package.
 #
-# The ABI list is read from the release rather than written here, because the
-# Node an extension runs on is not ours to pin and it moves on its own: Claude
-# Desktop ships its own Node and updated it from 22.19.0 to 24.20.0 (ABI 127 to
-# 137) during a single afternoon of testing. A hardcoded list would have been
-# correct on the day it was written and would break the day a host moved to an
-# ABI nobody remembered to add, with the extension reporting "no SQLite binary
-# for node-vNNN" to a user who did nothing wrong.
+# They used to be downloaded one per (ABI, platform) from better-sqlite3's
+# GitHub releases, because the binary was tied to a Node ABI and Claude Desktop
+# moves its own Node without asking: it went from 22.19.0 to 24.20.0, ABI 127 to
+# 137, during a single afternoon of testing.
 #
-# Whatever better-sqlite3 publishes, the bundle carries. ABIs with no prebuild
-# (115 for Node 20, 131 for Node 23) are absent from the release and so absent
-# here, which is also why those Node versions are not supported.
-BETTER_SQLITE3=$(node -p "require('$ROOT/node_modules/better-sqlite3/package.json').version")
-BASE="https://github.com/WiseLibs/better-sqlite3/releases/download/v${BETTER_SQLITE3}"
-PLATFORMS="darwin-arm64 darwin-x64 win32-x64 win32-arm64 linux-x64 linux-arm64"
+# better-sqlite3 13 ends both halves of that. The binaries are N-API, so one per
+# platform covers every Node, and they ship in the package itself under
+# `prebuilds/<platform>-<arch>.node`, resolved by its own `lib/binding.js`. The
+# download is not just unnecessary now, it is impossible: no release from
+# 13.0.0 onwards (21 July 2026) carries a single asset, while 12.12.0 carried
+# 145. Building this with the old script against the new library downloaded
+# nothing at all and stopped, which is how this was found.
+#
+# So `npm ci` above has already put them in place. What is left is to check they
+# are there, because a bundle that cannot open a database must not ship.
+PREBUILDS="$STAGE/node_modules/better-sqlite3/prebuilds"
 
-# Falls back to the ABIs known when this was written, so a rate-limited or
-# unreachable API degrades to the old behaviour instead of building a bundle
-# with no binaries in it.
-FALLBACK_ABIS="127 137 141 147"
-ABIS=$(curl -sfL "https://api.github.com/repos/WiseLibs/better-sqlite3/releases/tags/v${BETTER_SQLITE3}" \
-  | node -e "
-    let raw = '';
-    process.stdin.on('data', (c) => (raw += c));
-    process.stdin.on('end', () => {
-      try {
-        const names = (JSON.parse(raw).assets || []).map((a) => a.name);
-        const abis = new Set();
-        for (const name of names) {
-          const m = /-node-v(\\d+)-/.exec(name);
-          if (m) abis.add(Number(m[1]));
-        }
-        console.log([...abis].sort((a, b) => a - b).join(' '));
-      } catch {
-        // Nothing printed; the caller falls back.
-      }
-    });
-  " 2>/dev/null) || true
-if [ -z "${ABIS// /}" ]; then
-  echo "note: could not read the published ABI list, using $FALLBACK_ABIS" >&2
-  ABIS="$FALLBACK_ABIS"
-fi
-echo "SQLite ABIs to bundle: $ABIS" >&2
-
-mkdir -p "$STAGE/server/prebuilds"
+# Which platforms must have one is read from the manifest rather than written
+# here, so the promise and the contents cannot drift apart: `compatibility`
+# tells a user their machine is supported before they install, and a bundle
+# that says darwin and carries no darwin binary is a download that fails on
+# first use. Either the binary is there or the claim comes out.
+DECLARED=$(node -p "JSON.parse(require('fs').readFileSync('$ROOT/manifest.json','utf8')).compatibility.platforms.join(' ')")
+MISSING=""
 COUNT=0
-for abi in $ABIS; do
-  for plat in $PLATFORMS; do
-    key="node-v${abi}-${plat}"
-    url="${BASE}/better-sqlite3-v${BETTER_SQLITE3}-${key}.tar.gz"
-    dir="$STAGE/server/prebuilds/$key"
-    mkdir -p "$dir"
-    if curl -sfL "$url" | tar xz -C "$dir" --strip-components=2 build/Release/better_sqlite3.node 2>/dev/null; then
+for plat in $DECLARED; do
+  found=""
+  for arch in x64 arm64; do
+    if [ -f "$PREBUILDS/$plat-$arch.node" ]; then
       COUNT=$((COUNT + 1))
-    else
-      # A missing combination is not fatal, but it must not pass unnoticed:
-      # a user on it would get "no SQLite binary for <key>" at startup.
-      rmdir "$dir"
-      echo "note: no prebuild published for $key" >&2
+      found="yes"
     fi
   done
+  [ -n "$found" ] || MISSING="$MISSING $plat"
 done
-if [ "$COUNT" -eq 0 ]; then
-  echo "no prebuilt SQLite binaries could be downloaded; refusing to ship a bundle that cannot open a database" >&2
+
+# musl is not in `compatibility` (it is not a platform Claude Desktop reports)
+# and travels anyway: the package carries it, and an Alpine host is the one
+# place a glibc binary silently is not enough.
+for extra in linuxmusl-x64 linuxmusl-arm64; do
+  [ -f "$PREBUILDS/$extra.node" ] && COUNT=$((COUNT + 1))
+done
+
+if [ -n "$MISSING" ]; then
+  echo "manifest.json declares$MISSING but the package has no SQLite binary for it;" >&2
+  echo "either the binary is missing or the claim should come out of compatibility.platforms" >&2
   exit 1
 fi
-echo "bundled $COUNT SQLite binaries" >&2
-
-# Record which one is in place, so a start whose ABI already matches copies
-# nothing. The binary npm installed here is built for this machine's ABI.
-RELEASE_DIR="$STAGE/node_modules/better-sqlite3/build/Release"
-mkdir -p "$RELEASE_DIR"
-HOST_KEY="node-v$(node -p 'process.versions.modules')-$(node -p 'process.platform')-$(node -p 'process.arch')"
-if [ -f "$STAGE/server/prebuilds/$HOST_KEY/better_sqlite3.node" ]; then
-  cp "$STAGE/server/prebuilds/$HOST_KEY/better_sqlite3.node" "$RELEASE_DIR/better_sqlite3.node"
-  echo "$HOST_KEY" > "$RELEASE_DIR/.installed-abi"
+if [ "$COUNT" -eq 0 ]; then
+  echo "no SQLite binaries found in the package; refusing to ship a bundle that cannot open a database" >&2
+  exit 1
 fi
+echo "bundled $COUNT SQLite binaries (N-API, one per platform)" >&2
 
 # The manifest's tool list is generated from the server itself, not written by
 # hand. Claude Desktop and the directory show it before anyone installs, so a

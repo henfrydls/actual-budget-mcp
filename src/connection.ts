@@ -129,6 +129,32 @@ function unreachableMessage(serverURL: string): string {
  * Reading it off the console is not elegant, and the alternative is worse: the
  * marker is not on the error, so without this the message stays useless.
  */
+/**
+ * What to say when the budget is newer than the library that has to open it.
+ *
+ * One text for both routes below, because there are two and they used to
+ * disagree by one existing and the other not.
+ */
+function migrationMismatchMessage(): string {
+  return (
+    'Your Actual Budget is newer than the Actual library this server uses ' +
+    `(${actualApiVersion()}), so it cannot open your budget: a budget migrated by a ` +
+    'newer Actual needs a matching library. Nothing is wrong with your password, ' +
+    'URL or Sync ID, and nothing in your budget is damaged. Update actual-budget-mcp, ' +
+    'or the Desktop Extension, to a version built against your Actual. If you are ' +
+    'already on the latest, this server has not caught up with your Actual yet: ' +
+    'please say so at https://github.com/henfrydls/actual-budget-mcp/issues.'
+  );
+}
+
+/** Says it on stderr as well, because the tool reply is not always read. */
+function reportMigrationMismatch(): Error {
+  const message = migrationMismatchMessage();
+  // stderr: stdout carries JSON-RPC.
+  console.error(`[actual-budget-mcp] ${message}`);
+  return new Error(message);
+}
+
 async function downloadBudgetWatchingMigrations(
   budgetId: string,
   encryptionPassword: string | undefined,
@@ -245,7 +271,19 @@ export async function ensureConnection(): Promise<void> {
     }
 
     try {
-      await downloadBudgetWatchingMigrations(config.budgetId, config.encryptionPassword);
+      const { migrationsOutOfSync } = await downloadBudgetWatchingMigrations(
+        config.budgetId,
+        config.encryptionPassword,
+      );
+      // The route this actually takes, measured against a 26.10 budget with the
+      // 26.9 library (#139): `downloadBudget` does **not** throw. It logs
+      // `out-of-sync-migrations` and resolves, so `ensureConnection` returned
+      // normally and the first tool answered `No budget file is open` — a
+      // message about a file, for a version problem. The flag was already being
+      // collected and handed back here; nothing read it. The `catch` below is
+      // kept because the engine may yet propagate it, and then it is the only
+      // place that fires.
+      if (migrationsOutOfSync) throw reportMigrationMismatch();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = errorCode(error);
@@ -254,13 +292,12 @@ export async function ensureConnection(): Promise<void> {
       // failure, because the message it arrives with mentions a file rather
       // than a version.
       if ((error as { migrationsOutOfSync?: boolean })?.migrationsOutOfSync) {
-        throw new Error(
-          'Your Actual Budget is newer than the Actual library this server uses ' +
-            `(${actualApiVersion()}), so it cannot open your budget: a budget migrated by a ` +
-            'newer Actual needs a matching library. Nothing is wrong with your password, ' +
-            'URL or Sync ID. Update actual-budget-mcp, or the Desktop Extension, to a ' +
-            'version built against your Actual.',
-        );
+        throw reportMigrationMismatch();
+      }
+      // Thrown by the check above, already reported. Without this it would fall
+      // through to the heuristics below and be re-labelled as an auth problem.
+      if (error instanceof Error && error.message === migrationMismatchMessage()) {
+        throw error;
       }
 
       // Checked next: an unreachable server also throws an empty Error, and the
