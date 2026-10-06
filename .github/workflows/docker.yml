@@ -56,6 +56,19 @@ jobs:
             exit 1
           }
 
+      # The handshake above never opens a database, so it would pass with a
+      # SQLite binary that cannot load. Alpine is musl and needs its own, and
+      # the binaries now come from the package rather than being downloaded,
+      # so this checks the one thing that change could break.
+      - name: Smoke test SQLite on musl
+        run: |
+          docker run -i --rm --entrypoint node actual-budget-mcp:ci \
+            -e "const db = new (require('better-sqlite3'))(':memory:'); db.prepare('select 1 as ok').get(); console.log('sqlite ok')" \
+            | grep -q 'sqlite ok' || {
+              echo "::error::the image cannot open a SQLite database"
+              exit 1
+            }
+
       - name: Log in to GHCR
         if: github.event_name == 'release'
         uses: docker/login-action@v3

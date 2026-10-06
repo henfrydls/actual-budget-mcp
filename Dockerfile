@@ -5,7 +5,9 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Same reason as the `deps` stage below. This one only compiles TypeScript and
+# never opens a database, but it installs the same tree.
+RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
@@ -15,7 +17,14 @@ RUN npm run build
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# `--ignore-scripts` because of `better-sqlite3`. It has no install script of
+# its own, but it ships a `binding.gyp`, and npm runs `node-gyp rebuild` for any
+# package that has one. This image has no compiler, so that fails -- and there
+# is nothing to compile: better-sqlite3 13 ships N-API binaries in the package,
+# `prebuilds/linuxmusl-x64.node` among them, which is the one Alpine needs.
+# Building from source here would produce the same binary at the cost of a
+# toolchain in the image.
+RUN npm ci --omit=dev --ignore-scripts
 
 FROM node:22-alpine
 WORKDIR /app
