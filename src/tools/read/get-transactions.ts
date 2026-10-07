@@ -236,18 +236,26 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // Names keep matching on a substring, which is what they have always done
   // and what makes `category: "Super"` find "Supermercado". An id is matched
   // whole: a partial id is not a search, it is a typo.
-  let categoryNotFound = false;
+  let categoryNotFound: string | undefined;
   if (category) {
-    if (categoryMap.has(category)) {
-      allTransactions = allTransactions.filter((t) => t.category === category);
+    // Trimmed and matched without case, because an id copied out of a reply
+    // carries a space or a capital often enough, and " 6A1C…" is the same id.
+    // Getting that wrong produced "No category matches" followed by "an id
+    // works here too", about an id that was complete.
+    const trimmed = category.trim();
+    const byId = [...categoryMap.keys()].find(
+      (id) => id.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (byId) {
+      allTransactions = allTransactions.filter((t) => t.category === byId);
     } else {
-      const lower = category.toLowerCase();
+      const lower = trimmed.toLowerCase();
       const matches = [...categoryMap.values()].some((name) =>
         name.toLowerCase().includes(lower),
       );
       // Nothing by that name and nothing by that id. Saying so beats an empty
       // list: one is a question answered, the other is a wrong answer.
-      if (!matches) categoryNotFound = true;
+      if (!matches) categoryNotFound = trimmed;
       allTransactions = allTransactions.filter((t) => {
         const catName = t.category ? categoryMap.get(t.category) : '';
         return catName?.toLowerCase().includes(lower);
@@ -294,10 +302,17 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   const limited = allTransactions.slice(0, limit);
 
   if (limited.length === 0) {
-    if (categoryNotFound) {
+    if (categoryNotFound !== undefined) {
       return (
-        `No category matches "${category}", so nothing was searched. Check the name, or ` +
-        'use get_categories to see what is there. An id works here too, in full.'
+        `No category matches "${categoryNotFound}", by name or by id, so nothing could match the ` +
+        'filter. Check the spelling against get_categories. An id works here too, and is ' +
+        'matched whole rather than as a fragment.' +
+        // Two words that sound like a category and are not one: the engine has
+        // no "Uncategorized", it has rows whose category is null, and this
+        // tool reaches them through a different argument.
+        (/^(uncategori[sz]ed|sin categor[ií]a)$/i.test(categoryNotFound)
+          ? ' For transactions that have no category, pass uncategorized: true instead.'
+          : '')
       );
     }
     return `No transactions found for the specified filters (${startDate} to ${endDate}).`;
@@ -381,7 +396,10 @@ export function registerGetTransactions(server: McpServer): void {
       category: z
         .string()
         .optional()
-        .describe('Category name to filter by (partial match)'),
+        .describe(
+          'Category to filter by: a name, matched on any part of it, or a full category ID. ' +
+          'For transactions with no category at all, use uncategorized instead.',
+        ),
       payee: z
         .string()
         .optional()

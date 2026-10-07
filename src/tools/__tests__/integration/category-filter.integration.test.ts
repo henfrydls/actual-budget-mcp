@@ -105,9 +105,39 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
     const missing = await ask('Caprichos');
 
     expect(missing).toMatch(/No category matches "Caprichos"/);
-    expect(missing).not.toMatch(/No transactions found/);
     // And it points somewhere useful rather than leaving the reader guessing.
     expect(missing).toMatch(/get_categories/);
+    // It does not claim nothing was searched: the filter ran, and nothing
+    // could match it.
+    expect(missing).not.toMatch(/nothing was searched/);
+  });
+
+  it('takes an id with stray spacing or different case', async () => {
+    // An id copied out of a reply carries a space or a capital often enough,
+    // and " 6A1C…" is the same id. Getting that wrong answered "no category
+    // matches" and then advised using an id, about an id that was complete.
+    const spaced = await ask(`  ${groceriesId}  `);
+    const upper = await ask(groceriesId.toUpperCase());
+
+    expect(spaced).toContain('Colmado');
+    expect(upper).toContain('Colmado');
+    expect(spaced).not.toMatch(/No category matches/);
+  });
+
+  it('sends "Uncategorized" to the argument that actually finds those rows', async () => {
+    // The engine has no category called this: it has rows whose category is
+    // null, reached through a different argument. Both this and the Spanish
+    // for it used to answer "no transactions found", which is wrong twice.
+    for (const word of ['Uncategorized', 'Sin categoría']) {
+      const reply = await ask(word);
+      expect(reply, word).toMatch(/uncategorized: true/);
+    }
+  });
+
+  it('does not offer that advice for an ordinary missing category', async () => {
+    // The hint belongs to those two words and nowhere else, or it becomes
+    // noise attached to every typo.
+    expect(await ask('Caprichos')).not.toMatch(/uncategorized: true/);
   });
 
   it('still says "no transactions" when the category is real but empty', async () => {
@@ -122,6 +152,5 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
     const empty = await ask('Vacía');
 
     expect(empty).toMatch(/No transactions found/);
-    expect(empty).not.toMatch(/No category matches/);
   }, 60_000);
 });
