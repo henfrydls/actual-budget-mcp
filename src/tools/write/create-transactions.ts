@@ -200,12 +200,80 @@ export async function createTransactions(input: {
       }
     }
 
-    if (!input.allow_duplicate) {
-      // Once for the batch, not once per row. Both checks below read the
-      // transactions table, and this is the one thing that makes their reads
-      // current; doing it per row costs a full round trip each time.
-      await pullBeforeReading('checking for transactions already recorded');
+    // Two kinds of duplicate, and only one of them is a guess.
+    //
+    // A bank's `imported_id` is identity: the row either is that movement or
+    // it is not. Account, date and amount is a heuristic, and a good one, but
+    // two coffees of the same price on the same card on the same day are two
+    // movements. That is what `allow_duplicate` is for, and it used to switch
+    // off both -- so passing it wrote the same bank movement twice, in the
+    // same call and against rows already in the budget, while the tool's
+    // description promised resending could not duplicate it.
+    //
+    // The id is unique **per account**, which is how Actual's own bank sync
+    // treats it: `WHERE imported_id = ? AND account = ?`, falling back to a
+    // date-window match on amount within the same account. Without the
+    // account in the key, the same `000123` from two banks in one batch
+    // refused the whole batch and advised giving them different ids, which is
+    // not something the person can do: the banks chose them.
+    await pullBeforeReading('checking for transactions already recorded');
 
+    // One complaint per row, whichever check finds it first: two complaints
+    // about one row read as two problems and send the reader looking for two
+    // fixes.
+    const flagged = new Set<number>();
+    const complain = (index: number, reason: string) => {
+      if (flagged.has(index)) return;
+      flagged.add(index);
+      problems.push({ index, reason });
+    };
+
+    // Identity, so no escape: `allow_duplicate` does not reach these.
+    const seenIds = new Map<string, number>();
+    for (const row of resolved) {
+      if (!row.importedId) continue;
+      const key = `${row.accountId}|${row.importedId}`;
+      const first = seenIds.get(key);
+      if (first !== undefined) {
+        complain(
+          row.index,
+          `repeats row ${first + 1}: same imported_id "${row.importedId}" on the same ` +
+            `account. A bank id identifies one movement, so two rows carrying it in one ` +
+            `account are the same one twice. If they really are different movements, give ` +
+            `them different ids.`,
+        );
+      } else {
+        seenIds.set(key, row.index);
+      }
+    }
+
+    const importedIds = resolved.map((r) => r.importedId).filter((id): id is string => !!id);
+    if (importedIds.length > 0) {
+      const existing = await api.runQuery(
+        transactionsQuery('all')
+          .filter({ imported_id: { $oneof: importedIds } })
+          .select(['imported_id', 'account']),
+      );
+      // The account comes back with it, because the same id in another account
+      // is another movement and refusing it would be wrong.
+      const found = new Set(
+        ((existing as { data?: Array<{ imported_id?: string; account?: string }> }).data ?? [])
+          .filter((r) => r.imported_id && r.account)
+          .map((r) => `${r.account}|${r.imported_id}`),
+      );
+      for (const row of resolved) {
+        if (row.importedId && found.has(`${row.accountId}|${row.importedId}`)) {
+          complain(
+            row.index,
+            `imported_id "${row.importedId}" is already in ${row.accountName}, so this row ` +
+              `has been recorded before. If your bank reused the id and this is a different ` +
+              `movement, send it without an imported_id, or with one of your own.`,
+          );
+        }
+      }
+    }
+
+    if (!input.allow_duplicate) {
       // Two rows in the same call that are the same movement. The existing
       // duplicate check asks about rows already in the budget (#88), and two
       // identical rows arriving together is a case it has never seen, because
@@ -221,38 +289,12 @@ export async function createTransactions(input: {
         const key = `${row.accountId}|${row.date}|${row.amountCents}`;
         const first = seen.get(key);
         if (first !== undefined) {
-          problems.push({
-            index: row.index,
-            reason: `repeats row ${first + 1}: same account, date and amount. If both really happened, pass allow_duplicate.`,
-          });
+          complain(
+            row.index,
+            `repeats row ${first + 1}: same account, date and amount. If both really happened, pass allow_duplicate.`,
+          );
         } else {
           seen.set(key, row.index);
-        }
-      }
-
-      // `imported_id` is not deduplicated by the engine on this path, measured,
-      // so a row whose id is already here is found rather than written twice.
-      const importedIds = resolved
-        .map((r) => r.importedId)
-        .filter((id): id is string => !!id);
-      if (importedIds.length > 0) {
-        const existing = await api.runQuery(
-          transactionsQuery('all')
-            .filter({ imported_id: { $oneof: importedIds } })
-            .select(['imported_id']),
-        );
-        const found = new Set(
-          (
-            (existing as { data?: Array<{ imported_id?: string }> }).data ?? []
-          ).map((r) => r.imported_id),
-        );
-        for (const row of resolved) {
-          if (row.importedId && found.has(row.importedId)) {
-            problems.push({
-              index: row.index,
-              reason: `imported_id "${row.importedId}" is already in the budget, so this row has been recorded before.`,
-            });
-          }
         }
       }
 
@@ -264,12 +306,11 @@ export async function createTransactions(input: {
           { alreadyPulled: true },
         );
         if (existing.length > 0) {
-          problems.push({
-            index: row.index,
-            reason:
-              `${row.accountName} already has a transaction on ${row.date} for ` +
+          complain(
+            row.index,
+            `${row.accountName} already has a transaction on ${row.date} for ` +
               `${formatMoney(row.amountCents)}. If this is a second one, pass allow_duplicate.`,
-          });
+          );
         }
       }
     }
@@ -287,10 +328,18 @@ export async function createTransactions(input: {
       }
       const untouched = rows.length - failed.size;
       if (untouched > 0) {
+        // "Fix them and send the same list again" is good advice for a bad
+        // category or an unusable amount. It is wrong for a row whose id is
+        // already recorded: that row is not broken, it is done, and the fix is
+        // to drop it rather than to correct it. Telling someone to fix it
+        // invites them to change the id, which writes the movement twice.
+        const alreadyRecorded = problems.some((p) => p.reason.includes('has been recorded before'));
         lines.push(
           '',
           `The other ${untouched} row${untouched === 1 ? ' was' : 's were'} fine and ${untouched === 1 ? 'was' : 'were'} not written either: the batch is all or nothing,`,
-          'so fixing the rows above and sending the same list again creates every one of them.',
+          alreadyRecorded
+            ? 'so send the list again without the rows that are already recorded, and fix any others.'
+            : 'so fixing the rows above and sending the same list again creates every one of them.',
         );
       }
       return lines;

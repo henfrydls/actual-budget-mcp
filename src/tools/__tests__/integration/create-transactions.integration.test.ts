@@ -176,7 +176,254 @@ describe.skipIf(skip)('create_transactions', () => {
     });
 
     expect(await count(checking)).toBe(before);
-    expect(lines.join('\n')).toContain('already in the budget');
+    // Names the account, not "the budget". The id is unique per account now,
+    // so which account it is already in is the thing the reader needs.
+    expect(lines.join('\n')).toContain('already in Checking');
+  }, 60_000);
+
+  it('refuses two rows in the same call that share an imported_id (#143)', async () => {
+    // The check above asks the budget; this one has to ask the batch. The two
+    // rows differ in date and amount on purpose, so the account/date/amount
+    // rule cannot be what catches them: all they share is the bank's id, and
+    // that is enough, because a bank id identifies one movement.
+    //
+    // Measured before this existed: `Created 2 transactions.` and two rows,
+    // while the tool's own description promises resending cannot duplicate it.
+    await budget('batch-same-imported-id');
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-NEW' },
+        { account: 'Checking', amount: -9, date: '2026-09-11', imported_id: 'BANK-NEW' },
+      ],
+    });
+
+    expect(await count(checking)).toBe(before);
+    const text = lines.join('\n');
+    expect(text).toContain('same imported_id');
+    expect(text).toContain('BANK-NEW');
+    // `allow_duplicate` is never offered for an id. It is not a way out of
+    // identity, and taking it would write the same bank movement twice --
+    // which is exactly what it used to do.
+    expect(text).not.toMatch(/allow_duplicate/);
+  }, 60_000);
+
+  it('names the first row, not just the second, when three share an id', async () => {
+    // Keys are recorded for every row whether or not it was flagged, so the
+    // third row is compared against the first rather than against nothing.
+    await budget('batch-three-same-id');
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-X' },
+        { account: 'Checking', amount: -9, date: '2026-09-11', imported_id: 'BANK-X' },
+        { account: 'Checking', amount: -10, date: '2026-09-12', imported_id: 'BANK-X' },
+      ],
+    });
+
+    const text = lines.join('\n');
+    expect(text).toContain('repeats row 1');
+    expect(text.match(/same imported_id/g)?.length).toBe(2);
+  }, 60_000);
+
+  it('complains once about a row that repeats another two ways', async () => {
+    // Identical rows carrying the same id trip both checks. Two complaints
+    // about one row read as two problems and send the reader looking for two
+    // fixes.
+    await budget('batch-both-ways');
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-Y' },
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-Y' },
+      ],
+    });
+
+    const complaints = lines.join('\n').match(/repeats row 1/g) ?? [];
+    expect(complaints).toHaveLength(1);
+  }, 60_000);
+
+  it('still matches a later row against one already flagged', async () => {
+    // Keys are recorded for a flagged row too, and this is the only shape that
+    // shows it. Row 2 is caught by its bank id; row 3 shares row 2's account,
+    // date and amount and nothing else. If a flagged row stopped contributing
+    // keys, row 3 would have nothing to match and would be written.
+    await budget('batch-flagged-still-counts');
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-Z' },
+        { account: 'Checking', amount: -9, date: '2026-09-11', imported_id: 'BANK-Z' },
+        { account: 'Checking', amount: -9, date: '2026-09-11' },
+      ],
+    });
+
+    expect(await count(checking)).toBe(before);
+    const text = lines.join('\n');
+    expect(text).toContain('same imported_id');
+    // Row 3 against row 2, which was itself refused.
+    expect(text).toContain('repeats row 2');
+    // Two of three: the first row is what the other two repeat, so it is not
+    // itself a problem, and the batch is still all-or-nothing.
+    expect(text).toContain('2 of 3 rows could not be used');
+  }, 60_000);
+
+  it('writes rows with different ids that are otherwise identical', async () => {
+    // The guard must not catch what it is not for: two genuine movements of
+    // the same amount on the same day, each with its own bank id, still need
+    // `allow_duplicate` for the other rule and nothing more.
+    await budget('batch-different-ids');
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-A' },
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-B' },
+      ],
+      allow_duplicate: true,
+    });
+
+    expect(await count(checking)).toBe(before + 2);
+    expect(lines.join('\n')).toContain('Created 2 transactions');
+  }, 60_000);
+
+  it('refuses a repeated bank id even with allow_duplicate', async () => {
+    // `allow_duplicate` is for the heuristic, which can be wrong: two coffees
+    // of the same price on the same day are two movements. A bank id is not a
+    // guess, so there is nothing to overrule. Measured before this: the flag
+    // switched off both checks and wrote the movement twice.
+    await budget('batch-id-no-escape');
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-ESC' },
+        { account: 'Checking', amount: -9, date: '2026-09-11', imported_id: 'BANK-ESC' },
+      ],
+      allow_duplicate: true,
+    });
+
+    expect(await count(checking)).toBe(before);
+    expect(lines.join('\n')).toContain('same imported_id');
+  }, 60_000);
+
+  it('refuses a bank id already in that account even with allow_duplicate', async () => {
+    await budget('batch-id-no-escape-db', async () => {
+      await api.addTransactions(checking, [
+        { date: '2026-09-01', amount: -5000, imported_id: 'bank-kept' },
+      ] as never);
+    });
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', imported_id: 'bank-kept' },
+      ],
+      allow_duplicate: true,
+    });
+
+    expect(await count(checking)).toBe(before);
+    expect(lines.join('\n')).toContain('already in Checking');
+  }, 60_000);
+
+  it('says what to do when a bank reuses an id', async () => {
+    // Refusing is right and there is no `allow_duplicate` for it, so the
+    // message has to carry the way out instead: banks do reuse references,
+    // and without this the reader is told no and nothing else.
+    await budget('batch-id-reused', async () => {
+      await api.addTransactions(checking, [
+        { date: '2026-09-01', amount: -5000, imported_id: 'R1' },
+      ] as never);
+    });
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', imported_id: 'R1' },
+      ],
+    });
+
+    const text = lines.join('\n');
+    expect(text).toContain('already in Checking');
+    expect(text).toMatch(/without an imported_id, or with one of your own/);
+  }, 60_000);
+
+  it('does not tell you to fix a row that is already recorded', async () => {
+    // "Fix them and send the same list again" is right for a bad category and
+    // wrong here: that row is not broken, it is done. Following the advice
+    // means changing the id, which writes the movement twice.
+    await budget('batch-footer-recorded', async () => {
+      await api.addTransactions(checking, [
+        { date: '2026-09-01', amount: -5000, imported_id: 'R2' },
+      ] as never);
+    });
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', imported_id: 'R2' },
+        { account: 'Checking', amount: -80, date: '2026-09-06' },
+      ],
+    });
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/without the rows that are already recorded/);
+    expect(text).not.toMatch(/fixing the rows above/);
+  }, 60_000);
+
+  it('still says to fix and resend when nothing is already recorded', async () => {
+    // The ordinary advice must survive: a bad category is a row to correct.
+    await budget('batch-footer-ordinary');
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', category: 'Nope' },
+        { account: 'Checking', amount: -80, date: '2026-09-06' },
+      ],
+    });
+
+    expect(lines.join('\n')).toMatch(/fixing the rows above/);
+  }, 60_000);
+
+  it('writes the same bank id in two different accounts', async () => {
+    // Bank references are often plain numbers, so `000123` from one bank and
+    // `000123` from another are two movements. Actual's own sync matches on
+    // `imported_id = ? AND account = ?` for the same reason. Refusing these
+    // advised giving them different ids, which the person cannot do: the banks
+    // chose them.
+    await budget('batch-id-per-account');
+    const beforeChecking = await count(checking);
+    const beforeSavings = await count(savings);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: '000123' },
+        { account: 'Savings', amount: -9, date: '2026-09-11', imported_id: '000123' },
+      ],
+    });
+
+    expect(lines.join('\n')).toContain('Created 2 transactions');
+    expect(await count(checking)).toBe(beforeChecking + 1);
+    expect(await count(savings)).toBe(beforeSavings + 1);
+  }, 60_000);
+
+  it('writes rows with different ids without needing allow_duplicate', async () => {
+    // Without the flag, so the heuristic runs too: different days, so nothing
+    // trips, and the id check must not invent a collision. The earlier version
+    // of this test passed the flag, which switched the whole block off and
+    // made it blind to the key being wrong.
+    await budget('batch-distinct-ids-no-flag');
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -8, date: '2026-09-10', imported_id: 'BANK-A' },
+        { account: 'Checking', amount: -9, date: '2026-09-11', imported_id: 'BANK-B' },
+      ],
+    });
+
+    expect(lines.join('\n')).toContain('Created 2 transactions');
+    expect(await count(checking)).toBe(before + 2);
   }, 60_000);
 
   it('keeps an explicit category against a learned payee mapping', async () => {
