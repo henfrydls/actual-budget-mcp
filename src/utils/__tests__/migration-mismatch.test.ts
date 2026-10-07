@@ -145,6 +145,49 @@ describe('a budget that does not open (#139)', () => {
     expect(message).toMatch(/said nothing at all/i);
   });
 
+  it('repeats what the engine said when it recognises nothing', async () => {
+    // The whole point of that message, and it never worked: `detail` was only
+    // ever set next to a marker, so the branch for an unrecognised cause
+    // always ended "The engine said nothing at all". This is the line the
+    // engine really prints on the `budget-not-found` path.
+    engineLogs('[Exception] Error: budget directory does not exist');
+
+    const message = ((await connect()) as Error).message;
+    expect(message).toMatch(/not one it recognises/i);
+    expect(message).toContain('budget directory does not exist');
+    expect(message).not.toMatch(/said nothing at all/i);
+    // One remedy is offered here, so it must not ask which of them fits.
+    expect(message).not.toMatch(/If neither fits/i);
+  });
+
+  it('ignores chatter that is not about a failure', async () => {
+    // Keeping *any* line would make the message quote a breadcrumb.
+    downloadBudget.mockImplementation(async () => {
+      console.error('[Breadcrumb] { message: loading spreadsheet }');
+    });
+    getBudgetMonths.mockImplementation(async () => {
+      throw new Error('No budget file is open');
+    });
+
+    const message = ((await connect()) as Error).message;
+    expect(message).toMatch(/said nothing at all/i);
+    expect(message).not.toMatch(/Breadcrumb/);
+  });
+
+  it('keeps the real reason when the read fails for another reason', async () => {
+    // `budgetIsOpen` used to swallow everything, so a locked database came out
+    // as "the budget did not open, delete your cache" — advice that destroys a
+    // healthy copy and loses the one line that said what was wrong.
+    downloadBudget.mockImplementation(async () => {});
+    getBudgetMonths.mockImplementation(async () => {
+      throw new Error('SQLITE_BUSY: database is locked');
+    });
+
+    const message = ((await connect()) as Error).message;
+    expect(message).toContain('SQLITE_BUSY');
+    expect(message).not.toMatch(/said nothing at all/i);
+  });
+
   it('says so on stderr too, not only in the reply', async () => {
     // The reply reaches the model; stderr is where a person looks, and the
     // report said there was nothing in the logs.
@@ -209,6 +252,25 @@ describe('a budget that does not open (#139)', () => {
       expect(said).toMatch(/no longer open it/i);
     });
 
+    it('warns before downloading, which is when it still helps', async () => {
+      // Downloading is what migrates the budget and the sync uploads it, so a
+      // warning after that is a notification of something already done.
+      const order: string[] = [];
+      getServerVersion.mockImplementation(async () => {
+        order.push('version');
+        return { version: '26.9.0' };
+      });
+      downloadBudget.mockImplementation(async () => {
+        order.push('download');
+      });
+      getBudgetMonths.mockResolvedValue(['2026-01']);
+
+      const { ensureConnection } = await import('../../connection.js');
+      await ensureConnection();
+
+      expect(order).toEqual(['version', 'download']);
+    });
+
     it('says nothing when the server matches', async () => {
       expect(await connectCleanly('26.10.0')).not.toMatch(/migrate/i);
     });
@@ -224,6 +286,23 @@ describe('a budget that does not open (#139)', () => {
       // refuse to work.
       expect(await connectCleanly(undefined)).not.toMatch(/migrate/i);
     });
+
+    it('gives up on a server that never answers the version', async () => {
+      // No timeout inside the SDK for this call, and it runs before the
+      // download: a server that accepts and goes quiet would hang startup on a
+      // warning nobody asked for.
+      getServerVersion.mockImplementation(() => new Promise(() => {}));
+      downloadBudget.mockImplementation(async () => {});
+      getBudgetMonths.mockResolvedValue(['2026-01']);
+
+      const { ensureConnection } = await import('../../connection.js');
+      const started = Date.now();
+      await ensureConnection();
+      const elapsed = Date.now() - started;
+
+      expect(elapsed, `took ${elapsed}ms`).toBeLessThan(20_000);
+      expect(stderr.join('\n')).not.toMatch(/migrate/i);
+    }, 30_000);
 
     it('works when asking for the version throws', async () => {
       getServerVersion.mockImplementation(async () => {

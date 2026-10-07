@@ -163,6 +163,12 @@ npx --yes @anthropic-ai/mcpb@2.1.2 pack "$STAGE" "$OUT"
 # Invoked through `bash` rather than directly: the execute bit is a property
 # of the checkout, not of the repository as every clone sees it, and CI caught
 # this the hard way with "Permission denied" after the bundle had been built.
-bash "$(dirname "${BASH_SOURCE[0]}")/verify-mcpb.sh" "$OUT"
+# A failure here must not leave a packed file on disk to be mistaken for a good
+# one: a review found 34 MB of broken bundle sitting next to an exit 1.
+if ! bash "$(dirname "${BASH_SOURCE[0]}")/verify-mcpb.sh" "$OUT"; then
+  rm -f "$OUT"
+  echo "removed $OUT" >&2
+  exit 1
+fi
 
 echo "built $OUT"

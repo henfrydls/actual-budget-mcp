@@ -220,13 +220,17 @@ function loadFailureMessage(kind: FailureKind | undefined, detail: string | unde
       // Nothing recognised. Saying so, with whatever the engine did say, beats
       // "No budget file is open" -- which is what the user in #139 had, and
       // their complaint was that nothing said why.
+      //
+      // No "if neither fits" here: there is only one remedy to offer, so the
+      // phrase would be asking the reader to choose between one thing.
       return (
         'This server connected to your Actual server but the budget did not open, and the ' +
         'reason is not one it recognises. Your password, URL and Sync ID are fine, or the ' +
         `connection would have failed earlier. Deleting ${cacheHint()} so it is downloaded ` +
         'again is the usual fix.' +
         (detail ? ` The engine said: ${detail}` : ' The engine said nothing at all.') +
-        report
+        ' Please report this at https://github.com/henfrydls/actual-budget-mcp/issues with ' +
+        'this message.'
       );
   }
 }
@@ -260,6 +264,17 @@ async function downloadBudgetWatchingMigrations(
         return;
       }
     }
+    // Keep the first line that looks like trouble even when no marker matches.
+    //
+    // Without this, `detail` was only ever set alongside `kind`, so the one
+    // message that exists to repeat what the engine said always ended with
+    // "The engine said nothing at all" — including on the `budget-not-found`
+    // path, where the engine had said `[Exception] Error: budget directory
+    // does not exist`. That is the complaint in #139 reproduced by the code
+    // meant to answer it.
+    if (/\b(error|exception|failed|cannot|unable)\b/i.test(line)) {
+      outcome.detail ??= line.slice(0, 300);
+    }
   };
 
   const originals = { log: console.log, error: console.error, warn: console.warn };
@@ -291,14 +306,24 @@ async function downloadBudgetWatchingMigrations(
  * `getBudgetMonths` is the cheapest read that needs an open budget and touches
  * nothing.
  */
-async function budgetIsOpen(): Promise<boolean> {
+async function budgetIsOpen(): Promise<{ open: boolean; why?: string }> {
   try {
     await api.getBudgetMonths();
-    return true;
-  } catch {
-    return false;
+    return { open: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Only this one means "nothing is loaded". Anything else is a different
+    // problem wearing the same clothes: a locked database answers
+    // `SQLITE_BUSY: database is locked`, and treating that as "no budget" told
+    // the reader to delete a perfectly good cache while losing the one line
+    // that said what was actually wrong.
+    if (message.includes('No budget file is open')) return { open: false };
+    return { open: false, why: message.slice(0, 300) };
   }
 }
+
+/** Long enough for any server that is going to answer, short enough to not matter. */
+const VERSION_CHECK_TIMEOUT_MS = 5_000;
 
 /**
  * Warn before opening a budget this library would migrate past its server.
@@ -320,7 +345,16 @@ async function budgetIsOpen(): Promise<boolean> {
 async function warnIfServerIsOlder(): Promise<void> {
   let serverVersion: string | undefined;
   try {
-    const reported = (await api.getServerVersion()) as { version?: string } | undefined;
+    // On a deadline of its own. `getServerVersion` is a plain fetch with no
+    // timeout inside the SDK, and this runs before the budget is downloaded:
+    // a server that accepts the connection and never answers would hang the
+    // whole startup here, on a warning nobody asked for. The global fetch
+    // deadline (#99) covers the request, but not a promise that never settles
+    // for some other reason, so the race is belt and braces.
+    const reported = (await Promise.race([
+      api.getServerVersion(),
+      new Promise((resolve) => setTimeout(() => resolve(undefined), VERSION_CHECK_TIMEOUT_MS)),
+    ])) as { version?: string } | undefined;
     serverVersion = reported?.version;
   } catch {
     // Not every server answers this, and a missing version is not a reason to
@@ -451,8 +485,11 @@ export async function ensureConnection(): Promise<void> {
       // markers: some of those paths log nothing at all (`opening-budget` and
       // `budget-not-found` return without a line), and a server that believes
       // it connected is the whole failure. The markers only choose the wording.
-      if (!(await budgetIsOpen())) {
-        throw reportLoadFailure(outcome.kind, outcome.detail);
+      const open = await budgetIsOpen();
+      if (!open.open) {
+        // `why` wins over the console: it is what the read itself said, which
+        // beats a line scraped from a log.
+        throw reportLoadFailure(open.why ? undefined : outcome.kind, open.why ?? outcome.detail);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

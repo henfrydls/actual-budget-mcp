@@ -19,10 +19,11 @@ describe('refusing a Node that would crash instead of failing', () => {
     expect(message).toBeDefined();
     expect(message).toContain(MINIMUM_NODE);
     expect(message).toContain('v22.13.1');
-    // The number it reports and the number it needs, both, because the person
-    // reading this has to be able to tell which Node they are on.
-    expect(message).toMatch(new RegExp(String(REQUIRED_NAPI)));
-    expect(message).toMatch(/9/);
+    // Literal 10, not the constant. Written as `RegExp(String(REQUIRED_NAPI))`
+    // this asserted that the message contains whatever the threshold happens
+    // to be, so moving the threshold moved the test with it.
+    expect(message).toMatch(/N-API 10/);
+    expect(message).toMatch(/reports 9/);
   });
 
   it('says what happens, since nothing else will', () => {
@@ -32,7 +33,17 @@ describe('refusing a Node that would crash instead of failing', () => {
   });
 
   it('allows the first version that reports enough', () => {
-    expect(unsupportedRuntimeMessage(String(REQUIRED_NAPI), 'v22.14.0')).toBeUndefined();
+    // Also literal: with the constant on both sides this passed for any
+    // threshold, which is the test being written from the code rather than
+    // from what the code has to do.
+    expect(unsupportedRuntimeMessage('10', 'v22.14.0')).toBeUndefined();
+  });
+
+  it('is built against the N-API the SQLite binary needs', () => {
+    // The one place the number is allowed to be compared to itself, so that
+    // raising it is a deliberate edit in two places rather than one.
+    expect(REQUIRED_NAPI).toBe(10);
+    expect(MINIMUM_NODE).toBe('22.14.0');
   });
 
   it('allows anything newer', () => {
