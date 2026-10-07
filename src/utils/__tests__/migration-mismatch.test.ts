@@ -199,7 +199,12 @@ describe('a budget that does not open (#139)', () => {
     databaseAnswers('SQLITE_BUSY: database is locked');
 
     const message = ((await connect()) as Error).message;
-    expect(message).not.toMatch(/delete/i);
+    // `/delet/i`, not `/delete/i`. The wording this is here to prevent was
+    // "**Deleting** the budget's folder… is the usual fix", and `delete` does
+    // not match `Deleting`: the assertion could not see the sentence it was
+    // written against. Measured — putting that exact sentence back left the
+    // whole file green.
+    expect(message).not.toMatch(/delet/i);
     expect(message).toMatch(/close it and try again/i);
   });
 
