@@ -328,6 +328,63 @@ describe.skipIf(skip)('create_transactions', () => {
     expect(lines.join('\n')).toContain('already in Checking');
   }, 60_000);
 
+  it('says what to do when a bank reuses an id', async () => {
+    // Refusing is right and there is no `allow_duplicate` for it, so the
+    // message has to carry the way out instead: banks do reuse references,
+    // and without this the reader is told no and nothing else.
+    await budget('batch-id-reused', async () => {
+      await api.addTransactions(checking, [
+        { date: '2026-09-01', amount: -5000, imported_id: 'R1' },
+      ] as never);
+    });
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', imported_id: 'R1' },
+      ],
+    });
+
+    const text = lines.join('\n');
+    expect(text).toContain('already in Checking');
+    expect(text).toMatch(/without an imported_id, or with one of your own/);
+  }, 60_000);
+
+  it('does not tell you to fix a row that is already recorded', async () => {
+    // "Fix them and send the same list again" is right for a bad category and
+    // wrong here: that row is not broken, it is done. Following the advice
+    // means changing the id, which writes the movement twice.
+    await budget('batch-footer-recorded', async () => {
+      await api.addTransactions(checking, [
+        { date: '2026-09-01', amount: -5000, imported_id: 'R2' },
+      ] as never);
+    });
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', imported_id: 'R2' },
+        { account: 'Checking', amount: -80, date: '2026-09-06' },
+      ],
+    });
+
+    const text = lines.join('\n');
+    expect(text).toMatch(/without the rows that are already recorded/);
+    expect(text).not.toMatch(/fixing the rows above/);
+  }, 60_000);
+
+  it('still says to fix and resend when nothing is already recorded', async () => {
+    // The ordinary advice must survive: a bad category is a row to correct.
+    await budget('batch-footer-ordinary');
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -70, date: '2026-09-05', category: 'Nope' },
+        { account: 'Checking', amount: -80, date: '2026-09-06' },
+      ],
+    });
+
+    expect(lines.join('\n')).toMatch(/fixing the rows above/);
+  }, 60_000);
+
   it('writes the same bank id in two different accounts', async () => {
     // Bank references are often plain numbers, so `000123` from one bank and
     // `000123` from another are two movements. Actual's own sync matches on

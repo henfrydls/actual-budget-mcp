@@ -237,12 +237,20 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // and what makes `category: "Super"` find "Supermercado". An id is matched
   // whole: a partial id is not a search, it is a typo.
   let categoryNotFound: string | undefined;
-  if (category) {
-    // Trimmed and matched without case, because an id copied out of a reply
-    // carries a space or a capital often enough, and " 6A1C…" is the same id.
-    // Getting that wrong produced "No category matches" followed by "an id
-    // works here too", about an id that was complete.
-    const trimmed = category.trim();
+  // Trimmed once, and the same value decides whether there is a filter and
+  // what it filters on. Asking two different questions of one input is the
+  // mistake #96 cost a round over, and it came straight back here: `if
+  // (category)` was true for " " while the filter trimmed it to "", and
+  // `''.includes('')` is true for every row — so a blank argument showed
+  // everything in the window, uncategorised rows included, while reading as
+  // though it had filtered. Blank means no filter, like `notes_contains`.
+  const wanted = (category ?? '').trim();
+  if (wanted !== '') {
+    // Matched without case, because an id copied out of a reply carries a
+    // capital often enough, and " 6A1C…" is the same id. Getting that wrong
+    // produced "No category matches" followed by "an id works here too",
+    // about an id that was complete.
+    const trimmed = wanted;
     const byId = [...categoryMap.keys()].find(
       (id) => id.toLowerCase() === trimmed.toLowerCase(),
     );

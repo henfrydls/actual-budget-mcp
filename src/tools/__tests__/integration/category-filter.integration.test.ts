@@ -98,6 +98,28 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
     expect(partial).toContain('Bravo');
   });
 
+  it.each([[' ', 'a space'], ['\t', 'a tab'], ['', 'an empty string']])(
+    'treats %s as no filter at all',
+    async (blank) => {
+      // `category.trim()` turns these into "", and `''.includes('')` is true
+      // for every row, so a blank argument showed everything in the window --
+      // uncategorised rows included -- while reading as though it had
+      // filtered. The condition that decides there is a filter and the one
+      // that applies it are now the same expression, which is what #96 was
+      // about.
+      const blankReply = await ask(blank);
+      const unfiltered = (
+        await handlerFor(registerGetTransactions)({
+          start_date: '2026-09-01',
+          end_date: '2026-09-30',
+        })
+      ).content[0].text;
+
+      expect(blankReply).toBe(unfiltered);
+      expect(blankReply).not.toMatch(/No category matches/);
+    },
+  );
+
   it('says the category was not found instead of showing an empty list', async () => {
     // The other half of the bug. "No transactions found" is a wrong answer to
     // a question nobody asked; the question was about a category that is not

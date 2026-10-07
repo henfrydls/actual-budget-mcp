@@ -266,7 +266,8 @@ export async function createTransactions(input: {
           complain(
             row.index,
             `imported_id "${row.importedId}" is already in ${row.accountName}, so this row ` +
-              `has been recorded before.`,
+              `has been recorded before. If your bank reused the id and this is a different ` +
+              `movement, send it without an imported_id, or with one of your own.`,
           );
         }
       }
@@ -327,10 +328,18 @@ export async function createTransactions(input: {
       }
       const untouched = rows.length - failed.size;
       if (untouched > 0) {
+        // "Fix them and send the same list again" is good advice for a bad
+        // category or an unusable amount. It is wrong for a row whose id is
+        // already recorded: that row is not broken, it is done, and the fix is
+        // to drop it rather than to correct it. Telling someone to fix it
+        // invites them to change the id, which writes the movement twice.
+        const alreadyRecorded = problems.some((p) => p.reason.includes('has been recorded before'));
         lines.push(
           '',
           `The other ${untouched} row${untouched === 1 ? ' was' : 's were'} fine and ${untouched === 1 ? 'was' : 'were'} not written either: the batch is all or nothing,`,
-          'so fixing the rows above and sending the same list again creates every one of them.',
+          alreadyRecorded
+            ? 'so send the list again without the rows that are already recorded, and fix any others.'
+            : 'so fixing the rows above and sending the same list again creates every one of them.',
         );
       }
       return lines;
