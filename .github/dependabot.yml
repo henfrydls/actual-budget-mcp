@@ -1,0 +1,51 @@
+# Watch the two dependencies that can break a user without anyone noticing.
+#
+# #139 was someone whose budget no tool could read: their Actual had migrated
+# past the library this server was built with, and nothing here looked at
+# whether a newer one existed. The asymmetry is what makes it worth automating.
+# The declared range is a caret, so a fresh `npx` install resolves the newer
+# library by itself; the `.mcpb` and the Docker image build with `npm ci` and
+# carry whatever the lockfile pins. So the only people who break are the ones
+# who cannot fix it themselves.
+#
+# A scheduled script that opened an issue saying "26.11 is out" was the other
+# option. A pull request is better here because of what CI does to one: it
+# builds the extension, checks a SQLite binary exists for every platform the
+# manifest declares, builds the Alpine image and opens a database in it. Both
+# workflows run on `pull_request`, and neither needs a secret outside a
+# release, so a Dependabot PR gets the full set.
+#
+# That is not hypothetical. Moving to 26.10 by hand broke the bundle build
+# outright -- better-sqlite3 13 stopped publishing the prebuilt binaries the
+# script downloaded -- and broke the image, which tried to compile a binary it
+# already had. A PR that only said "a version is out" would have reported a
+# number; a PR that runs the pipeline would have shown both failures the day
+# the release landed, three days before a user found the first one.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    # Only these two. Every other production dependency here is dotenv and
+    # zod, which fail loudly at build time if they break; these two fail in a
+    # user's budget. A weekly stream of major bumps nobody intends to take is
+    # how a config like this gets switched off.
+    allow:
+      - dependency-name: "@actual-app/api"
+      - dependency-name: "@modelcontextprotocol/sdk"
+    # Separately, because they are read for different reasons. A new Actual is
+    # about what a user's budget needs; a new MCP SDK moved the audit gate
+    # under this repository once already, between one day and the next.
+    groups:
+      actual:
+        patterns:
+          - "@actual-app/*"
+      protocol:
+        patterns:
+          - "@modelcontextprotocol/*"
+    # Three is more than this can produce in a week and still a ceiling.
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
