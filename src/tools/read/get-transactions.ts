@@ -225,12 +225,34 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     );
   }
 
+  // An id or a name, like every other tool that takes a category.
+  //
+  // It compared the row's resolved *name* with the argument, so an id never
+  // matched and the reply was an empty list, which reads as "this category has
+  // nothing" (#136). That is the one tool where the same argument quietly
+  // meant something else, and the documentation recommends ids exactly where
+  // names collide, so it steered people onto the path that failed.
+  //
+  // Names keep matching on a substring, which is what they have always done
+  // and what makes `category: "Super"` find "Supermercado". An id is matched
+  // whole: a partial id is not a search, it is a typo.
+  let categoryNotFound = false;
   if (category) {
-    const lower = category.toLowerCase();
-    allTransactions = allTransactions.filter((t) => {
-      const catName = t.category ? categoryMap.get(t.category) : '';
-      return catName?.toLowerCase().includes(lower);
-    });
+    if (categoryMap.has(category)) {
+      allTransactions = allTransactions.filter((t) => t.category === category);
+    } else {
+      const lower = category.toLowerCase();
+      const matches = [...categoryMap.values()].some((name) =>
+        name.toLowerCase().includes(lower),
+      );
+      // Nothing by that name and nothing by that id. Saying so beats an empty
+      // list: one is a question answered, the other is a wrong answer.
+      if (!matches) categoryNotFound = true;
+      allTransactions = allTransactions.filter((t) => {
+        const catName = t.category ? categoryMap.get(t.category) : '';
+        return catName?.toLowerCase().includes(lower);
+      });
+    }
   }
 
   if (needle !== '') {
@@ -272,6 +294,12 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   const limited = allTransactions.slice(0, limit);
 
   if (limited.length === 0) {
+    if (categoryNotFound) {
+      return (
+        `No category matches "${category}", so nothing was searched. Check the name, or ` +
+        'use get_categories to see what is there. An id works here too, in full.'
+      );
+    }
     return `No transactions found for the specified filters (${startDate} to ${endDate}).`;
   }
 

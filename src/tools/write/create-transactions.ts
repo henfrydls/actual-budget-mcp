@@ -216,17 +216,51 @@ export async function createTransactions(input: {
       // `allow_duplicate`, and for a turn that advice led nowhere, because the
       // check ran either way and refused the batch again. A test asking for the
       // way out is what found it.
+      // Two ways a row can repeat another in the same call, and they are not
+      // the same claim.
+      //
+      // The bank's own id is the stronger one: two rows carrying it are the
+      // same movement by definition, whatever their amounts say. Measured
+      // before this existed, two rows sharing `BANK-NEW` and differing in date
+      // and amount were both written, while the tool's description promises
+      // that resending a batch cannot duplicate an `imported_id` (#143). That
+      // promise held across calls and not within one, because the check that
+      // enforced it asked the budget rather than the batch.
+      //
+      // Account, date and amount is the weaker one: those rows might genuinely
+      // be two movements, which is what `allow_duplicate` is for.
       const seen = new Map<string, number>();
       for (const row of resolved) {
-        const key = `${row.accountId}|${row.date}|${row.amountCents}`;
-        const first = seen.get(key);
-        if (first !== undefined) {
-          problems.push({
-            index: row.index,
-            reason: `repeats row ${first + 1}: same account, date and amount. If both really happened, pass allow_duplicate.`,
+        const checks: Array<{ key: string; reason: (first: number) => string }> = [];
+        if (row.importedId) {
+          checks.push({
+            key: `imported_id|${row.importedId}`,
+            reason: (first) =>
+              `repeats row ${first + 1}: same imported_id "${row.importedId}". A bank id ` +
+              `identifies one movement, so two rows carrying it are the same one twice. If ` +
+              `they really are different movements, give them different ids.`,
           });
-        } else {
-          seen.set(key, row.index);
+        }
+        checks.push({
+          key: `${row.accountId}|${row.date}|${row.amountCents}`,
+          reason: (first) =>
+            `repeats row ${first + 1}: same account, date and amount. If both really happened, pass allow_duplicate.`,
+        });
+
+        // At most one complaint per row: saying it twice about the same row
+        // reads as two problems and makes the reader look for two fixes.
+        let reported = false;
+        for (const check of checks) {
+          const first = seen.get(check.key);
+          if (first !== undefined && !reported) {
+            problems.push({ index: row.index, reason: check.reason(first) });
+            reported = true;
+          }
+        }
+        // Every key is recorded whether or not this row was flagged, so a
+        // third row repeating the first is still caught.
+        for (const check of checks) {
+          if (!seen.has(check.key)) seen.set(check.key, row.index);
         }
       }
 
