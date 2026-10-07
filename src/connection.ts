@@ -157,6 +157,34 @@ const ENGINE_MARKERS = [
 
 type FailureKind = (typeof ENGINE_MARKERS)[number]['kind'];
 
+/**
+ * Replace anything the user configured as a secret before quoting the engine.
+ *
+ * The line this quotes goes three places that are all wrong for a password:
+ * the tool reply, which the model reads; stderr, which a host writes to a log
+ * file; and the text the message asks the person to paste into a public issue.
+ * The engine builds its own error strings and has pasted a URL with
+ * credentials in it before now, so the quote is filtered rather than trusted.
+ *
+ * Only values actually configured are replaced, longest first so a token that
+ * contains the password does not leave the tail behind. Short values are left
+ * alone: a one or two character secret would match half the sentence, and
+ * redacting the whole line would hide the thing it was quoted for.
+ */
+function redactSecrets(line: string): string {
+  const secrets = [
+    process.env.ACTUAL_PASSWORD,
+    process.env.ACTUAL_SESSION_TOKEN,
+    process.env.ACTUAL_ENCRYPTION_PASSWORD,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.length >= 4)
+    .sort((a, b) => b.length - a.length);
+
+  let out = line;
+  for (const secret of secrets) out = out.split(secret).join('***');
+  return out;
+}
+
 /** Where the cached copy lives, which is what the reader has to delete. */
 function cacheHint(): string {
   return claimedDataDir
@@ -177,11 +205,36 @@ function cacheHint(): string {
  * It does not say the budget is undamaged. On the inconsistent-cache path the
  * local copy *is* damaged, and the previous wording promised otherwise.
  */
-function loadFailureMessage(kind: FailureKind | undefined, detail: string | undefined): string {
+function loadFailureMessage(
+  kind: FailureKind | undefined,
+  detail: string | undefined,
+  /** Set when the read itself failed: the database answered, with this. */
+  why?: string,
+): string {
   const version = actualApiVersion();
+  // Only the branch that offers two remedies asks which one fits. The others
+  // offer one, so the question would be asking the reader to choose between a
+  // single thing.
   const report =
     ' If neither fits, please say so at ' +
     'https://github.com/henfrydls/actual-budget-mcp/issues with this message.';
+  const pleaseReport =
+    ' Please report this at https://github.com/henfrydls/actual-budget-mcp/issues with ' +
+    'this message.';
+
+  // The database answered, and what it said is the thing to act on. Sending
+  // this person to delete their cache would destroy a healthy copy over a lock
+  // that clears on its own: `SQLITE_BUSY: database is locked` means another
+  // process has it open, not that anything is wrong with it.
+  if (why) {
+    return (
+      'This server could not read your budget. The database answered: ' +
+      `${redactSecrets(why)}. Nothing is wrong with your password, URL or Sync ID. If ` +
+      'another program has the budget open -- the Actual app, or a second copy of this ' +
+      'server on the same ACTUAL_DATA_DIR -- close it and try again.' +
+      pleaseReport
+    );
+  }
 
   switch (kind) {
     case 'migrations':
@@ -193,7 +246,7 @@ function loadFailureMessage(kind: FailureKind | undefined, detail: string | unde
         `it. Or the local copy is inconsistent, in which case delete ${cacheHint()} so it ` +
         'is downloaded again. Nothing is wrong with your password, URL or Sync ID, and the ' +
         'budget on your server is untouched either way.' +
-        report
+        pleaseReport
       );
     case 'data':
       return (
@@ -201,20 +254,20 @@ function loadFailureMessage(kind: FailureKind | undefined, detail: string | unde
         `with your server. Delete ${cacheHint()} so it is downloaded again. Nothing is ` +
         'wrong with your password, URL or Sync ID, and the budget on your server is ' +
         'untouched.' +
-        report
+        pleaseReport
       );
     case 'corrupt':
       return (
         'This server could not open your budget: the cached copy is not a readable ' +
         `database. Delete ${cacheHint()} so it is downloaded again. The budget on your ` +
         'server is untouched.' +
-        report
+        pleaseReport
       );
     case 'loading':
       return (
         'This server downloaded your budget but could not finish opening it. Delete ' +
         `${cacheHint()} so it is downloaded again. The budget on your server is untouched.` +
-        report
+        pleaseReport
       );
     default:
       // Nothing recognised. Saying so, with whatever the engine did say, beats
@@ -228,16 +281,21 @@ function loadFailureMessage(kind: FailureKind | undefined, detail: string | unde
         'reason is not one it recognises. Your password, URL and Sync ID are fine, or the ' +
         `connection would have failed earlier. Deleting ${cacheHint()} so it is downloaded ` +
         'again is the usual fix.' +
-        (detail ? ` The engine said: ${detail}` : ' The engine said nothing at all.') +
-        ' Please report this at https://github.com/henfrydls/actual-budget-mcp/issues with ' +
-        'this message.'
+        (detail
+          ? ` The engine said: ${redactSecrets(detail)}.`
+          : ' The engine said nothing at all.') +
+        pleaseReport
       );
   }
 }
 
 /** Says it on stderr as well, because the tool reply is not always read. */
-function reportLoadFailure(kind: FailureKind | undefined, detail: string | undefined): Error {
-  const message = loadFailureMessage(kind, detail);
+function reportLoadFailure(
+  kind: FailureKind | undefined,
+  detail: string | undefined,
+  why?: string,
+): Error {
+  const message = loadFailureMessage(kind, detail, why);
   // stderr: stdout carries JSON-RPC.
   console.error(`[actual-budget-mcp] ${message}`);
   return new Error(message);
@@ -351,11 +409,21 @@ async function warnIfServerIsOlder(): Promise<void> {
     // whole startup here, on a warning nobody asked for. The global fetch
     // deadline (#99) covers the request, but not a promise that never settles
     // for some other reason, so the race is belt and braces.
-    const reported = (await Promise.race([
-      api.getServerVersion(),
-      new Promise((resolve) => setTimeout(() => resolve(undefined), VERSION_CHECK_TIMEOUT_MS)),
-    ])) as { version?: string } | undefined;
-    serverVersion = reported?.version;
+    // The timer is cleared whichever side wins. Left running, it keeps the
+    // event loop alive for its full five seconds after everything else is
+    // done, which `test:connection` pays for on every successful run.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const reported = (await Promise.race([
+        api.getServerVersion(),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(undefined), VERSION_CHECK_TIMEOUT_MS);
+        }),
+      ])) as { version?: string } | undefined;
+      serverVersion = reported?.version;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   } catch {
     // Not every server answers this, and a missing version is not a reason to
     // refuse to work.
@@ -488,8 +556,9 @@ export async function ensureConnection(): Promise<void> {
       const open = await budgetIsOpen();
       if (!open.open) {
         // `why` wins over the console: it is what the read itself said, which
-        // beats a line scraped from a log.
-        throw reportLoadFailure(open.why ? undefined : outcome.kind, open.why ?? outcome.detail);
+        // beats a line scraped from a log, and it needs its own wording --
+        // a database that answered is not a cache to delete.
+        throw reportLoadFailure(outcome.kind, outcome.detail, open.why);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

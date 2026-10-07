@@ -102,14 +102,16 @@ DECLARED=$(node -p "JSON.parse(require('fs').readFileSync('$ROOT/manifest.json',
 MISSING=""
 COUNT=0
 for plat in $DECLARED; do
-  found=""
+  # Per architecture, like the post-pack check. Counting a platform as present
+  # because one of its two builds is there made `bundled N` read as a complete
+  # set when it was not.
   for arch in x64 arm64; do
     if [ -f "$PREBUILDS/$plat-$arch.node" ]; then
       COUNT=$((COUNT + 1))
-      found="yes"
+    else
+      MISSING="$MISSING $plat-$arch"
     fi
   done
-  [ -n "$found" ] || MISSING="$MISSING $plat"
 done
 
 # musl is not in `compatibility` (it is not a platform Claude Desktop reports)

@@ -174,18 +174,130 @@ describe('a budget that does not open (#139)', () => {
     expect(message).not.toMatch(/Breadcrumb/);
   });
 
+  const databaseAnswers = (error: string) => {
+    downloadBudget.mockImplementation(async () => {});
+    getBudgetMonths.mockImplementation(async () => {
+      throw new Error(error);
+    });
+  };
+
   it('keeps the real reason when the read fails for another reason', async () => {
     // `budgetIsOpen` used to swallow everything, so a locked database came out
     // as "the budget did not open, delete your cache" — advice that destroys a
     // healthy copy and loses the one line that said what was wrong.
-    downloadBudget.mockImplementation(async () => {});
-    getBudgetMonths.mockImplementation(async () => {
-      throw new Error('SQLITE_BUSY: database is locked');
-    });
+    databaseAnswers('SQLITE_BUSY: database is locked');
 
     const message = ((await connect()) as Error).message;
     expect(message).toContain('SQLITE_BUSY');
     expect(message).not.toMatch(/said nothing at all/i);
+  });
+
+  it('does not send a locked database to be deleted', async () => {
+    // Quoting the error was half of it. A lock clears on its own when whatever
+    // holds it lets go; deleting the folder destroys a healthy copy to fix a
+    // problem that was never about the file.
+    databaseAnswers('SQLITE_BUSY: database is locked');
+
+    const message = ((await connect()) as Error).message;
+    expect(message).not.toMatch(/delete/i);
+    expect(message).toMatch(/close it and try again/i);
+  });
+
+  it('ends its sentences', async () => {
+    // The quoted line ran straight into the next sentence: "…is locked Please
+    // report this at…".
+    databaseAnswers('SQLITE_BUSY: database is locked');
+
+    const message = ((await connect()) as Error).message;
+    expect(message).not.toMatch(/locked Please/);
+    expect(message).toMatch(/locked\. /);
+  });
+
+  it('ends the quoted engine line too', async () => {
+    // Two places quote a line, and only one of them had the full stop.
+    engineLogs('[Exception] Error: budget directory does not exist');
+
+    const message = ((await connect()) as Error).message;
+    expect(message).not.toMatch(/exist Please/);
+    expect(message).toMatch(/exist\. /);
+  });
+
+  it('leaves no timer running once it has connected', async () => {
+    // The version check races a five-second timer. Left unclear, it holds the
+    // event loop open for its full duration after everything else is done,
+    // which `test:connection` pays for on every successful run.
+    vi.useFakeTimers();
+    try {
+      getServerVersion.mockResolvedValue({ version: '26.10.0' });
+      downloadBudget.mockImplementation(async () => {});
+      getBudgetMonths.mockResolvedValue(['2026-01']);
+
+      const { ensureConnection } = await import('../../connection.js');
+      await ensureConnection();
+
+      expect(vi.getTimerCount(), 'a timer outlived the connection').toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['ACTUAL_PASSWORD', 'hunter2-the-real-one'],
+    ['ACTUAL_SESSION_TOKEN', 'tok_live_9f3b2a7c4e1d'],
+    ['ACTUAL_ENCRYPTION_PASSWORD', 'e2e-key-correct-horse'],
+  ])('never quotes %s back', async (name, value) => {
+    // The quoted line reaches the model, a log file, and a public issue the
+    // message itself asks the person to open. The engine builds its own error
+    // strings and has put credentials in them before.
+    process.env[name] = value;
+    try {
+      databaseAnswers(`connection failed for ${value} at the server`);
+
+      const message = ((await connect()) as Error).message;
+      expect(message).not.toContain(value);
+      expect(message).toContain('***');
+      // Still useful: the rest of the line survives.
+      expect(message).toMatch(/connection failed for/);
+    } finally {
+      delete process.env[name];
+    }
+  });
+
+  it('redacts a secret quoted from the console too', async () => {
+    // Not only the read's own error: the line scraped off the engine's log
+    // goes to the same three places.
+    process.env.ACTUAL_PASSWORD = 'hunter2-the-real-one';
+    try {
+      engineLogs('Error: auth failed for hunter2-the-real-one');
+
+      const message = ((await connect()) as Error).message;
+      expect(message).not.toContain('hunter2-the-real-one');
+      expect(message).toContain('***');
+    } finally {
+      process.env.ACTUAL_PASSWORD = 'not-a-real-password';
+    }
+  });
+
+  it('leaves a short value alone rather than blanking the sentence', async () => {
+    // A two-character secret would match half the words in the line, and a
+    // message redacted to nothing hides the thing it was quoted for.
+    process.env.ACTUAL_PASSWORD = 'ab';
+    try {
+      databaseAnswers('database is locked');
+
+      const message = ((await connect()) as Error).message;
+      expect(message).toContain('database is locked');
+    } finally {
+      process.env.ACTUAL_PASSWORD = 'not-a-real-password';
+    }
+  });
+
+  it('offers one remedy without asking which one fits', async () => {
+    engineLogs('Error updating Error: out-of-sync-data');
+
+    const message = ((await connect()) as Error).message;
+    expect(message).not.toMatch(/If neither fits/i);
+    expect(message).toMatch(/Please report this/);
   });
 
   it('says so on stderr too, not only in the reply', async () => {
@@ -300,7 +412,9 @@ describe('a budget that does not open (#139)', () => {
       await ensureConnection();
       const elapsed = Date.now() - started;
 
-      expect(elapsed, `took ${elapsed}ms`).toBeLessThan(20_000);
+      // Tight enough to fail if the deadline is gone: the call never settles,
+      // so without it this waits forever and with it, five seconds.
+      expect(elapsed, `took ${elapsed}ms`).toBeLessThan(9_000);
       expect(stderr.join('\n')).not.toMatch(/migrate/i);
     }, 30_000);
 
