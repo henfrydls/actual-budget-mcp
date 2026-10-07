@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.10.1
+
+A patch release, and one that asks something of you before you install it: see
+*Before you update* below. Five things that went wrong while this server was in
+use, and one that is still open.
+
+### Before you update
+
+- **Node 22.14 or newer.** Actual's SQLite library is built against N-API 10,
+  which arrives in that release; on an older Node it crashes rather than
+  failing, with no message. The server now refuses to start there and says so.
+  The Desktop Extension runs on the Node that Claude Desktop ships, which has
+  been newer than this every time it was checked.
+- **On Linux, glibc 2.34 or newer.** The SQLite library Actual uses ships a
+  Linux binary that requires it, so Debian 11, Ubuntu 20.04 and RHEL 8 cannot
+  run this release directly. The Docker image carries its own glibc and works
+  on all of them.
+- **If your Actual server is older than 26.10, update it first.** Opening your
+  budget with this version migrates it to the newer format, and the next sync
+  uploads that. An Actual app still on the older version can then no longer
+  open it. Actual's own apps do this too when they update; the
+  difference is that this one can reach your budget before you have updated
+  anything else. The server now warns about this on startup, before it
+  downloads anything.
+- **Installing from a clone** needs Python available, or `npm ci
+  --ignore-scripts`. Nothing is lost by the latter: it is what the extension
+  and the Docker image already do.
+
+### Fixes
+
+- With Actual 26.10, the Desktop Extension could not open budgets at all: every
+  tool answered `No budget file is open`, and nothing in the logs said why. The
+  budget had been migrated by the newer Actual and the extension carried an
+  older library, which cannot read it. This version carries Actual 26.10, so it
+  opens. And when a budget cannot be opened for any reason, the server now says
+  which reason and what to do about it, instead of naming a file. (#139)
+- An Actual server that accepted the connection and then stopped answering held
+  every write for five minutes. There is now a 60-second limit on how long this
+  server waits for your Actual server to *start* replying; the reply itself can
+  take as long as it needs, so a slow budget download is not cut off. Raise it with
+  `ACTUAL_HTTP_TIMEOUT_MS`, or with *Server reply timeout (ms)* if you use the
+  desktop extension. Worth knowing if your bank is slow: of the bank sync
+  providers, GoCardless was the only one without a limit of its own, so it is
+  the one this setting governs. (#99)
+- Two tool calls arriving together could each act on a budget the other was
+  halfway through changing. A delete and a create sent at once refused the new
+  transaction as a duplicate of the row the delete had just removed; a batch
+  sent beside a single create wrote the same movement twice; and a batch could
+  write into an account that had just been deleted, leaving a row no account
+  view can show. Every tool that changes transactions now takes its turn,
+  including batches, bank syncs and deletes. One consequence to expect: while a
+  bank sync runs, other writes wait for it. (#111)
+- `transfer_between_categories` leaves a note on the month saying what moved,
+  and it formatted the amount as though every currency had two decimal places.
+  In a currency that has none, the note read a hundred times too small: moving
+  10,000 was written down as 100.00. It uses the budget's own currency now.
+  This was the note's wording only; in those same currencies the amount you ask
+  for is still converted wrongly, which is the open bug listed below. (#115)
+- `category_trends` divided one month by the next even when the sign had
+  changed, so a category that stopped spending and started receiving money was
+  reported as a fall of 707.5%. It now says the direction changed, in both the
+  single-category and the top-categories view, and the average no longer mixes
+  reimbursements in with what was spent. (#133)
+
+### Known, and not fixed here
+
+- In a currency with no decimal places (JPY, KRW, IRR), amounts are out by a
+  factor of a hundred in both directions: asking to spend 100 records 10,000,
+  and a real 1,000 is reported as 10.00. Budgets in any other currency are
+  unaffected. (#141)
+
 ## 0.10.0
 
 Most of this release comes from using the server against a real budget and

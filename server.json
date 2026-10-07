@@ -8,13 +8,13 @@
     "source": "github",
     "id": "henfrydls/actual-budget-mcp"
   },
-  "version": "0.10.0",
+  "version": "0.10.1",
   "websiteUrl": "https://actual-mcp.henfrydls.com",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "actual-budget-mcp",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -57,12 +57,17 @@
           "name": "ACTUAL_DATA_DIR",
           "description": "Directory for the local budget cache",
           "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_TIMEOUT_MS",
+          "description": "How long to wait for your server to start replying, in milliseconds. Defaults to 60000; raise it if a GoCardless bank sync is being cut off",
+          "isRequired": false
         }
       ]
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/henfrydls/actual-budget-mcp:0.10.0",
+      "identifier": "ghcr.io/henfrydls/actual-budget-mcp:0.10.1",
       "transport": {
         "type": "stdio"
       },
@@ -92,6 +97,11 @@
         {
           "name": "ACTUAL_READ_ONLY",
           "description": "Set to 1 to hide every write tool from the model, exposing only reads and analysis",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_TIMEOUT_MS",
+          "description": "How long to wait for your server to start replying, in milliseconds. Defaults to 60000; raise it if a GoCardless bank sync is being cut off",
           "isRequired": false
         }
       ]
