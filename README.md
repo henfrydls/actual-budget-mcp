@@ -950,7 +950,7 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
 - Opening a budget runs any migration the library has and the file does not,
   and the next sync uploads the result. From 0.10.1 this server carries Actual
   **26.10**, so pointing it at a 26.9 server migrates the budget to the newer
-  format — after which an Actual app still on 26.9 cannot open it. Measured: 59
+  format, and an Actual app still on 26.9 then cannot open it. Measured: 59
   migrations become 60.
 - Actual's own apps do exactly the same when they update; the difference is
   that this one can reach your budget before you have updated anything else.
@@ -958,7 +958,7 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
   its library, before downloading anything.
 - **Solution:** update your Actual server and apps to 26.10 or newer *before*
   using this version. If you have already hit it, update them and the budget
-  opens again — nothing is lost.
+  opens again, with nothing lost.
 
 **"version `GLIBC_2.34' not found", or the budget never opens on an older Linux**
 - Actual's SQLite binary for Linux is built against **glibc 2.34**, so it does
@@ -971,7 +971,7 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
 
 **"gyp ERR! find Python" when installing from source**
 - Installing from a clone runs `npm ci`, and npm builds any package that ships
-  a `binding.gyp` — which `better-sqlite3` does, even though it needs no
+  a `binding.gyp`, which `better-sqlite3` does even though it needs no
   building: the binary it uses is already in the package.
 - **Solution:** `npm ci --ignore-scripts`. Nothing is lost; that is what the
   extension and the Docker image do.

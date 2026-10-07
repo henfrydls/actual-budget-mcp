@@ -11,14 +11,16 @@ use, and one that is still open.
 - **Node 22.14 or newer.** Actual's SQLite library is built against N-API 10,
   which arrives in that release; on an older Node it crashes rather than
   failing, with no message. The server now refuses to start there and says so.
-  The Desktop Extension is unaffected — it uses the Node Claude Desktop ships.
-- **On Linux, glibc 2.34 or newer.** Actual's Linux binary requires it, so
-  Debian 11, Ubuntu 20.04 and RHEL 8 cannot run this release directly. The
-  Docker image carries its own and works on all of them.
+  The Desktop Extension runs on the Node that Claude Desktop ships, which has
+  been newer than this every time it was checked.
+- **On Linux, glibc 2.34 or newer.** The SQLite library Actual uses ships a
+  Linux binary that requires it, so Debian 11, Ubuntu 20.04 and RHEL 8 cannot
+  run this release directly. The Docker image carries its own glibc and works
+  on all of them.
 - **If your Actual server is older than 26.10, update it first.** Opening your
   budget with this version migrates it to the newer format, and the next sync
-  uploads that — after which an Actual app still on the older version can no
-  longer open it. Actual's own apps do this too when they update; the
+  uploads that. An Actual app still on the older version can then no longer
+  open it. Actual's own apps do this too when they update; the
   difference is that this one can reach your budget before you have updated
   anything else. The server now warns about this on startup, before it
   downloads anything.
