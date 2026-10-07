@@ -13,19 +13,28 @@
 #     real install Claude Desktop gave up first and showed "could not connect";
 #     the server finished installing minutes later and worked, by which time the
 #     user had been told it was broken.
-#   - better-sqlite3 publishes prebuilt binaries for ABI 127, 137, 141 and 147
-#     only. Node 20 (ABI 115) and Node 23 (131) compile from source, so they
-#     need a C++ toolchain, which a user of a desktop app has no reason to have.
-#     Node 20 is the floor this project advertises.
-#   - The Node that runs it is whatever the user has, so neither of those is
+#   - A user of a desktop app has no reason to have a C++ toolchain, so
+#     anything that compiles on install is out.
+#   - The Node that runs it is whatever the host ships, so neither of those is
 #     under our control.
 #
 # What the premise for that decision got wrong: it said better-sqlite3 ships no
-# prebuilt binaries. It ships plenty, one per ABI and platform, as ordinary
-# release downloads. So the bundle carries one for every ABI and platform it
-# supports, and picks the match at startup (src/utils/native-binding.ts). That
-# is what makes a single artifact correct whether the host runs it with its own
-# Node or with the user's, a question we could not answer and no longer need to.
+# prebuilt binaries. It ships them, and how it ships them has changed twice,
+# which is worth recording because the script changed with it.
+#
+#   up to 12.x  one binary per ABI and platform, as release downloads. The
+#               bundle carried all of them and chose the match at startup
+#               (src/utils/native-binding.ts), because a binary built for ABI
+#               137 will not load on a Node reporting 127.
+#   13.x on     N-API binaries inside the npm package, one per platform, no
+#               ABI in the name. Nothing is downloaded and nothing is chosen:
+#               `npm ci` puts them in place and better-sqlite3 resolves its own.
+#               The releases carry no assets at all from 13.0.0 (21 July 2026),
+#               so the old approach does not merely cost more, it finds nothing.
+#
+# The floor moved with it: N-API 10 arrives in Node 22.14, and on anything older
+# the binary loads and then segfaults. src/utils/runtime-check.ts refuses to
+# start there rather than letting that happen.
 #
 # The cost is honest and worth stating: the download is large, once, with a
 # progress bar. The alternative was small, every install, in silence.
@@ -65,85 +74,63 @@ rm -f "$STAGE/package-lock.json"
 # ~10 MB of SQLite C sources, needed only to compile. The bundle never compiles.
 rm -rf "$STAGE/node_modules/better-sqlite3/deps"
 
-# One binary per ABI and platform, laid out the way native-binding.ts looks for
-# them.
+# The SQLite binaries, which now come inside the npm package.
 #
-# The ABI list is read from the release rather than written here, because the
-# Node an extension runs on is not ours to pin and it moves on its own: Claude
-# Desktop ships its own Node and updated it from 22.19.0 to 24.20.0 (ABI 127 to
-# 137) during a single afternoon of testing. A hardcoded list would have been
-# correct on the day it was written and would break the day a host moved to an
-# ABI nobody remembered to add, with the extension reporting "no SQLite binary
-# for node-vNNN" to a user who did nothing wrong.
+# They used to be downloaded one per (ABI, platform) from better-sqlite3's
+# GitHub releases, because the binary was tied to a Node ABI and Claude Desktop
+# moves its own Node without asking: it went from 22.19.0 to 24.20.0, ABI 127 to
+# 137, during a single afternoon of testing.
 #
-# Whatever better-sqlite3 publishes, the bundle carries. ABIs with no prebuild
-# (115 for Node 20, 131 for Node 23) are absent from the release and so absent
-# here, which is also why those Node versions are not supported.
-BETTER_SQLITE3=$(node -p "require('$ROOT/node_modules/better-sqlite3/package.json').version")
-BASE="https://github.com/WiseLibs/better-sqlite3/releases/download/v${BETTER_SQLITE3}"
-PLATFORMS="darwin-arm64 darwin-x64 win32-x64 win32-arm64 linux-x64 linux-arm64"
+# better-sqlite3 13 ends both halves of that. The binaries are N-API, so one per
+# platform covers every Node, and they ship in the package itself under
+# `prebuilds/<platform>-<arch>.node`, resolved by its own `lib/binding.js`. The
+# download is not just unnecessary now, it is impossible: no release from
+# 13.0.0 onwards (21 July 2026) carries a single asset, while 12.12.0 carried
+# 145. Building this with the old script against the new library downloaded
+# nothing at all and stopped, which is how this was found.
+#
+# So `npm ci` above has already put them in place. What is left is to check they
+# are there, because a bundle that cannot open a database must not ship.
+PREBUILDS="$STAGE/node_modules/better-sqlite3/prebuilds"
 
-# Falls back to the ABIs known when this was written, so a rate-limited or
-# unreachable API degrades to the old behaviour instead of building a bundle
-# with no binaries in it.
-FALLBACK_ABIS="127 137 141 147"
-ABIS=$(curl -sfL "https://api.github.com/repos/WiseLibs/better-sqlite3/releases/tags/v${BETTER_SQLITE3}" \
-  | node -e "
-    let raw = '';
-    process.stdin.on('data', (c) => (raw += c));
-    process.stdin.on('end', () => {
-      try {
-        const names = (JSON.parse(raw).assets || []).map((a) => a.name);
-        const abis = new Set();
-        for (const name of names) {
-          const m = /-node-v(\\d+)-/.exec(name);
-          if (m) abis.add(Number(m[1]));
-        }
-        console.log([...abis].sort((a, b) => a - b).join(' '));
-      } catch {
-        // Nothing printed; the caller falls back.
-      }
-    });
-  " 2>/dev/null) || true
-if [ -z "${ABIS// /}" ]; then
-  echo "note: could not read the published ABI list, using $FALLBACK_ABIS" >&2
-  ABIS="$FALLBACK_ABIS"
-fi
-echo "SQLite ABIs to bundle: $ABIS" >&2
-
-mkdir -p "$STAGE/server/prebuilds"
+# Which platforms must have one is read from the manifest rather than written
+# here, so the promise and the contents cannot drift apart: `compatibility`
+# tells a user their machine is supported before they install, and a bundle
+# that says darwin and carries no darwin binary is a download that fails on
+# first use. Either the binary is there or the claim comes out.
+DECLARED=$(node -p "JSON.parse(require('fs').readFileSync('$ROOT/manifest.json','utf8')).compatibility.platforms.join(' ')")
+MISSING=""
 COUNT=0
-for abi in $ABIS; do
-  for plat in $PLATFORMS; do
-    key="node-v${abi}-${plat}"
-    url="${BASE}/better-sqlite3-v${BETTER_SQLITE3}-${key}.tar.gz"
-    dir="$STAGE/server/prebuilds/$key"
-    mkdir -p "$dir"
-    if curl -sfL "$url" | tar xz -C "$dir" --strip-components=2 build/Release/better_sqlite3.node 2>/dev/null; then
+for plat in $DECLARED; do
+  # Per architecture, like the post-pack check. Counting a platform as present
+  # because one of its two builds is there made `bundled N` read as a complete
+  # set when it was not.
+  for arch in x64 arm64; do
+    if [ -f "$PREBUILDS/$plat-$arch.node" ]; then
       COUNT=$((COUNT + 1))
     else
-      # A missing combination is not fatal, but it must not pass unnoticed:
-      # a user on it would get "no SQLite binary for <key>" at startup.
-      rmdir "$dir"
-      echo "note: no prebuild published for $key" >&2
+      MISSING="$MISSING $plat-$arch"
     fi
   done
 done
-if [ "$COUNT" -eq 0 ]; then
-  echo "no prebuilt SQLite binaries could be downloaded; refusing to ship a bundle that cannot open a database" >&2
+
+# musl is not in `compatibility` (it is not a platform Claude Desktop reports)
+# and travels anyway: the package carries it, and an Alpine host is the one
+# place a glibc binary silently is not enough.
+for extra in linuxmusl-x64 linuxmusl-arm64; do
+  [ -f "$PREBUILDS/$extra.node" ] && COUNT=$((COUNT + 1))
+done
+
+if [ -n "$MISSING" ]; then
+  echo "manifest.json declares$MISSING but the package has no SQLite binary for it;" >&2
+  echo "either the binary is missing or the claim should come out of compatibility.platforms" >&2
   exit 1
 fi
-echo "bundled $COUNT SQLite binaries" >&2
-
-# Record which one is in place, so a start whose ABI already matches copies
-# nothing. The binary npm installed here is built for this machine's ABI.
-RELEASE_DIR="$STAGE/node_modules/better-sqlite3/build/Release"
-mkdir -p "$RELEASE_DIR"
-HOST_KEY="node-v$(node -p 'process.versions.modules')-$(node -p 'process.platform')-$(node -p 'process.arch')"
-if [ -f "$STAGE/server/prebuilds/$HOST_KEY/better_sqlite3.node" ]; then
-  cp "$STAGE/server/prebuilds/$HOST_KEY/better_sqlite3.node" "$RELEASE_DIR/better_sqlite3.node"
-  echo "$HOST_KEY" > "$RELEASE_DIR/.installed-abi"
+if [ "$COUNT" -eq 0 ]; then
+  echo "no SQLite binaries found in the package; refusing to ship a bundle that cannot open a database" >&2
+  exit 1
 fi
+echo "bundled $COUNT SQLite binaries (N-API, one per platform)" >&2
 
 # The manifest's tool list is generated from the server itself, not written by
 # hand. Claude Desktop and the directory show it before anyone installs, so a
@@ -167,4 +154,23 @@ cp "$ROOT/README.md" "$STAGE/README.md"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 
 npx --yes @anthropic-ai/mcpb@2.1.2 pack "$STAGE" "$OUT"
+
+# Read back out of the archive, which is the only thing that ships.
+#
+# Every check above this line looks at the staging directory, and a review got
+# three mutations past them for that reason: deleting the binaries after the
+# check and before the pack produced a bundle with none in it and exit 0. What
+# a user installs is the zip, so the zip is what gets inspected -- by its own
+# script, so CI can run it against a bundle broken on purpose.
+# Invoked through `bash` rather than directly: the execute bit is a property
+# of the checkout, not of the repository as every clone sees it, and CI caught
+# this the hard way with "Permission denied" after the bundle had been built.
+# A failure here must not leave a packed file on disk to be mistaken for a good
+# one: a review found 34 MB of broken bundle sitting next to an exit 1.
+if ! bash "$(dirname "${BASH_SOURCE[0]}")/verify-mcpb.sh" "$OUT"; then
+  rm -f "$OUT"
+  echo "removed $OUT" >&2
+  exit 1
+fi
+
 echo "built $OUT"

@@ -7,6 +7,9 @@ vi.mock('@actual-app/api', () => ({
   default: {},
   init: (...a: unknown[]) => init(...a),
   downloadBudget: (...a: unknown[]) => downloadBudget(...a),
+  // The budget being open is now checked rather than assumed (#139), so a mock
+  // that only answers `downloadBudget` leaves the server believing it failed.
+  getBudgetMonths: vi.fn().mockResolvedValue(['2026-01']),
   shutdown: vi.fn().mockResolvedValue(undefined),
   utils: {
     amountToInteger: (a: number) => Math.round(a * 100),
@@ -190,11 +193,21 @@ describe('a budget a newer Actual has already migrated', () => {
     });
   };
 
-  it('says the library is older than the budget, not that a file is missing', async () => {
+  it('says the budget did not open, not that a file is missing', async () => {
+    // The wording changed on purpose in 0.10.1 and this test moved with it.
+    // It used to require "newer than the Actual library", which named one
+    // cause; from Actual 26.10 the same engine code also fires on a local copy
+    // missing a migration it should have, and those two need opposite fixes.
+    // What must never come back is the engine's own sentence about a file.
     actualsBehaviour();
     const { ensureConnection } = await import('../../connection.js');
 
-    await expect(ensureConnection()).rejects.toThrow(/newer than the Actual library/i);
+    const error = await ensureConnection().catch((e: Error) => e);
+    expect((error as Error).message).toMatch(/could not open your budget/i);
+    expect((error as Error).message).not.toMatch(/No budget file is open/);
+    // Both ways out are named, since the message cannot tell which applies.
+    expect((error as Error).message).toMatch(/update actual-budget-mcp|Desktop Extension/i);
+    expect((error as Error).message).toMatch(/delete/i);
   });
 
   it('tells the reader their password and Sync ID are not the problem', async () => {

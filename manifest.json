@@ -100,7 +100,7 @@
       "linux"
     ],
     "runtimes": {
-      "node": ">=22.0.0"
+      "node": ">=22.14.0"
     }
   },
   "privacy_policies": [

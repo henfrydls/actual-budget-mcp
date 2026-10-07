@@ -77,6 +77,58 @@ jobs:
         run: ./scripts/build-mcpb.sh "$RUNNER_TEMP/actual-budget-mcp.mcpb"
       - name: Validate the packed bundle
         run: npx --yes @anthropic-ai/mcpb@2.1.2 info "$RUNNER_TEMP/actual-budget-mcp.mcpb"
+
+      # The build runs this check itself, and a check that only ever sees a
+      # good bundle cannot be shown to work: a review slipped three mutations
+      # past the earlier version, including deleting the binaries after the
+      # check and before the pack. So it is run against a bundle broken on
+      # purpose, and must refuse it. A real platform is removed rather than a
+      # fictional one declared, because `mcpb pack` rejects unknown platforms
+      # by schema and would fail for the wrong reason.
+      - name: The bundle check can fail
+        run: |
+          set -u
+          # A whole platform missing.
+          cp "$RUNNER_TEMP/actual-budget-mcp.mcpb" "$RUNNER_TEMP/no-darwin.mcpb"
+          zip -q -d "$RUNNER_TEMP/no-darwin.mcpb" \
+            "node_modules/better-sqlite3/prebuilds/darwin-*.node"
+          if bash ./scripts/verify-mcpb.sh "$RUNNER_TEMP/no-darwin.mcpb"; then
+            echo "::error::verify-mcpb.sh accepted a bundle with no darwin binary"
+            exit 1
+          fi
+
+          # One architecture missing everywhere, which is the case a check on
+          # the platform prefix alone cannot see: an arm64-only bundle is
+          # broken for every Intel Mac and every x64 Windows.
+          cp "$RUNNER_TEMP/actual-budget-mcp.mcpb" "$RUNNER_TEMP/no-x64.mcpb"
+          zip -q -d "$RUNNER_TEMP/no-x64.mcpb" \
+            "node_modules/better-sqlite3/prebuilds/*-x64.node"
+          if bash ./scripts/verify-mcpb.sh "$RUNNER_TEMP/no-x64.mcpb"; then
+            echo "::error::verify-mcpb.sh accepted an arm64-only bundle"
+            exit 1
+          fi
+          echo "the check refused both, as it should"
+
+      # Refusing is half of it: a packed file left on disk after an exit 1 is
+      # one somebody picks up later believing it was built.
+      - name: A failed build leaves no bundle behind
+        run: |
+          set -u
+          cp scripts/verify-mcpb.sh "$RUNNER_TEMP/verify.bak"
+          printf '#!/usr/bin/env bash\nexit 1\n' > scripts/verify-mcpb.sh
+          rm -f "$RUNNER_TEMP/doomed.mcpb"
+          ./scripts/build-mcpb.sh "$RUNNER_TEMP/doomed.mcpb" && status=0 || status=$?
+          cp "$RUNNER_TEMP/verify.bak" scripts/verify-mcpb.sh
+          if [ "$status" -eq 0 ]; then
+            echo "::error::build-mcpb.sh succeeded with a failing verification"
+            exit 1
+          fi
+          if [ -f "$RUNNER_TEMP/doomed.mcpb" ]; then
+            echo "::error::build-mcpb.sh left a bundle behind after failing"
+            exit 1
+          fi
+          echo "no bundle left behind, as it should be"
+
       # The bundle now carries its own server, so an artifact built here does
       # run this commit. That was not true while it launched a pinned release
       # from npm, and the name said so; the warning can go with the pin.

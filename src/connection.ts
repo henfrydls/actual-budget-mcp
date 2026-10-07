@@ -129,14 +129,209 @@ function unreachableMessage(serverURL: string): string {
  * Reading it off the console is not elegant, and the alternative is worse: the
  * marker is not on the error, so without this the message stays useless.
  */
+/**
+ * What to say when the budget is newer than the library that has to open it.
+ *
+ * One text for both routes below, because there are two and they used to
+ * disagree by one existing and the other not.
+ */
+/**
+ * What the engine says on its way to not opening the budget.
+ *
+ * `loadBudget` returns `{ error: <code> }` and `downloadBudget` **discards the
+ * value** (`await loadBudget$1({ id })` in the bundle), so the code never
+ * reaches a caller. Some of those paths log on their way out and some do not,
+ * which is why the budget being open is checked separately below: the markers
+ * improve the message, they are not what detects the failure.
+ */
+const ENGINE_MARKERS = [
+  { marker: 'out-of-sync-migrations', kind: 'migrations' },
+  { marker: 'out-of-sync-data', kind: 'data' },
+  { marker: 'Error updating budget', kind: 'loading' },
+  // Not a code of its own: the engine answers `opening-budget` without logging
+  // it, and this is what SQLite says underneath when the cached file is not a
+  // database.
+  { marker: 'SQLITE_NOTADB', kind: 'corrupt' },
+  { marker: 'file is not a database', kind: 'corrupt' },
+] as const;
+
+type FailureKind = (typeof ENGINE_MARKERS)[number]['kind'];
+
+/**
+ * Replace anything the user configured as a secret before quoting the engine.
+ *
+ * The line this quotes goes three places that are all wrong for a password:
+ * the tool reply, which the model reads; stderr, which a host writes to a log
+ * file; and the text the message asks the person to paste into a public issue.
+ * The engine builds its own error strings and has pasted a URL with
+ * credentials in it before now, so the quote is filtered rather than trusted.
+ *
+ * Only values actually configured are replaced, longest first so a token that
+ * contains the password does not leave the tail behind. Short values are left
+ * alone: a one or two character secret would match half the sentence, and
+ * redacting the whole line would hide the thing it was quoted for.
+ */
+function redactSecrets(line: string): string {
+  const secrets = [
+    process.env.ACTUAL_PASSWORD,
+    process.env.ACTUAL_SESSION_TOKEN,
+    process.env.ACTUAL_ENCRYPTION_PASSWORD,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.length >= 4)
+    .sort((a, b) => b.length - a.length);
+
+  let out = line;
+  for (const secret of secrets) out = out.split(secret).join('***');
+  return out;
+}
+
+/** Where the cached copy lives, which is what the reader has to delete. */
+function cacheHint(): string {
+  return claimedDataDir
+    ? `the budget's folder inside ${claimedDataDir}`
+    : 'the budget\'s folder inside your ACTUAL_DATA_DIR';
+}
+
+/**
+ * Why the budget did not open, and what to do about it.
+ *
+ * One text per cause, because the two likely ones need opposite actions and an
+ * earlier version named only the first. `out-of-sync-migrations` is no longer
+ * only a version gap: from 26.10 the engine accepts unknown migrations past its
+ * cutoff, so the same code now also means a local copy that is missing a
+ * migration it should have. Telling that person to update the server sends
+ * them nowhere; what fixes it is deleting the cached copy.
+ *
+ * It does not say the budget is undamaged. On the inconsistent-cache path the
+ * local copy *is* damaged, and the previous wording promised otherwise.
+ */
+function loadFailureMessage(
+  kind: FailureKind | undefined,
+  detail: string | undefined,
+  /** Set when the read itself failed: the database answered, with this. */
+  why?: string,
+): string {
+  const version = actualApiVersion();
+  // Only the branch that offers two remedies asks which one fits. The others
+  // offer one, so the question would be asking the reader to choose between a
+  // single thing.
+  const report =
+    ' If neither fits, please say so at ' +
+    'https://github.com/henfrydls/actual-budget-mcp/issues with this message.';
+  const pleaseReport =
+    ' Please report this at https://github.com/henfrydls/actual-budget-mcp/issues with ' +
+    'this message.';
+
+  // The database answered, and what it said is the thing to act on. Sending
+  // this person to delete their cache would destroy a healthy copy over a lock
+  // that clears on its own: `SQLITE_BUSY: database is locked` means another
+  // process has it open, not that anything is wrong with it.
+  if (why) {
+    return (
+      'This server could not read your budget. The database answered: ' +
+      `${redactSecrets(why)}. Nothing is wrong with your password, URL or Sync ID. If ` +
+      'another program has the budget open -- the Actual app, or a second copy of this ' +
+      'server on the same ACTUAL_DATA_DIR -- close it and try again.' +
+      pleaseReport
+    );
+  }
+
+  switch (kind) {
+    case 'migrations':
+      return (
+        `This server could not open your budget. Its Actual library is ${version}, and the ` +
+        'budget has migrations that version does not recognise. Two things cause that, and ' +
+        'they need opposite fixes. Either your Actual is newer than this server, in which ' +
+        'case update actual-budget-mcp or the Desktop Extension to a version built against ' +
+        `it. Or the local copy is inconsistent, in which case delete ${cacheHint()} so it ` +
+        'is downloaded again. Nothing is wrong with your password, URL or Sync ID, and the ' +
+        'budget on your server is untouched either way.' +
+        pleaseReport
+      );
+    case 'data':
+      return (
+        'This server could not open your budget: the local copy has drifted out of sync ' +
+        `with your server. Delete ${cacheHint()} so it is downloaded again. Nothing is ` +
+        'wrong with your password, URL or Sync ID, and the budget on your server is ' +
+        'untouched.' +
+        pleaseReport
+      );
+    case 'corrupt':
+      return (
+        'This server could not open your budget: the cached copy is not a readable ' +
+        `database. Delete ${cacheHint()} so it is downloaded again. The budget on your ` +
+        'server is untouched.' +
+        pleaseReport
+      );
+    case 'loading':
+      return (
+        'This server downloaded your budget but could not finish opening it. Delete ' +
+        `${cacheHint()} so it is downloaded again. The budget on your server is untouched.` +
+        pleaseReport
+      );
+    default:
+      // Nothing recognised. Saying so, with whatever the engine did say, beats
+      // "No budget file is open" -- which is what the user in #139 had, and
+      // their complaint was that nothing said why.
+      //
+      // No "if neither fits" here: there is only one remedy to offer, so the
+      // phrase would be asking the reader to choose between one thing.
+      return (
+        'This server connected to your Actual server but the budget did not open, and the ' +
+        'reason is not one it recognises. Your password, URL and Sync ID are fine, or the ' +
+        `connection would have failed earlier. Deleting ${cacheHint()} so it is downloaded ` +
+        'again is the usual fix.' +
+        (detail
+          ? ` The engine said: ${redactSecrets(detail)}.`
+          : ' The engine said nothing at all.') +
+        pleaseReport
+      );
+  }
+}
+
+/** Says it on stderr as well, because the tool reply is not always read. */
+function reportLoadFailure(
+  kind: FailureKind | undefined,
+  detail: string | undefined,
+  why?: string,
+): Error {
+  const message = loadFailureMessage(kind, detail, why);
+  // stderr: stdout carries JSON-RPC.
+  console.error(`[actual-budget-mcp] ${message}`);
+  return new Error(message);
+}
+
+interface DownloadOutcome {
+  /** The first marker recognised, if any. */
+  kind?: FailureKind;
+  /** A line from the engine, for the message of last resort. */
+  detail?: string;
+}
+
 async function downloadBudgetWatchingMigrations(
   budgetId: string,
   encryptionPassword: string | undefined,
-): Promise<{ migrationsOutOfSync: boolean }> {
-  let migrationsOutOfSync = false;
+): Promise<DownloadOutcome> {
+  const outcome: DownloadOutcome = {};
   const seen = (args: unknown[]) => {
-    if (args.some((a) => String(a).includes('out-of-sync-migrations'))) {
-      migrationsOutOfSync = true;
+    const line = args.map((a) => String(a)).join(' ');
+    for (const { marker, kind } of ENGINE_MARKERS) {
+      if (line.includes(marker)) {
+        outcome.kind ??= kind;
+        outcome.detail ??= line.slice(0, 300);
+        return;
+      }
+    }
+    // Keep the first line that looks like trouble even when no marker matches.
+    //
+    // Without this, `detail` was only ever set alongside `kind`, so the one
+    // message that exists to repeat what the engine said always ended with
+    // "The engine said nothing at all" — including on the `budget-not-found`
+    // path, where the engine had said `[Exception] Error: budget directory
+    // does not exist`. That is the complaint in #139 reproduced by the code
+    // meant to answer it.
+    if (/\b(error|exception|failed|cannot|unable)\b/i.test(line)) {
+      outcome.detail ??= line.slice(0, 300);
     }
   };
 
@@ -147,15 +342,111 @@ async function downloadBudgetWatchingMigrations(
 
   try {
     await api.downloadBudget(budgetId, { password: encryptionPassword });
-    return { migrationsOutOfSync };
+    return outcome;
   } catch (error) {
-    (error as { migrationsOutOfSync?: boolean }).migrationsOutOfSync = migrationsOutOfSync;
+    (error as { loadOutcome?: DownloadOutcome }).loadOutcome = outcome;
     throw error;
   } finally {
     console.log = originals.log;
     console.error = originals.error;
     console.warn = originals.warn;
   }
+}
+
+/**
+ * Whether a budget is actually open, rather than whether downloading threw.
+ *
+ * This is what detects the failure. The engine returns its reason and
+ * `downloadBudget` throws it away, so there is no error to inspect and some of
+ * the paths log nothing at all: #139 was a server that believed it had
+ * connected and a first tool call answering `No budget file is open`.
+ *
+ * `getBudgetMonths` is the cheapest read that needs an open budget and touches
+ * nothing.
+ */
+async function budgetIsOpen(): Promise<{ open: boolean; why?: string }> {
+  try {
+    await api.getBudgetMonths();
+    return { open: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Only this one means "nothing is loaded". Anything else is a different
+    // problem wearing the same clothes: a locked database answers
+    // `SQLITE_BUSY: database is locked`, and treating that as "no budget" told
+    // the reader to delete a perfectly good cache while losing the one line
+    // that said what was actually wrong.
+    if (message.includes('No budget file is open')) return { open: false };
+    return { open: false, why: message.slice(0, 300) };
+  }
+}
+
+/** Long enough for any server that is going to answer, short enough to not matter. */
+const VERSION_CHECK_TIMEOUT_MS = 5_000;
+
+/**
+ * Warn before opening a budget this library would migrate past its server.
+ *
+ * Opening a budget runs any migration the library has and the file does not,
+ * and the next sync pushes the result. So a 26.10 library against a 26.9
+ * server quietly takes the budget somewhere the user's own 26.9 app can no
+ * longer follow: measured, 59 migrations become 60, and a 26.9 client
+ * downloading from scratch then fails exactly the way #139 did.
+ *
+ * Actual's own 26.10 client does the same thing, so this is not a fault to
+ * refuse -- it is a consequence nobody is told about. Hence a warning rather
+ * than a block: refusing would strand anyone deliberately on an older server,
+ * and the migration is what makes the budget readable at all here.
+ *
+ * Only the minor is compared. Actual releases month.minor and the migrations
+ * come with those; a patch has never carried one.
+ */
+async function warnIfServerIsOlder(): Promise<void> {
+  let serverVersion: string | undefined;
+  try {
+    // On a deadline of its own. `getServerVersion` is a plain fetch with no
+    // timeout inside the SDK, and this runs before the budget is downloaded:
+    // a server that accepts the connection and never answers would hang the
+    // whole startup here, on a warning nobody asked for. The global fetch
+    // deadline (#99) covers the request, but not a promise that never settles
+    // for some other reason, so the race is belt and braces.
+    // The timer is cleared whichever side wins. Left running, it keeps the
+    // event loop alive for its full five seconds after everything else is
+    // done, which `test:connection` pays for on every successful run.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const reported = (await Promise.race([
+        api.getServerVersion(),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(undefined), VERSION_CHECK_TIMEOUT_MS);
+        }),
+      ])) as { version?: string } | undefined;
+      serverVersion = reported?.version;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  } catch {
+    // Not every server answers this, and a missing version is not a reason to
+    // refuse to work.
+    return;
+  }
+  if (!serverVersion) return;
+
+  const parts = (v: string) => v.split('.').map(Number);
+  const [serverMajor, serverMinor] = parts(serverVersion);
+  const [libMajor, libMinor] = parts(actualApiVersion());
+  if (![serverMajor, serverMinor, libMajor, libMinor].every(Number.isFinite)) return;
+
+  const older = serverMajor < libMajor || (serverMajor === libMajor && serverMinor < libMinor);
+  if (!older) return;
+
+  // stderr: stdout carries JSON-RPC.
+  console.error(
+    `[actual-budget-mcp] your Actual server is ${serverVersion} and this server's Actual ` +
+      `library is ${actualApiVersion()}. Opening your budget here will migrate it to the ` +
+      'newer format and the next sync will upload that, after which an Actual app still on ' +
+      `${serverVersion} can no longer open it. Actual's own apps do this too when they ` +
+      'update. Update your Actual server and apps to match, or stop this server now.',
+  );
 }
 
 export async function ensureConnection(): Promise<void> {
@@ -244,8 +535,31 @@ export async function ensureConnection(): Promise<void> {
       throw error;
     }
 
+    // Before the download, because the download is what migrates it.
+    await warnIfServerIsOlder();
+
     try {
-      await downloadBudgetWatchingMigrations(config.budgetId, config.encryptionPassword);
+      const outcome = await downloadBudgetWatchingMigrations(
+        config.budgetId,
+        config.encryptionPassword,
+      );
+      // The route this actually takes, measured against a 26.10 budget with the
+      // 26.9 library (#139): `downloadBudget` does **not** throw. It logs the
+      // reason, discards the code `loadBudget` handed it, and resolves — so
+      // `ensureConnection` returned normally and the first tool answered `No
+      // budget file is open`, a message about a file for a version problem.
+      //
+      // So the budget being open is checked rather than assumed. Not the
+      // markers: some of those paths log nothing at all (`opening-budget` and
+      // `budget-not-found` return without a line), and a server that believes
+      // it connected is the whole failure. The markers only choose the wording.
+      const open = await budgetIsOpen();
+      if (!open.open) {
+        // `why` wins over the console: it is what the read itself said, which
+        // beats a line scraped from a log, and it needs its own wording --
+        // a database that answered is not a cache to delete.
+        throw reportLoadFailure(outcome.kind, outcome.detail, open.why);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = errorCode(error);
@@ -253,14 +567,9 @@ export async function ensureConnection(): Promise<void> {
       // Checked before anything else: this one masquerades as every other
       // failure, because the message it arrives with mentions a file rather
       // than a version.
-      if ((error as { migrationsOutOfSync?: boolean })?.migrationsOutOfSync) {
-        throw new Error(
-          'Your Actual Budget is newer than the Actual library this server uses ' +
-            `(${actualApiVersion()}), so it cannot open your budget: a budget migrated by a ` +
-            'newer Actual needs a matching library. Nothing is wrong with your password, ' +
-            'URL or Sync ID. Update actual-budget-mcp, or the Desktop Extension, to a ' +
-            'version built against your Actual.',
-        );
+      const loadOutcome = (error as { loadOutcome?: DownloadOutcome })?.loadOutcome;
+      if (loadOutcome?.kind) {
+        throw reportLoadFailure(loadOutcome.kind, loadOutcome.detail);
       }
 
       // Checked next: an unreachable server also throws an empty Error, and the

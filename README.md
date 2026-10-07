@@ -55,12 +55,12 @@ locally over stdio. [Option 6](#option-6-codex-openai) is the one command it tak
 ## Prerequisites
 
 - [Actual Budget](https://actualbudget.org/) server running (local or remote)
-- [Node.js](https://nodejs.org/) 22 or higher for every option below **except the
+- [Node.js](https://nodejs.org/) **22.14 or newer** for every option below **except the
   Desktop Extension** (see [Node.js requirement](#nodejs-requirement))
 - The Desktop Extension needs nothing but Claude Desktop. It runs on the Node
-  that Claude Desktop ships, and the bundle carries a prebuilt SQLite binary for
-  every Node version it supports, so nothing is compiled either. Checked on
-  Windows 11 with Claude Desktop 2.110.0 and Node removed from the machine.
+  that Claude Desktop ships, and the bundle carries a SQLite binary for every
+  platform it supports, so nothing is compiled either. Checked on Windows 11
+  with Claude Desktop 2.110.0 and Node removed from the machine.
 
 ## Quick Start
 
@@ -110,8 +110,9 @@ Earlier builds launched the package from npm instead. That made the download
 small and moved it to the first run, where nothing showed progress: Claude
 Desktop waited, decided the server was dead and said it could not connect, and
 the extension started working on its own a few minutes later. The bundle now
-includes Actual's SQLite binary for every platform and Node version it
-supports, and picks the right one when it starts.
+includes Actual's SQLite binary for every platform it supports. They are N-API
+binaries, so one per platform serves every Node version, and nothing has to be
+chosen at startup.
 
 #### Updating the extension
 
@@ -928,11 +929,52 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
 
 ### Node.js Requirement
 
+**The server exits immediately, or dies with no message at all**
+- From 0.10.1 the minimum is **Node 22.14**. Actual's SQLite library is built
+  against N-API 10, which arrives in that release; on an older Node the binary
+  loads and then **segfaults** when the budget is opened. Measured on 22.13.1:
+  exit code 139, no message, no stack, nothing in any log. A host that restarts
+  the server would do it forever.
+- The server now checks this at startup and says so instead of crashing, but
+  only from 0.10.1 on.
+- **Solution:** run Node 22.14 or newer, or use the Docker image, which carries
+  its own.
+
 **"ReferenceError: navigator is not defined"**
 - `@actual-app/api` referenced the `navigator` global through 26.6. That global
   only exists on Node.js 21+, so importing the library on Node.js 20 threw
   before the server could start. 26.8 dropped the reference.
-- **Solution:** Run Node.js 22 or newer, which is the minimum from 0.9.2 on.
+- **Solution:** Run Node.js 22.14 or newer.
+
+**Your Actual apps stop opening the budget after using this server**
+- Opening a budget runs any migration the library has and the file does not,
+  and the next sync uploads the result. From 0.10.1 this server carries Actual
+  **26.10**, so pointing it at a 26.9 server migrates the budget to the newer
+  format — after which an Actual app still on 26.9 cannot open it. Measured: 59
+  migrations become 60.
+- Actual's own apps do exactly the same when they update; the difference is
+  that this one can reach your budget before you have updated anything else.
+- The server warns on startup when it finds your Actual server is older than
+  its library, before downloading anything.
+- **Solution:** update your Actual server and apps to 26.10 or newer *before*
+  using this version. If you have already hit it, update them and the budget
+  opens again — nothing is lost.
+
+**"version `GLIBC_2.34' not found", or the budget never opens on an older Linux**
+- Actual's SQLite binary for Linux is built against **glibc 2.34**, so it does
+  not load on Debian 11, Ubuntu 20.04 or RHEL 8, whose glibc is older. Measured
+  against Debian 11's libc: `version 'GLIBC_2.33' not found`.
+- There is no override for this: a `package.json` override does not reach an
+  `npx` install, and the binary is what the library ships.
+- **Solution:** run the Docker image, which carries its own glibc, or a
+  distribution with glibc 2.34 or newer (Debian 12, Ubuntu 22.04, RHEL 9).
+
+**"gyp ERR! find Python" when installing from source**
+- Installing from a clone runs `npm ci`, and npm builds any package that ships
+  a `binding.gyp` — which `better-sqlite3` does, even though it needs no
+  building: the binary it uses is already in the package.
+- **Solution:** `npm ci --ignore-scripts`. Nothing is lost; that is what the
+  extension and the Docker image do.
 
 ### Node Version Managers (fnm, nvm, volta)
 

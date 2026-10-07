@@ -18,6 +18,7 @@ import * as api from '@actual-app/api';
 
 import { packageVersion } from './utils/version.js';
 import { ensureNativeBinding } from './utils/native-binding.js';
+import { assertSupportedRuntime } from './utils/runtime-check.js';
 
 // Redirect console.log/warn/info to stderr so they don't contaminate
 // the MCP JSON-RPC protocol on stdout. Libraries like @actual-app/api
@@ -55,11 +56,23 @@ if (process.argv.includes('--version') || process.argv.includes('-v')) {
 //
 // Runs before any database is opened. `bindings` resolves the binary lazily,
 // inside the Database constructor, so this is early enough by a wide margin.
+// Before the binding, and before anything can open a database: under Node
+// older than 22.14 the SQLite binary segfaults instead of failing, so there is
+// nothing to report afterwards. Measured on 22.13.1: exit 139, no message.
+assertSupportedRuntime();
+
 const binding = ensureNativeBinding();
 console.error(
   `[actual-budget-mcp] ${packageVersion} on node ${process.version} ` +
-    `(abi ${process.versions.modules}, ${process.platform}-${process.arch}) ` +
-    `exec=${process.execPath} sqlite=${binding.status}` +
+    `(abi ${process.versions.modules}, napi ${process.versions.napi ?? '?'}, ` +
+    `${process.platform}-${process.arch}) ` +
+    // `abi-install`, not `sqlite`. What this reports is whether an ABI-keyed
+    // binary was copied into place, which from better-sqlite3 13 never happens
+    // and never needs to: the binaries are N-API and the package resolves its
+    // own. Labelled `sqlite=not-bundled`, it read as "this build has no SQLite"
+    // on a bundle carrying eight binaries -- and people paste this line into
+    // issues, so it has to be true on its face.
+    `exec=${process.execPath} abi-install=${binding.status}` +
     (binding.detail ? ` (${binding.detail})` : ''),
 );
 
