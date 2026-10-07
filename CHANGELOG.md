@@ -2,11 +2,38 @@
 
 ## 0.10.1
 
-A patch release. Four things that went wrong while this server was in use, and
-one that is still open.
+A patch release, and one that asks something of you before you install it: see
+*Before you update* below. Five things that went wrong while this server was in
+use, and one that is still open.
+
+### Before you update
+
+- **Node 22.14 or newer.** Actual's SQLite library is built against N-API 10,
+  which arrives in that release; on an older Node it crashes rather than
+  failing, with no message. The server now refuses to start there and says so.
+  The Desktop Extension is unaffected — it uses the Node Claude Desktop ships.
+- **On Linux, glibc 2.34 or newer.** Actual's Linux binary requires it, so
+  Debian 11, Ubuntu 20.04 and RHEL 8 cannot run this release directly. The
+  Docker image carries its own and works on all of them.
+- **If your Actual server is older than 26.10, update it first.** Opening your
+  budget with this version migrates it to the newer format, and the next sync
+  uploads that — after which an Actual app still on the older version can no
+  longer open it. Actual's own apps do this too when they update; the
+  difference is that this one can reach your budget before you have updated
+  anything else. The server now warns about this on startup, before it
+  downloads anything.
+- **Installing from a clone** needs Python available, or `npm ci
+  --ignore-scripts`. Nothing is lost by the latter: it is what the extension
+  and the Docker image already do.
 
 ### Fixes
 
+- With Actual 26.10, the Desktop Extension could not open budgets at all: every
+  tool answered `No budget file is open`, and nothing in the logs said why. The
+  budget had been migrated by the newer Actual and the extension carried an
+  older library, which cannot read it. This version carries Actual 26.10, so it
+  opens. And when a budget cannot be opened for any reason, the server now says
+  which reason and what to do about it, instead of naming a file. (#139)
 - An Actual server that accepted the connection and then stopped answering held
   every write for five minutes. There is now a 60-second limit on how long this
   server waits for your Actual server to *start* replying; the reply itself can
