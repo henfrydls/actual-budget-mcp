@@ -206,6 +206,116 @@ describe.skipIf(skip)('a payee that names an account', () => {
     expect(text).toContain('Transfer created');
   });
 
+  describe('all four combinations of on and off budget', () => {
+    // The rule applies only when both sides are on budget. Anywhere else the
+    // money crosses the budget's edge and the transfer is the point. Two
+    // earlier versions got this wrong by looking at one side only.
+    const four = [
+      { from: false, to: false, label: 'on to on' },
+      { from: false, to: true, label: 'on to off' },
+      { from: true, to: false, label: 'off to on' },
+      { from: true, to: true, label: 'off to off' },
+    ];
+
+    const setUp = async (name: string, fromOff: boolean, toOff: boolean) => {
+      let source = '';
+      let target = '';
+      let cat = '';
+      await createFreshBudget(async () => {
+        source = await api.createAccount({ name: 'Source', offbudget: fromOff } as never, 0);
+        target = await api.createAccount({ name: 'Target', offbudget: toOff } as never, 0);
+        const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+        cat = await api.createCategory({ name: 'Fuel', group_id: group } as never);
+      }, name);
+      return { source, target, cat };
+    };
+
+    it.each(four)('$label without a category always transfers', async ({ from, to, label }) => {
+      const { source, target } = await setUp(`four-${from}-${to}-plain`, from, to);
+      const create = handlerFor(registerCreateTransaction);
+
+      await create({ account: 'Source', payee: 'Target', amount: -100, date: '2026-09-10' });
+
+      const onSource = await rows(source);
+      const onTarget = await rows(target);
+      expect(onSource, label).toHaveLength(1);
+      expect(onTarget, `${label}: the counterpart is missing`).toHaveLength(1);
+      expect(onTarget[0].amount).toBe(10000);
+      expect((onSource[0] as { transfer_id?: string | null }).transfer_id).toBeTruthy();
+    }, 60_000);
+
+    it.each(four)('$label with a category', async ({ from, to, label }) => {
+      const { source, target, cat } = await setUp(`four-${from}-${to}-cat`, from, to);
+      const create = handlerFor(registerCreateTransaction);
+
+      await create({
+        account: 'Source',
+        payee: 'Target',
+        category: 'Fuel',
+        amount: -100,
+        date: '2026-09-10',
+      });
+
+      const onSource = await rows(source);
+      const onTarget = await rows(target);
+      const bothOnBudget = !from && !to;
+
+      if (bothOnBudget) {
+        // The #137 rule: an ordinary purchase, no counterpart, category kept.
+        expect(onTarget, `${label}: should not have a counterpart`).toHaveLength(0);
+        expect(onSource[0].category, label).toBe(cat);
+        expect((onSource[0] as { transfer_id?: string | null }).transfer_id ?? null).toBeNull();
+      } else {
+        // Money crosses the budget's edge: the transfer is what matters, and
+        // both sides must exist or something stops adding up.
+        expect(onTarget, `${label}: the counterpart is missing`).toHaveLength(1);
+        expect(onTarget[0].amount).toBe(10000);
+        expect((onSource[0] as { transfer_id?: string | null }).transfer_id, label).toBeTruthy();
+        // Measured through this tool's own path: the category survives on the
+        // row it was asked for, in every transfer. Whether it *counts* is a
+        // different question, and that is what the reply explains.
+        expect(onSource[0].category ?? null, `${label}: category on the source row`).toBe(cat);
+      }
+    }, 60_000);
+
+    it('tells an off-budget source that its category counts nowhere', async () => {
+      // The category is kept on that row, and that row is outside the budget.
+      // Saying only "kept" would be true and useless.
+      await setUp('four-off-on-notice', true, false);
+      const create = handlerFor(registerCreateTransaction);
+
+      const text = (
+        await create({
+          account: 'Source',
+          payee: 'Target',
+          category: 'Fuel',
+          amount: -100,
+          date: '2026-09-10',
+        })
+      ).content[0].text;
+
+      expect(text).toMatch(/came into your budget/i);
+      // Kept, but outside the budget, which is the part that matters.
+      expect(text).toMatch(/does not count there/i);
+      // The old wording, which was false here.
+      expect(text).not.toMatch(/inside your budget, so it is not spending/i);
+    }, 60_000);
+
+    it('tells two off-budget accounts that the budget is not involved', async () => {
+      await setUp('four-off-off-notice', true, true);
+      const create = handlerFor(registerCreateTransaction);
+
+      const text = (
+        await create({ account: 'Source', payee: 'Target', amount: -100, date: '2026-09-10' })
+      ).content[0].text;
+
+      expect(text).toMatch(/does not affect your budget at all/i);
+      // Both of the older claims are wrong here.
+      expect(text).not.toMatch(/left your budget/i);
+      expect(text).not.toMatch(/not spending/i);
+    }, 60_000);
+  });
+
   it('says which way the money went when the amount is positive', async () => {
     // With a positive amount the engine credits this account and debits the
     // other, so the other account is where the money came *from*. Saying "to"
