@@ -127,8 +127,7 @@ describe.skipIf(skip)('a payee that names an account', () => {
       await create({ account: 'Card', payee: 'Fuel Station', amount: -20, date: '2026-09-10' })
     ).content[0].text;
 
-    expect(text).toContain('is also the name of an account');
-    expect(text).toContain('Fuel Station');
+    expect(text).toContain('Fuel Station is one of your accounts');
     expect(text).toMatch(/not spending/i);
     // And the way out, both of them.
     expect(text).toMatch(/give it a category/i);
@@ -163,7 +162,79 @@ describe.skipIf(skip)('a payee that names an account', () => {
 
     expect(await rows(savings)).toHaveLength(1);
     expect(text).toContain('Transfer created');
-    expect(text).toContain('is also the name of an account');
+    expect(text).toContain('Ahorros is one of your accounts');
+    // Not "between your accounts": the money left the budget, which is the
+    // point of the account being off budget.
+    expect(text).toMatch(/left your budget/i);
+    expect(text).not.toMatch(/not spending/i);
+  });
+
+  it('keeps the transfer AND the category for an off-budget account', async () => {
+    // The case a first version of this fix broke, and it is a real pattern: a
+    // category for the contribution and an off-budget account holding the
+    // asset. Between two on-budget accounts a category means "not a transfer";
+    // to an off-budget one the money leaves the budget, so it is spending and
+    // the category is exactly what it wants.
+    //
+    // Measured in the engine: the category stays on the source row, the
+    // counterpart carries none.
+    let asset = '';
+    await budget('payee-offbudget-with-category', async () => {
+      asset = await api.createAccount({ name: 'Investments', offbudget: true } as never, 0);
+    });
+    const create = handlerFor(registerCreateTransaction);
+
+    const text = (
+      await create({
+        account: 'Card',
+        payee: 'Investments',
+        category: 'Fuel',
+        amount: -100,
+        date: '2026-09-10',
+      })
+    ).content[0].text;
+
+    const onCard = await rows(card);
+    const onAsset = await rows(asset);
+
+    // The counterpart exists: the asset grew.
+    expect(onAsset, 'the counterpart is missing').toHaveLength(1);
+    expect(onAsset[0].amount).toBe(10000);
+    // And the category survived on the source row, where Actual puts it.
+    expect(onCard[0].category).toBe(fuel);
+    expect((onCard[0] as { transfer_id?: string | null }).transfer_id).toBeTruthy();
+    expect(text).toContain('Transfer created');
+  });
+
+  it('says which way the money went when the amount is positive', async () => {
+    // With a positive amount the engine credits this account and debits the
+    // other, so the other account is where the money came *from*. Saying "to"
+    // describes the opposite of what just happened.
+    await budget('payee-transfer-direction');
+    const create = handlerFor(registerCreateTransaction);
+
+    const text = (
+      await create({ account: 'Card', payee: 'Fuel Station', amount: 70, date: '2026-09-10' })
+    ).content[0].text;
+
+    expect((await rows(card))[0].amount).toBe(7000);
+    expect((await rows(station))[0].amount).toBe(-7000);
+    expect(text).toContain('Transfer from: Fuel Station');
+    expect(text).toMatch(/transfer from it/i);
+    expect(text).not.toMatch(/Transfer to:/);
+  });
+
+  it('names the account even when the payee was given as an id', async () => {
+    // Echoing a uuid back as "one of your accounts" tells the reader nothing.
+    await budget('payee-id-notice');
+    const create = handlerFor(registerCreateTransaction);
+
+    const text = (
+      await create({ account: 'Card', payee: station, amount: -20, date: '2026-09-10' })
+    ).content[0].text;
+
+    expect(text).toContain('Fuel Station is one of your accounts');
+    expect(text).not.toContain(station);
   });
 
   it('treats a closed account name as an ordinary payee', async () => {
