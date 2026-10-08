@@ -58,12 +58,60 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   const amountCents = amountToCents(input.amount);
   const accounts = await api.getAccounts();
 
-  // A payee that names another on-budget account is a transfer: route it through
-  // that account's transfer payee with runTransfers so both sides are linked (#24).
+  // A payee that names another account is a transfer: route it through that
+  // account's transfer payee with runTransfers so both sides are linked (#24).
+  // Writing the other account's name is how someone asks for a transfer, and
+  // before #24 only one side of it was created.
+  //
+  // Unless a category was asked for **and the other account is on budget**.
+  // Between two on-budget accounts the money has not left the budget, so there
+  // is nothing to categorise and Actual drops the category: naming one says
+  // the opposite of a transfer. That is #137 -- someone whose prepaid card is
+  // topped up at a station called "Fuel Station" has an account by that name
+  // too, and `payee: "Fuel Station", category: "Fuel"` moved money from the
+  // card to the prepaid account, dropped the category, and had to be deleted
+  // by hand.
+  //
+  // As soon as **either** account is off budget, money is crossing the budget's
+  // edge and the transfer is the point. Measured through this tool's own path
+  // -- `addTransactions` with `runTransfers` -- for all four combinations:
+  //
+  //   on  -> on    the rule applies: an ordinary purchase, no counterpart
+  //   on  -> off   transfer, category kept on the source row
+  //   off -> on    transfer, category kept on the source row
+  //   off -> off   transfer, category kept on the source row
+  //
+  // The category survives in every transfer, on the row it was asked for. What
+  // changes is whether that row counts: a category on an off-budget row is
+  // stored and ignored by the budget, because off-budget accounts are outside
+  // it. The reply says which of those happened rather than leaving someone to
+  // assume the category is doing something.
+  //
+  // Worth recording, because it cost a wrong conclusion: `importTransactions`
+  // does *not* behave this way -- it drops the category on three of the four.
+  // A probe written with it reported that the engine discards them, and the
+  // sentence nearly went into the reply. The path under test has to be the
+  // path the tool uses.
+  //
+  // Two earlier versions of this fix got the condition wrong, each time by
+  // looking at one side only. First it applied to every target, which turned a
+  // contribution into a plain expense with no counterpart. Then it looked at
+  // the target alone, so spending *from* an off-budget account into an
+  // on-budget one lost its counterpart the same way: the money left the asset
+  // and never arrived.
   let transferPayeeId: string | undefined;
   let transferTargetName: string | undefined;
+  let transferTargetOffBudget = false;
+  const sourceOffBudget = Boolean(
+    (accounts.find((a) => a.id === accountId) as { offbudget?: boolean } | undefined)?.offbudget,
+  );
   if (input.payee) {
     const lower = input.payee.toLowerCase();
+    // `!a.closed` is belt and braces: measured, `getAccounts()` leaves closed
+    // accounts out of the list altogether rather than returning them with the
+    // flag set, so a closed account's name falls through and becomes an
+    // ordinary payee either way. Which is the right answer -- there is nothing
+    // to transfer into -- and the reason removing this line changes no test.
     const target = accounts.find(
       (a) => !a.closed && (a.id === input.payee || a.name.toLowerCase() === lower),
     );
@@ -71,19 +119,26 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       if (target.id === accountId) {
         throw new Error('Cannot transfer to the same account.');
       }
-      const payees = await api.getPayees();
-      const transferPayee = payees.find((p) => p.transfer_acct === target.id);
-      if (!transferPayee) {
-        throw new Error(`No transfer payee found for account "${target.name}".`);
+      const offBudget = Boolean((target as { offbudget?: boolean }).offbudget);
+      // The rule applies only when **both** sides are on budget. Anywhere else
+      // the money crosses the budget's edge and the transfer is what matters.
+      if (!input.category || offBudget || sourceOffBudget) {
+        const payees = await api.getPayees();
+        const transferPayee = payees.find((p) => p.transfer_acct === target.id);
+        if (!transferPayee) {
+          throw new Error(`No transfer payee found for account "${target.name}".`);
+        }
+        transferPayeeId = transferPayee.id;
+        transferTargetName = target.name;
+        transferTargetOffBudget = offBudget;
       }
-      transferPayeeId = transferPayee.id;
-      transferTargetName = target.name;
     }
   }
 
-  // A transfer carries no ordinary category; only resolve one for plain payees.
-  const categoryId =
-    !transferPayeeId && input.category ? await resolveCategoryId(input.category) : undefined;
+  // Resolved whichever this turns out to be. A transfer to an off-budget
+  // account keeps it, which is what the engine does; between on-budget
+  // accounts the branch above means there is no category to keep.
+  const categoryId = input.category ? await resolveCategoryId(input.category) : undefined;
 
   const transaction: Record<string, unknown> = {
     date: txnDate,
@@ -199,11 +254,98 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     `  Amount:   ${formatMoney(amountCents)}`,
   ];
   if (transferPayeeId) {
-    lines.push(`  Transfer to: ${transferTargetName}`);
+    // Direction from the sign, not from the argument. A positive amount is
+    // money arriving, so the other account is where it came from; calling that
+    // a transfer "to" them says the opposite of what the engine just did.
+    lines.push(
+      amountCents >= 0
+        ? `  Transfer from: ${transferTargetName}`
+        : `  Transfer to: ${transferTargetName}`,
+    );
   } else if (input.payee) {
     lines.push(`  Payee:    ${input.payee}`);
   }
-  if (!transferPayeeId && input.category) lines.push(`  Category: ${input.category}`);
+  if (input.category) lines.push(`  Category: ${input.category}`);
+  if (transferPayeeId) {
+    // Said out loud, because the caller asked for a payee and got a transfer,
+    // and in #137 the person did not find out until they went looking for the
+    // spending they thought they had recorded.
+    //
+    // By name, never by id: the payee can be given either way, and echoing a
+    // uuid back as "the name of an account" tells the reader nothing.
+    const incoming = amountCents >= 0;
+    const direction = incoming ? 'from' : 'to';
+    lines.push(
+      '',
+      `${transferTargetName} is one of your accounts, so this was recorded as a transfer ` +
+        `${direction} it.`,
+      `A matching row was created there.`,
+    );
+    // What this did to the budget, worked out from the two rows rather than
+    // from which accounts are off budget.
+    //
+    // Deciding by combination was wrong twice in a row, both times on the
+    // sign: with a positive amount the money runs the other way, so "left
+    // your budget" and "came into your budget" swapped places and the reply
+    // said the opposite of what the engine had done. The rows cannot be read
+    // two ways.
+    //
+    // Each transfer is two rows: this account gets `amountCents`, the other
+    // gets its negative. Only rows in on-budget accounts count, so the effect
+    // on the budget is their sum -- zero between two on-budget accounts,
+    // because the money only moved.
+    const effect =
+      (sourceOffBudget ? 0 : amountCents) + (transferTargetOffBudget ? 0 : -amountCents);
+    const acctName = acct?.name || accountId;
+    // Where the category landed, measured: on the row it was asked for, which
+    // is this account's. It counts only if this account is in the budget.
+    const categoryCounts = !sourceOffBudget;
+    const otherName = transferTargetName ?? '';
+
+    if (!sourceOffBudget && !transferTargetOffBudget) {
+      lines.push(
+        'The money moved between accounts inside your budget, so it is not spending.',
+        'To record a purchase instead, give it a category, or use a payee that is not an',
+        'account name.',
+      );
+    } else if (sourceOffBudget && transferTargetOffBudget) {
+      lines.push(
+        `${acctName} and ${otherName} are both off budget, so this does not affect your ` +
+          `budget at all.`,
+        ...(input.category
+          ? [
+              `The category is stored on the row in ${acctName} but counts nowhere, since ` +
+                `neither account is in your budget.`,
+            ]
+          : []),
+      );
+    } else {
+      // One side in, one side out: the sign of the effect says which way.
+      const arrived = effect > 0;
+      const offBudgetSide = sourceOffBudget ? acctName : otherName;
+      lines.push(
+        `${offBudgetSide} is off budget, so this money ` +
+          (arrived ? 'came into your budget.' : 'left your budget.'),
+      );
+      if (input.category && categoryCounts) {
+        lines.push(
+          `It counts in ${acctName}, under ${input.category}.`,
+        );
+      } else if (input.category) {
+        lines.push(
+          `The category stays on the row in ${acctName}, but an off-budget account is ` +
+            `outside your budget, so it does not count there. To make this ` +
+            `${arrived ? 'income' : 'spending'} count, set a category on the row in ` +
+            `${otherName}.`,
+        );
+      } else {
+        lines.push(
+          `Give the row in ${categoryCounts ? acctName : otherName} a category to say ` +
+            `where it counts.`,
+        );
+      }
+    }
+  }
   if (input.notes) lines.push(`  Notes:    ${input.notes}`);
 
   return lines;
@@ -222,8 +364,25 @@ export function registerCreateTransaction(server: McpServer): void {
         .describe(
           'Amount (negative for expenses, positive for income). Use human amounts like -150.50, not cents.',
         ),
-      payee: z.string().optional().describe('Payee name'),
-      category: z.string().optional().describe('Category name or ID'),
+      payee: z
+        .string()
+        .optional()
+        .describe(
+          'Payee name, or the name of one of your accounts to make a transfer. Naming an ' +
+            'account moves money between accounts and creates the matching row there. ' +
+            'Giving a category turns it into an ordinary purchase instead, but only when ' +
+            'both accounts are on budget, for when a shop happens to share an account ' +
+            'name. If either account is off budget it stays a transfer, because money is ' +
+            'crossing the edge of the budget and losing one side would hide that.',
+        ),
+      category: z
+        .string()
+        .optional()
+        .describe(
+          'Category name or ID. Giving one stops a payee that names an account from ' +
+            'becoming a transfer, but only when both accounts are on budget. An empty ' +
+            'string counts as no category.',
+        ),
       date: z
         .string()
         .optional()
