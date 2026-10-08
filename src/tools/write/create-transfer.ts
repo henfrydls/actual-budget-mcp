@@ -66,21 +66,27 @@ export function registerCreateTransfer(server: McpServer): void {
         // The same check every other write uses, on the row this is about to
         // write: the source account, this date, this amount (#98).
         //
-        // Both ways of asking land here. A transfer of 100 from A to B writes
-        // A -100, and asking for -100 from B to A writes the same two rows, so
-        // looking at the source row catches either spelling.
+        // The row this writes is the one to compare, whichever way the caller
+        // phrased it. Note that this tool cannot phrase it both ways: it takes
+        // the absolute value, so -100 from B to A is a transfer *from B*, a
+        // different movement. What does write the same two rows is the payee
+        // shortcut in `create_transaction`, where the sign chooses the
+        // direction, and a transfer made that way is found here.
         //
-        // Narrowed to the same pair of accounts, which the comparator already
-        // tells us: for a transfer leg the payee is named after the account on
-        // the other side, measured. Without that, a withdrawal of the same
-        // amount to a different account on the same day would be reported as a
-        // duplicate of this one, and in a real budget money moves through
-        // several accounts in a day.
+        // Narrowed to the same pair of accounts. Without that, a withdrawal of
+        // the same amount to a different account on the same day would be
+        // reported as a duplicate of this one, and in a real budget money
+        // moves through several accounts in a day on its way to cash.
+        //
+        // By payee id, not by name. A transfer payee is named after its
+        // account and Actual allows two accounts to share a name, so comparing
+        // names called a transfer to one "Ahorro" a repeat of a transfer to
+        // the other. The id is also what survives a rename: the payee follows
+        // its account either way, so nothing is lost by not reading the name.
         if (!allow_duplicate) {
           const existing = await findPossibleDuplicates(fromId, txnDate, -amountCents);
-          const toName = (await api.getAccounts()).find((a) => a.id === toId)?.name;
           const sameTransfer = existing.filter(
-            (t) => t.isTransfer && t.payeeName && toName && t.payeeName === toName,
+            (t) => t.isTransfer && t.payeeId === transferPayee.id,
           );
           if (sameTransfer.length > 0) {
             const fromName =

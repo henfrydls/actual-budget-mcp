@@ -150,6 +150,83 @@ describe.skipIf(skip)('duplicate checks on every create path', () => {
       expect(second.content[0].text).toMatch(/already exists/i);
     }, 60_000);
 
+    it('tells two accounts with the same name apart', async () => {
+      // Actual allows it, and a transfer payee is named after its account, so
+      // comparing names made a transfer to one "Ahorro" look like a repeat of
+      // a transfer to the other. Both are addressed by id here, because by
+      // name there would be no way to say which one is meant.
+      let first = '';
+      let second = '';
+      await createFreshBudget(async () => {
+        digital = await api.createAccount({ name: 'Digital', offbudget: false } as never, 0);
+        first = await api.createAccount({ name: 'Ahorro', offbudget: false } as never, 0);
+        second = await api.createAccount({ name: 'Ahorro', offbudget: false } as never, 0);
+      }, 'dup-transfer-same-name');
+
+      const send = (to: string) =>
+        handlerFor(registerCreateTransfer)({
+          from_account: digital,
+          to_account: to,
+          amount: 100,
+          date: '2026-09-10',
+        });
+
+      await send(first);
+      const before = await count(digital);
+
+      const other = await send(second);
+
+      expect(await count(digital), 'the second account is not the first').toBe(before + 1);
+      expect(other.content[0].text).toMatch(/Transfer created/i);
+      // And the one that really is a repeat is still caught.
+      const repeat = await send(first);
+      expect(repeat.content[0].text).toMatch(/already exists/i);
+    }, 60_000);
+
+    it('still catches a repeat after the account is renamed', async () => {
+      // The payee follows its account through a rename, so matching on the id
+      // must not lose what matching on the name happened to get right.
+      await budget('dup-transfer-renamed');
+      await move();
+      const before = await count(digital);
+
+      await api.updateAccount(retiro, { name: 'Retiro Nuevo' } as never);
+
+      const second = await handlerFor(registerCreateTransfer)({
+        from_account: 'Digital',
+        to_account: 'Retiro Nuevo',
+        amount: 100,
+        date: '2026-09-10',
+      });
+
+      expect(await count(digital)).toBe(before);
+      expect(second.content[0].text).toMatch(/already exists/i);
+    }, 60_000);
+
+    it('does not count an unlinked row as the other half of a transfer', async () => {
+      // A row can carry a transfer payee without being a transfer: an import
+      // that did not link the two sides leaves one. It looks like half a
+      // movement and is not one, so the transfer asked for afterwards is the
+      // first real one and has to go through.
+      await budget('dup-transfer-unlinked');
+      const payees = await api.getPayees();
+      const toRetiro = payees.find(
+        (p) => (p as { transfer_acct?: string }).transfer_acct === retiro,
+      );
+      await api.addTransactions(
+        digital,
+        [{ date: '2026-09-10', amount: -10000, payee: toRetiro?.id }] as never,
+        // Without runTransfers, so no counterpart and no transfer_id.
+        { runTransfers: false } as never,
+      );
+      const before = await count(digital);
+
+      const result = await move();
+
+      expect(await count(digital)).toBe(before + 1);
+      expect(result.content[0].text).toMatch(/Transfer created/i);
+    }, 60_000);
+
     it('allows a second one when told to', async () => {
       // Two identical transfers in a day are ordinary here: a withdrawal
       // split across two operations because of the per-operation limit, or a

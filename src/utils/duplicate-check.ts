@@ -33,6 +33,16 @@ export interface ExistingTransaction {
   date: string;
   amount: number;
   payeeName?: string;
+  /**
+   * The payee's id, for callers that need to know *which* payee rather than
+   * what it is called.
+   *
+   * Two accounts can share a name -- Actual allows it -- and a transfer payee
+   * is named after its account, so comparing names called a transfer to one
+   * "Ahorro" a duplicate of a transfer to the other. The id is the identity;
+   * the name is for the reader.
+   */
+  payeeId?: string;
   notes?: string | null;
   /** One leg of a transfer, which reads as ordinary income or spending unless said. */
   isTransfer: boolean;
@@ -124,6 +134,7 @@ export async function findPossibleDuplicates(
     date: String(row.date),
     amount: Number(row.amount),
     payeeName: row.payee ? names.get(String(row.payee)) : undefined,
+    payeeId: row.payee ? String(row.payee) : undefined,
     notes: (row.notes as string | null) ?? null,
     isTransfer: row.transfer_id != null,
   }));
