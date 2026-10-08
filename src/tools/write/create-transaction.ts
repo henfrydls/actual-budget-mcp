@@ -58,12 +58,29 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   const amountCents = amountToCents(input.amount);
   const accounts = await api.getAccounts();
 
-  // A payee that names another on-budget account is a transfer: route it through
-  // that account's transfer payee with runTransfers so both sides are linked (#24).
+  // A payee that names another account is a transfer: route it through that
+  // account's transfer payee with runTransfers so both sides are linked (#24).
+  // Writing the other account's name is how someone asks for a transfer, and
+  // before #24 only one side of it was created.
+  //
+  // Unless a category was asked for. A transfer carries no category -- Actual
+  // drops it -- so naming one says the opposite of a transfer, and the shortcut
+  // was overriding that: reported in #137, someone whose prepaid card is topped
+  // up at a station called "Fuel Station" has an account by that name too, and
+  // `payee: "Fuel Station", category: "Fuel"` moved money from the card to the
+  // prepaid account, dropped the category, and had to be deleted by hand.
+  //
+  // So the category decides. It is the one signal that cannot mean both things:
+  // nobody categorises a transfer, and a spend without one is still ambiguous.
   let transferPayeeId: string | undefined;
   let transferTargetName: string | undefined;
-  if (input.payee) {
+  if (input.payee && !input.category) {
     const lower = input.payee.toLowerCase();
+    // `!a.closed` is belt and braces: measured, `getAccounts()` leaves closed
+    // accounts out of the list altogether rather than returning them with the
+    // flag set, so a closed account's name falls through and becomes an
+    // ordinary payee either way. Which is the right answer -- there is nothing
+    // to transfer into -- and the reason removing this line changes no test.
     const target = accounts.find(
       (a) => !a.closed && (a.id === input.payee || a.name.toLowerCase() === lower),
     );
@@ -81,9 +98,10 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     }
   }
 
-  // A transfer carries no ordinary category; only resolve one for plain payees.
-  const categoryId =
-    !transferPayeeId && input.category ? await resolveCategoryId(input.category) : undefined;
+  // A transfer carries no ordinary category. With the check above, a transfer
+  // and a category can no longer both be present, so this reads as a statement
+  // of that rather than as a choice between them.
+  const categoryId = input.category ? await resolveCategoryId(input.category) : undefined;
 
   const transaction: Record<string, unknown> = {
     date: txnDate,
@@ -203,7 +221,20 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   } else if (input.payee) {
     lines.push(`  Payee:    ${input.payee}`);
   }
-  if (!transferPayeeId && input.category) lines.push(`  Category: ${input.category}`);
+  if (input.category) lines.push(`  Category: ${input.category}`);
+  if (transferPayeeId) {
+    // Said out loud, because the caller asked for a payee and got a transfer.
+    // The row carries no category and the money is still in the budget, which
+    // is not what "I spent this at X" means, and in #137 the person did not
+    // find out until they went looking for the spending.
+    lines.push(
+      '',
+      `"${input.payee}" is also the name of an account, so this was recorded as a transfer`,
+      `to ${transferTargetName}: the money moved between your accounts and is not spending.`,
+      'A matching row was created there. To record a purchase instead, give it a category,',
+      'or use a payee that is not an account name.',
+    );
+  }
   if (input.notes) lines.push(`  Notes:    ${input.notes}`);
 
   return lines;
