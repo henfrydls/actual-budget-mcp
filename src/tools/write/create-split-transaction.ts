@@ -9,6 +9,10 @@ import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
 import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import {
+  findPossibleDuplicates,
+  describePossibleDuplicates,
+} from '../../utils/duplicate-check.js';
 
 export interface SplitInput {
   category: string;
@@ -19,6 +23,7 @@ export interface SplitInput {
 export interface CreateSplitTransactionInput {
   account: string;
   amount: number;
+  allow_duplicate?: boolean;
   splits: SplitInput[];
   payee?: string;
   date?: string;
@@ -58,6 +63,28 @@ export async function createSplitTransaction(
 
   const accountId = await resolveAccountId(input.account);
   const txnDate = resolveDate(input.date);
+
+  // The same check every other write uses, on the parent's total (#98).
+  //
+  // The total is what the bank shows and what a duplicate would repeat; the
+  // parts are an internal division of it, and two splits of the same purchase
+  // need not divide it the same way. The comparator already excludes children,
+  // for the same reason, so this and `create_transaction` see the same rows
+  // and give the same answer about them: a plain row of -70 and a split
+  // totalling -70 on one account and date are the same purchase entered twice,
+  // whichever was written first.
+  if (!input.allow_duplicate) {
+    const existing = await findPossibleDuplicates(accountId, txnDate, totalCents);
+    if (existing.length > 0) {
+      const accountName =
+        (await api.getAccounts()).find((a) => a.id === accountId)?.name ?? input.account;
+      return describePossibleDuplicates(existing, accountName, [
+        'Same account, same date, same total. The split would repeat a transaction that is',
+        'already there. If this is a second, genuine purchase rather than the same one',
+        'recorded twice, call again with allow_duplicate: true.',
+      ]);
+    }
+  }
 
   const subtransactions = await Promise.all(
     input.splits.map(async (s, i) => {
@@ -138,6 +165,14 @@ export function registerCreateSplitTransaction(server: McpServer): void {
         .number()
         .describe(
           'Total amount (negative for expenses, positive for income). Must equal the sum of the splits.',
+        ),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Create it even though a transaction with the same account, date and total ' +
+            'already exists. The total is what a duplicate repeats; how it is divided is ' +
+            'internal.',
         ),
       splits: z
         .array(

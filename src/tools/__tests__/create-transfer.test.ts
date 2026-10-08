@@ -56,6 +56,11 @@ const transfer = () =>
   handlerFor()({
     from_account: 'Checking',
     to_account: 'Savings',
+    // `allow_duplicate`, because these tests are about what happens *after*
+    // the write, not about the duplicate check added in #98. Their `runQuery`
+    // mock answers "the row is there" to drive the probe, and the check reads
+    // the same mock, so without this they would refuse before writing.
+    allow_duplicate: true,
     amount: 5000,
     date: '2026-09-21',
   });
