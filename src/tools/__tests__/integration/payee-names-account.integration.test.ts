@@ -316,6 +316,132 @@ describe.skipIf(skip)('a payee that names an account', () => {
     }, 60_000);
   });
 
+  describe('what the reply says about the budget, against the rows', () => {
+    // Sixteen cases: four combinations, both signs, with and without a
+    // category. The expected wording is derived from the rows the engine
+    // wrote, not from the input, because deciding it from the input is what
+    // was wrong twice -- the sign flips which way the money ran and the reply
+    // went on saying "left your budget" either way.
+    const combinations = [
+      { from: false, to: false },
+      { from: false, to: true },
+      { from: true, to: false },
+      { from: true, to: true },
+    ];
+    const cases = combinations.flatMap((c) =>
+      [-100, 100].flatMap((amount) =>
+        [true, false].map((withCategory) => ({
+          ...c,
+          amount,
+          withCategory,
+          label: `${c.from ? 'off' : 'on'}->${c.to ? 'off' : 'on'} ${amount > 0 ? '+' : '-'}100${withCategory ? ' with category' : ''}`,
+        })),
+      ),
+    );
+
+    it.each(cases)('$label', async ({ from, to, amount, withCategory, label }) => {
+      let source = '';
+      let target = '';
+      await createFreshBudget(async () => {
+        source = await api.createAccount({ name: 'Source', offbudget: from } as never, 0);
+        target = await api.createAccount({ name: 'Target', offbudget: to } as never, 0);
+        const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+        await api.createCategory({ name: 'Fuel', group_id: group } as never);
+      }, `table-${from}-${to}-${amount}-${withCategory}`);
+
+      const create = handlerFor(registerCreateTransaction);
+      const text = (
+        await create({
+          account: 'Source',
+          payee: 'Target',
+          amount,
+          date: '2026-09-10',
+          ...(withCategory ? { category: 'Fuel' } : {}),
+        })
+      ).content[0].text;
+
+      const onSource = await rows(source);
+      const onTarget = await rows(target);
+
+      // Both on budget with a category is the #137 rule: a purchase.
+      if (!from && !to && withCategory) {
+        expect(onTarget, label).toHaveLength(0);
+        expect(text).toContain('Transaction created');
+        return;
+      }
+
+      // Everything else is a transfer, so read the effect off the rows.
+      expect(onSource, label).toHaveLength(1);
+      expect(onTarget, `${label}: counterpart missing`).toHaveLength(1);
+
+      const effect =
+        (from ? 0 : (onSource[0].amount as number)) + (to ? 0 : (onTarget[0].amount as number));
+
+      if (!from && !to) {
+        expect(effect, `${label}: two on-budget rows cancel`).toBe(0);
+        expect(text).toMatch(/moved between accounts inside your budget/i);
+      } else if (from && to) {
+        expect(text).toMatch(/does not affect your budget at all/i);
+      } else if (effect > 0) {
+        expect(text, `${label}: rows say the money arrived`).toMatch(/came into your budget/i);
+        expect(text).not.toMatch(/left your budget/i);
+      } else {
+        expect(text, `${label}: rows say the money left`).toMatch(/left your budget/i);
+        expect(text).not.toMatch(/came into your budget/i);
+      }
+
+      // And the direction on the summary line agrees with the sign.
+      expect(text).toMatch(
+        (onSource[0].amount as number) >= 0 ? /Transfer from: Target/ : /Transfer to: Target/,
+      );
+
+      // What it says about the category, from the same rows. It lands on this
+      // account's row, so it counts exactly when this account is in the
+      // budget -- and saying "it does not count" when it does is as wrong as
+      // the direction was.
+      if (withCategory && !(from && to)) {
+        if (!from) {
+          expect(text, `${label}: the category does count here`).toMatch(
+            /It counts in Source, under Fuel/,
+          );
+          expect(text).not.toMatch(/does not count there/i);
+        } else {
+          expect(text, `${label}: the category counts nowhere here`).toMatch(
+            /does not count there/i,
+          );
+          expect(text).not.toMatch(/It counts in Source/);
+        }
+      }
+    }, 60_000);
+
+    it('tells an off-budget source where to put the category so it counts', async () => {
+      // The category stays on the off-budget row, where it counts nowhere.
+      // Saying that without saying what to do leaves the person stuck.
+      let target = '';
+      await createFreshBudget(async () => {
+        await api.createAccount({ name: 'Source', offbudget: true } as never, 0);
+        target = await api.createAccount({ name: 'Target', offbudget: false } as never, 0);
+        const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
+        await api.createCategory({ name: 'Fuel', group_id: group } as never);
+      }, 'table-off-on-advice');
+
+      const create = handlerFor(registerCreateTransaction);
+      const text = (
+        await create({
+          account: 'Source',
+          payee: 'Target',
+          category: 'Fuel',
+          amount: -100,
+          date: '2026-09-10',
+        })
+      ).content[0].text;
+
+      expect(text).toMatch(/does not count there/i);
+      expect(text).toMatch(/set a category on the row in Target/i);
+      expect(text).toMatch(/to make this income count/i);
+    }, 60_000);
+  });
+
   it('says which way the money went when the amount is positive', async () => {
     // With a positive amount the engine credits this account and debits the
     // other, so the other account is where the money came *from*. Saying "to"

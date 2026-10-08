@@ -281,44 +281,69 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         `${direction} it.`,
       `A matching row was created there.`,
     );
-    // One sentence per combination, because the four mean different things and
-    // three of them were being told the same wrong one.
+    // What this did to the budget, worked out from the two rows rather than
+    // from which accounts are off budget.
+    //
+    // Deciding by combination was wrong twice in a row, both times on the
+    // sign: with a positive amount the money runs the other way, so "left
+    // your budget" and "came into your budget" swapped places and the reply
+    // said the opposite of what the engine had done. The rows cannot be read
+    // two ways.
+    //
+    // Each transfer is two rows: this account gets `amountCents`, the other
+    // gets its negative. Only rows in on-budget accounts count, so the effect
+    // on the budget is their sum -- zero between two on-budget accounts,
+    // because the money only moved.
+    const effect =
+      (sourceOffBudget ? 0 : amountCents) + (transferTargetOffBudget ? 0 : -amountCents);
     const acctName = acct?.name || accountId;
+    // Where the category landed, measured: on the row it was asked for, which
+    // is this account's. It counts only if this account is in the budget.
+    const categoryCounts = !sourceOffBudget;
+    const otherName = transferTargetName ?? '';
+
     if (!sourceOffBudget && !transferTargetOffBudget) {
       lines.push(
         'The money moved between accounts inside your budget, so it is not spending.',
         'To record a purchase instead, give it a category, or use a payee that is not an',
         'account name.',
       );
-    } else if (!sourceOffBudget && transferTargetOffBudget) {
-      // The one case the engine keeps a category for.
+    } else if (sourceOffBudget && transferTargetOffBudget) {
       lines.push(
-        `${transferTargetName} is off budget, so this money left your budget.`,
-        input.category
-          ? `It counts as spending in ${acctName}, under ${input.category}.`
-          : `Give it a category to say where it counts as spending in ${acctName}.`,
-      );
-    } else if (sourceOffBudget && !transferTargetOffBudget) {
-      lines.push(
-        `${acctName} is off budget, so this money came into your budget through ` +
-          `${transferTargetName}.`,
-        // The category is kept on this row, and this row is outside the
-        // budget, so it is stored and does not count. Saying only "kept" would
-        // be true and useless.
-        input.category
-          ? `The category stays on the row in ${acctName}, but an off-budget account is ` +
-            `outside your budget, so it does not count there.`
-          : `The row in ${transferTargetName} is the one that counts in your budget.`,
-      );
-    } else {
-      lines.push(
-        `${acctName} and ${transferTargetName} are both off budget, so this does not ` +
-          `affect your budget at all.`,
+        `${acctName} and ${otherName} are both off budget, so this does not affect your ` +
+          `budget at all.`,
         ...(input.category
-          ? [`The category is stored on the row but counts nowhere, since neither account is ` +
-             `in your budget.`]
+          ? [
+              `The category is stored on the row in ${acctName} but counts nowhere, since ` +
+                `neither account is in your budget.`,
+            ]
           : []),
       );
+    } else {
+      // One side in, one side out: the sign of the effect says which way.
+      const arrived = effect > 0;
+      const offBudgetSide = sourceOffBudget ? acctName : otherName;
+      lines.push(
+        `${offBudgetSide} is off budget, so this money ` +
+          (arrived ? 'came into your budget.' : 'left your budget.'),
+      );
+      if (input.category && categoryCounts) {
+        lines.push(
+          `It counts in ${acctName}, under ${input.category}.`,
+        );
+      } else if (input.category) {
+        lines.push(
+          `The category stays on the row in ${acctName}, but an off-budget account is ` +
+            `outside your budget, so it does not count there. To make this ` +
+            `${arrived ? 'income' : 'spending'} count, set a category on the row in ` +
+            `${otherName}.`,
+        );
+      } else {
+        lines.push(
+          `Give the row in ${categoryCounts ? acctName : otherName} a category to say ` +
+            `where it counts.`,
+        );
+      }
     }
   }
   if (input.notes) lines.push(`  Notes:    ${input.notes}`);
