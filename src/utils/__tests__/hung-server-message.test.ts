@@ -15,19 +15,26 @@ import { mayHaveBeenApplied } from '../write-outcome.js';
 const engineFailure = () => new Error('We had an unknown problem opening "my-budget-8174eb5"');
 
 describe('a sync that failed being reported as a problem opening the budget', () => {
-  it('says what did not happen, since the engine says the opposite', () => {
+  it('says the sentence is generic, because it is', () => {
+    // `getSyncError` returns it for any reason it has no case for, and three
+    // places emit it: load-budget, download-budget on the cached branch, and
+    // sync. So "opening" is one of the possibilities, not a thing that is
+    // ruled out.
     const described = describeError(engineFailure());
 
-    expect(described).toMatch(/nothing was being opened/i);
-    expect(described).toMatch(/already loaded/i);
-    expect(described).toMatch(/what failed was a sync/i);
+    expect(described).toMatch(/no specific case/i);
+    expect(described).toMatch(/most likely cause/i);
   });
 
-  it('points at the server rather than at the budget', () => {
+  it('points at the server, as the likely cause and not as a fact', () => {
     const described = describeError(engineFailure());
 
-    expect(described).toMatch(/server not answering|running and reachable/i);
-    expect(described).toMatch(/Nothing is wrong with your budget file/i);
+    expect(described).toMatch(/running and reachable/i);
+    // Hedged. An earlier version asserted "nothing was being opened: the
+    // budget was already loaded", which is false whenever it really was
+    // opening one.
+    expect(described).toMatch(/If the budget was already open/i);
+    expect(described).not.toMatch(/Nothing is wrong with your budget file/i);
   });
 
   it('still shows what Actual said', () => {
@@ -64,6 +71,64 @@ describe('a sync that failed being reported as a problem opening the budget', ()
     expect(describeError(both)).toMatch(/sync state/i);
   });
 
+  describe('when the engine named a reason', () => {
+    const withCode = (code: string) =>
+      Object.assign(new Error('We had an unknown problem opening "b"'), { code });
+
+    it('does not tell someone with a wrong key that their password is fine', () => {
+      // `decrypt-failure`: the encryption password is wrong or the key was
+      // changed on another device. The generic text sent that person to
+      // restart a server that was answering perfectly well.
+      const described = describeError(withCode('decrypt-failure'));
+
+      expect(described).toMatch(/could not decrypt/i);
+      expect(described).toMatch(/encryption password/i);
+      expect(described).not.toMatch(/running and reachable/i);
+    });
+
+    it('names an expired session for what it is', () => {
+      // `unauthorized` from a sync in the middle of a write: connection.ts
+      // only filters this while connecting.
+      const described = describeError(withCode('unauthorized'));
+
+      expect(described).toMatch(/refused the credentials/i);
+      expect(described).not.toMatch(/running and reachable/i);
+    });
+
+    it.each(['opening-budget', 'loading-budget'])(
+      'sends %s to the cached copy, not to the server',
+      (code) => {
+        const described = describeError(withCode(code));
+
+        expect(described).toMatch(/ACTUAL_DATA_DIR/);
+        expect(described).not.toMatch(/running and reachable/i);
+      },
+    );
+
+    it('still says something useful for a reason it does not know', () => {
+      const described = describeError(withCode('some-new-reason'));
+
+      expect(described).toMatch(/some-new-reason/);
+      // Not the server claim, which would be invented.
+      expect(described).not.toMatch(/running and reachable/i);
+    });
+
+    it('keeps the generic text for a network code', () => {
+      // Those are the cases it describes correctly.
+      for (const code of ['network-failure', 'timeout']) {
+        expect(describeError(withCode(code)), code).toMatch(/running and reachable/i);
+      }
+    });
+
+    it('reads a reason given as `reason` as well as `code`', () => {
+      const tagged = Object.assign(new Error('We had an unknown problem opening "b"'), {
+        reason: 'decrypt-failure',
+      });
+
+      expect(describeError(tagged)).toMatch(/could not decrypt/i);
+    });
+  });
+
   it('warns that the write may have landed anyway', () => {
     // This failure arrives after the change is in the local file often enough
     // that the caution is the difference between one transaction and two.
@@ -77,6 +142,47 @@ describe('a sync that failed being reported as a problem opening the budget', ()
 
     expect(described).not.toMatch(/check the budget before retrying/i);
     expect(described).toMatch(/nothing was being opened/i);
+  });
+});
+
+/**
+ * Where this text must not appear.
+ *
+ * A read never calls `api.sync`, so if one of them meets this sentence it came
+ * from `ensureConnection` -- from opening a budget for real. Claiming nothing
+ * was being opened there is exactly backwards, which is why the wording is
+ * conditional now.
+ */
+describe('the places that really are opening a budget', () => {
+  it('never asserts that nothing was being opened', () => {
+    // The claim may appear, but only behind the condition that makes it true.
+    // Asserting it outright is what was wrong: a read meeting this sentence
+    // got it from `ensureConnection`, which really was opening a budget.
+    for (const error of [
+      new Error('We had an unknown problem opening "b"'),
+      Object.assign(new Error('We had an unknown problem opening "b"'), { code: 'internal' }),
+      Object.assign(new Error('We had an unknown problem opening "b"'), {
+        code: 'decrypt-failure',
+      }),
+    ]) {
+      const described = describeError(error);
+      expect(described).not.toMatch(/the budget was already loaded/i);
+      if (/nothing was being opened/i.test(described)) {
+        expect(described, 'the claim must be conditional').toMatch(
+          /If the budget was already open, nothing was being opened/i,
+        );
+      }
+    }
+  });
+
+  it('does not state a sync as the cause when it cannot know', () => {
+    // An earlier version said "what failed was a sync" as a fact, while its
+    // own comment admitted the sentence is generic and the engine does not
+    // say. It is conditional now.
+    const described = describeError(new Error('We had an unknown problem opening "b"'));
+
+    expect(described).not.toMatch(/^.*what failed was a sync/i);
+    expect(described).toMatch(/If the budget was already open/i);
   });
 });
 

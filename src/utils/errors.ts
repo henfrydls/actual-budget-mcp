@@ -99,19 +99,21 @@ const MAY_ALREADY_BE_APPLIED =
   'can be applied and still report an error, and repeating it would duplicate it.';
 
 /**
- * Actual's generic failure, which names the one thing that did not happen.
+ * Actual's generic failure, which names the one thing that may not have happened.
  *
- * `We had an unknown problem opening "<id>"` is the engine's fallback when it
- * has no more specific case, and it comes back from a **sync** in the middle of
- * a write as readily as from opening anything. Measured: with the budget
- * already loaded and the server replaced by a socket that accepts and never
- * answers, a write ends with exactly that. The reader is sent to look at their
- * budget file, their sync id and their credentials, none of which are the
- * problem.
+ * `getSyncError` in the bundle returns `We had an unknown problem opening
+ * "<id>"` for **any** reason it has no case for, and three places emit it:
+ * `api/load-budget`, `api/download-budget` on the cached branch, and
+ * `api/sync`. So the sentence says "opening" whatever went wrong, and opening
+ * really is one of the possibilities.
  *
- * It does not claim the server is the cause, because the message is generic and
- * the engine does not say. What it can state is what did not happen -- nothing
- * was being opened -- and what to check first.
+ * What tells them apart is the code. `withErrorCode` leaves the reason on
+ * `error.code`, so `decrypt-failure`, `unauthorized`, `opening-budget` and the
+ * rest arrive with a name attached, and only an error with **no** code, or a
+ * network or timeout one, is the case this text is about. An earlier version
+ * of this said "nothing was being opened: the budget was already loaded" for
+ * all of them, which told someone with a wrong encryption key that their
+ * password was fine and sent them to restart a server that was answering.
  *
  * The translation lives here, in the layer that turns an error into words.
  * `mayHaveBeenApplied` in write-outcome.ts recognises this failure by that same
@@ -121,10 +123,39 @@ const MAY_ALREADY_BE_APPLIED =
  * retry.
  */
 const UNKNOWN_OPEN_HELP =
-  'Actual reported a generic failure that mentions opening the budget, but nothing ' +
-  'was being opened: the budget was already loaded and what failed was a sync. The ' +
-  'usual cause is the Actual server not answering, so check that it is running and ' +
-  'reachable. Nothing is wrong with your budget file, sync id or password.';
+  'Actual reported a generic failure that names opening the budget, which it uses ' +
+  'for anything it has no specific case for. It carries no code, so the most ' +
+  'likely cause is the Actual server not answering: check that it is running and ' +
+  'reachable. If the budget was already open, nothing was being opened and this ' +
+  'came from a sync.';
+
+/** What a named reason means, where knowing it changes what to do. */
+const CODE_HELP: Record<string, string> = {
+  'decrypt-failure':
+    ' Actual could not decrypt the budget: the encryption password is wrong, or the ' +
+    'key was changed on another device. Nothing is wrong with the server.',
+  unauthorized:
+    ' The server refused the credentials. A session token may have expired, or the ' +
+    'password may have changed.',
+  'opening-budget':
+    ' Actual could not open the local copy, which usually means the cached file is ' +
+    'damaged. Deleting the budget folder in ACTUAL_DATA_DIR downloads it again.',
+  'loading-budget':
+    ' Actual downloaded the budget but could not finish loading it. Deleting the ' +
+    'budget folder in ACTUAL_DATA_DIR downloads it again.',
+  'invalid-schema':
+    ' The budget schema is not one this version of Actual understands, which is a ' +
+    'version mismatch rather than a connection problem.',
+  internal: ' Actual reported an internal failure and gave no further detail.',
+};
+
+/** Codes that mean "nothing answered", which is what the generic text assumes. */
+const NETWORK_CODES = new Set(['network-failure', 'timeout', 'ETIMEDOUT', 'ECONNREFUSED']);
+
+function reasonOf(error: unknown): string {
+  const tagged = error as { code?: unknown; reason?: unknown } | null | undefined;
+  return String(tagged?.code ?? tagged?.reason ?? '');
+}
 
 /**
  * The engine's own words, kept after the explanation rather than replaced by it.
@@ -223,7 +254,20 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
   // After the out-of-sync cases, which are more specific, and before falling
   // through to the engine's own words.
   if (/unknown problem opening/i.test(text)) {
-    return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
+    const reason = reasonOf(error);
+    // Only an error with no code, or a network one, is the case the generic
+    // text describes. With a named reason, say what that reason means and
+    // leave Actual's sentence as the detail instead of contradicting it.
+    if (reason === '' || NETWORK_CODES.has(reason)) {
+      return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
+    }
+    const known = CODE_HELP[reason];
+    return (
+      `Actual reported: ${readable(error)}` +
+      (known ?? ` The reason it gave is "${reason}".`) +
+      caution +
+      contention
+    );
   }
 
   const message = readable(error);
