@@ -43,10 +43,14 @@ moved inside it.
   id instead of its name, which reads as "this category has nothing". It takes
   either now, and when nothing matches at all it says so rather than showing an
   empty list. (#136)
-- When the Actual server stopped answering in the middle of a write, the error
-  said there was an unknown problem opening your budget. Nothing was being
-  opened. It now explains what the message means, points at the server, and
-  keeps Actual's own wording after the explanation. (#142)
+- Actual reports an unknown problem opening your budget for anything it has no
+  specific case for, including a sync that failed while the budget was already
+  open, so the message sent people to check a file, a sync id and a password
+  that were all fine. It now explains what that sentence covers, and what to do
+  depends on what Actual said underneath: a wrong encryption password, an
+  expired session or a damaged local copy are each named, and the server is
+  pointed at only when no more specific reason came with it. Actual's own
+  wording is kept after the explanation. (#142)
 
 ### Known, and not fixed here
 
