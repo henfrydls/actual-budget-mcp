@@ -1,5 +1,73 @@
 # Changelog
 
+## 0.10.2
+
+Five things that went wrong in use, and one of them changes how a transaction
+is recorded, so it is worth reading before you update.
+
+### A payee that is also an account name (#137)
+
+Writing another account's name as the payee is how you ask for a transfer, and
+that is unchanged. What changed is what happens when you also give a category.
+
+A prepaid card topped up at a station called "Fuel Station" means there is an
+account by that name and a shop by that name. Asking for
+`payee: "Fuel Station", category: "Fuel"` used to move money between the two
+accounts, drop the category, and leave you to delete it and start again.
+
+Now the category decides, but only between two accounts that are both inside
+your budget: there the money has not gone anywhere, so a category means you
+are recording a purchase. If either account is outside the budget the money
+really is crossing its edge, so it stays a transfer and keeps the category.
+That covers putting money into an investment account with a category on it.
+
+Either way, when it does make a transfer, the reply says so: which account,
+which direction, and whether the money entered your budget, left it, or only
+moved inside it.
+
+### Fixes
+
+- The duplicate check now covers transfers and split transactions. Before, only
+  a plain transaction was checked, so the same transfer or the same split could
+  be recorded twice with no warning. A transfer is a repeat when it is between
+  the same two accounts on the same date for the same amount, and a split is
+  judged on its total, which is what your bank shows. Two identical transfers
+  on one day are ordinary, a withdrawal split across two operations or a card
+  paid twice, so `allow_duplicate` still creates it. (#98)
+- Sending two rows with the same `imported_id` in one call wrote both of them,
+  while the tool promised that resending a batch could not duplicate anything.
+  A bank id identifies one movement within one account, so two rows carrying it
+  are refused, and `allow_duplicate` does not override that: the same id in two
+  different accounts is two movements and is still written. (#143)
+- `get_transactions` returned an empty list when you filtered by a category's
+  id instead of its name, which reads as "this category has nothing". It takes
+  either now, and when nothing matches at all it says so rather than showing an
+  empty list. (#136)
+- Actual reports an unknown problem opening your budget for anything it has no
+  specific case for, including a sync that failed while the budget was already
+  open, so the message sent people to check a file, a sync id and a password
+  that were all fine. It now explains what that sentence covers, and what to do
+  depends on what Actual said underneath: a wrong encryption password, an
+  expired session or a damaged local copy are each named, and the server is
+  pointed at only when no more specific reason came with it. Actual's own
+  wording is kept after the explanation. (#142)
+
+### Known, and not fixed here
+
+- In a currency with no decimal places (JPY, KRW, IRR), amounts are out by a
+  factor of a hundred in both directions: asking to spend 100 records 10,000,
+  and a real 1,000 is reported as 10.00. Budgets in any other currency are
+  unaffected. (#141)
+- The duplicate check for transfers only looks at transfers. A row imported
+  from your bank that was never linked to its other half is not one, so a
+  transfer you create afterwards is not matched against it.
+
+### Maintenance
+
+- Dependency updates for Actual's library and the MCP SDK are now watched
+  daily, so a release that this server cannot open is noticed here before it is
+  noticed in someone's budget. (#146)
+
 ## 0.10.1
 
 A patch release, and one that asks something of you before you install it: see
