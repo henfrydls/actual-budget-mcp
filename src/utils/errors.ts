@@ -98,6 +98,78 @@ const MAY_ALREADY_BE_APPLIED =
   ' If this happened during a write, check the budget before retrying: a change ' +
   'can be applied and still report an error, and repeating it would duplicate it.';
 
+/**
+ * Actual's generic failure, which names the one thing that may not have happened.
+ *
+ * `getSyncError` in the bundle returns `We had an unknown problem opening
+ * "<id>"` for **any** reason it has no case for, and three places emit it:
+ * `api/load-budget`, `api/download-budget` on the cached branch, and
+ * `api/sync`. So the sentence says "opening" whatever went wrong, and opening
+ * really is one of the possibilities.
+ *
+ * What tells them apart is the code. `withErrorCode` leaves the reason on
+ * `error.code`, so `decrypt-failure`, `unauthorized`, `opening-budget` and the
+ * rest arrive with a name attached, and only an error with **no** code, or a
+ * network or timeout one, is the case this text is about. An earlier version
+ * of this said "nothing was being opened: the budget was already loaded" for
+ * all of them, which told someone with a wrong encryption key that their
+ * password was fine and sent them to restart a server that was answering.
+ *
+ * The translation lives here, in the layer that turns an error into words.
+ * `mayHaveBeenApplied` in write-outcome.ts recognises this failure by that same
+ * string on the **error object**, and uses it to decide whether a write might
+ * have landed. Rewriting the object would take that away and the answer would
+ * silently become "not applied", which is the one verdict that authorises a
+ * retry.
+ */
+const UNKNOWN_OPEN_HELP =
+  'Actual reported a generic failure that names opening the budget, which it uses ' +
+  'for anything it has no specific case for. It carries no code, so the most ' +
+  'likely cause is the Actual server not answering: check that it is running and ' +
+  'reachable. If the budget was already open, nothing was being opened and this ' +
+  'came from a sync.';
+
+/** What a named reason means, where knowing it changes what to do. */
+const CODE_HELP: Record<string, string> = {
+  'decrypt-failure':
+    ' Actual could not decrypt the budget: the encryption password is wrong, or the ' +
+    'key was changed on another device. Nothing is wrong with the server.',
+  unauthorized:
+    ' The server refused the credentials. A session token may have expired, or the ' +
+    'password may have changed.',
+  'opening-budget':
+    ' Actual could not open the local copy, which usually means the cached file is ' +
+    'damaged. Deleting the budget folder in ACTUAL_DATA_DIR downloads it again.',
+  'loading-budget':
+    ' Actual downloaded the budget but could not finish loading it. Deleting the ' +
+    'budget folder in ACTUAL_DATA_DIR downloads it again.',
+  'invalid-schema':
+    ' The budget schema is not one this version of Actual understands, which is a ' +
+    'version mismatch rather than a connection problem.',
+  internal: ' Actual reported an internal failure and gave no further detail.',
+};
+
+/** Codes that mean "nothing answered", which is what the generic text assumes. */
+const NETWORK_CODES = new Set(['network-failure', 'timeout', 'ETIMEDOUT', 'ECONNREFUSED']);
+
+function reasonOf(error: unknown): string {
+  const tagged = error as { code?: unknown; reason?: unknown } | null | undefined;
+  return String(tagged?.code ?? tagged?.reason ?? '');
+}
+
+/**
+ * The engine's own words, kept after the explanation rather than replaced by it.
+ *
+ * Two tests already insisted on this and they were right: the summary must not
+ * hide what Actual said. Someone searching for that string, or pasting it into
+ * an issue, needs it to still be there. What changes is that it is no longer
+ * the *only* thing said, and no longer the first.
+ */
+function quoting(error: unknown): string {
+  const original = readable(error).trim();
+  return original === '' ? '' : ` Actual's own words: ${original}`;
+}
+
 const VERSION_MISMATCH_HELP =
   'This budget cannot be loaded by this version of Actual: its data or migrations ' +
   'are newer or older than the API supports. Update the Actual app and the ' +
@@ -178,6 +250,25 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
   if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + caution + contention;
+
+  // After the out-of-sync cases, which are more specific, and before falling
+  // through to the engine's own words.
+  if (/unknown problem opening/i.test(text)) {
+    const reason = reasonOf(error);
+    // Only an error with no code, or a network one, is the case the generic
+    // text describes. With a named reason, say what that reason means and
+    // leave Actual's sentence as the detail instead of contradicting it.
+    if (reason === '' || NETWORK_CODES.has(reason)) {
+      return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
+    }
+    const known = CODE_HELP[reason];
+    return (
+      `Actual reported: ${readable(error)}` +
+      (known ?? ` The reason it gave is "${reason}".`) +
+      caution +
+      contention
+    );
+  }
 
   const message = readable(error);
   return message.trim() === ''
