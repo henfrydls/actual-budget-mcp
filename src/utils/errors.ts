@@ -98,6 +98,47 @@ const MAY_ALREADY_BE_APPLIED =
   ' If this happened during a write, check the budget before retrying: a change ' +
   'can be applied and still report an error, and repeating it would duplicate it.';
 
+/**
+ * Actual's generic failure, which names the one thing that did not happen.
+ *
+ * `We had an unknown problem opening "<id>"` is the engine's fallback when it
+ * has no more specific case, and it comes back from a **sync** in the middle of
+ * a write as readily as from opening anything. Measured: with the budget
+ * already loaded and the server replaced by a socket that accepts and never
+ * answers, a write ends with exactly that. The reader is sent to look at their
+ * budget file, their sync id and their credentials, none of which are the
+ * problem.
+ *
+ * It does not claim the server is the cause, because the message is generic and
+ * the engine does not say. What it can state is what did not happen -- nothing
+ * was being opened -- and what to check first.
+ *
+ * The translation lives here, in the layer that turns an error into words.
+ * `mayHaveBeenApplied` in write-outcome.ts recognises this failure by that same
+ * string on the **error object**, and uses it to decide whether a write might
+ * have landed. Rewriting the object would take that away and the answer would
+ * silently become "not applied", which is the one verdict that authorises a
+ * retry.
+ */
+const UNKNOWN_OPEN_HELP =
+  'Actual reported a generic failure that mentions opening the budget, but nothing ' +
+  'was being opened: the budget was already loaded and what failed was a sync. The ' +
+  'usual cause is the Actual server not answering, so check that it is running and ' +
+  'reachable. Nothing is wrong with your budget file, sync id or password.';
+
+/**
+ * The engine's own words, kept after the explanation rather than replaced by it.
+ *
+ * Two tests already insisted on this and they were right: the summary must not
+ * hide what Actual said. Someone searching for that string, or pasting it into
+ * an issue, needs it to still be there. What changes is that it is no longer
+ * the *only* thing said, and no longer the first.
+ */
+function quoting(error: unknown): string {
+  const original = readable(error).trim();
+  return original === '' ? '' : ` Actual's own words: ${original}`;
+}
+
 const VERSION_MISMATCH_HELP =
   'This budget cannot be loaded by this version of Actual: its data or migrations ' +
   'are newer or older than the API supports. Update the Actual app and the ' +
@@ -178,6 +219,12 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
   if (/out-of-sync-(migrations|data)/i.test(text)) return VERSION_MISMATCH_HELP;
   if (/out-of-sync/i.test(text)) return OUT_OF_SYNC_HELP + caution + contention;
+
+  // After the out-of-sync cases, which are more specific, and before falling
+  // through to the engine's own words.
+  if (/unknown problem opening/i.test(text)) {
+    return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
+  }
 
   const message = readable(error);
   return message.trim() === ''
