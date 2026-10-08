@@ -9,6 +9,10 @@ import { describeError } from '../../utils/errors.js';
 import { mayHaveBeenApplied, verifyFailedWrite, WriteReportedError } from '../../utils/write-outcome.js';
 import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/write-marker.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import {
+  findPossibleDuplicates,
+  describePossibleDuplicates,
+} from '../../utils/duplicate-check.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -25,9 +29,18 @@ export function registerCreateTransfer(server: McpServer): void {
         .optional()
         .describe('Date (YYYY-MM-DD or natural language). Defaults to today.'),
       notes: z.string().optional().describe('Transfer notes'),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Create it even though a transfer between the same two accounts, on the same ' +
+            'date, for the same amount already exists. Two identical transfers in one day ' +
+            'are ordinary: a cash withdrawal split across two operations, or a card paid ' +
+            'twice.',
+        ),
     },
     { title: 'Transfer between accounts', readOnlyHint: false },
-    async ({ from_account, to_account, amount, date, notes }) =>
+    async ({ from_account, to_account, amount, date, notes, allow_duplicate }) =>
       // Serialised with every other transaction write, so two calls
       // sent without awaiting the first cannot read each other half
       // done (#111).
@@ -48,6 +61,50 @@ export function registerCreateTransfer(server: McpServer): void {
           throw new Error(
             `Could not find transfer payee for destination account. This may indicate the account is not set up for transfers.`,
           );
+        }
+
+        // The same check every other write uses, on the row this is about to
+        // write: the source account, this date, this amount (#98).
+        //
+        // The row this writes is the one to compare, whichever way the caller
+        // phrased it. Note that this tool cannot phrase it both ways: it takes
+        // the absolute value, so -100 from B to A is a transfer *from B*, a
+        // different movement. What does write the same two rows is the payee
+        // shortcut in `create_transaction`, where the sign chooses the
+        // direction, and a transfer made that way is found here.
+        //
+        // Narrowed to the same pair of accounts. Without that, a withdrawal of
+        // the same amount to a different account on the same day would be
+        // reported as a duplicate of this one, and in a real budget money
+        // moves through several accounts in a day on its way to cash.
+        //
+        // By payee id, not by name. A transfer payee is named after its
+        // account and Actual allows two accounts to share a name, so comparing
+        // names called a transfer to one "Ahorro" a repeat of a transfer to
+        // the other. The id is also what survives a rename: the payee follows
+        // its account either way, so nothing is lost by not reading the name.
+        if (!allow_duplicate) {
+          const existing = await findPossibleDuplicates(fromId, txnDate, -amountCents);
+          const sameTransfer = existing.filter(
+            (t) => t.isTransfer && t.payeeId === transferPayee.id,
+          );
+          if (sameTransfer.length > 0) {
+            const fromName =
+              (await api.getAccounts()).find((a) => a.id === fromId)?.name ?? from_account;
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: describePossibleDuplicates(sameTransfer, fromName, [
+                    'Same two accounts, same date, same amount. If this is a second, genuine',
+                    'movement rather than the same one recorded twice, call again with',
+                    'allow_duplicate: true. Two identical transfers in a day are ordinary:',
+                    'a withdrawal split across two operations, or a card paid twice.',
+                  ]).join('\n'),
+                },
+              ],
+            };
+          }
         }
 
         const transaction: Record<string, unknown> = {
