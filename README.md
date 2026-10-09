@@ -290,6 +290,45 @@ command, not about your install.
 Code and the rest read MCP configuration at startup and will not pick up an edit until
 they are restarted.
 
+## Running it for days at a time
+
+Most clients start this server when you open them and stop it when you close
+them, and nothing below matters. If you run it as a process that stays up, an
+always-on chat bot or a service, it does.
+
+The server downloads your budget once at startup and keeps a local copy. Before
+every read it pulls whatever the Actual server has that the copy does not, so
+an edit you make in the Actual app shows up in the next question you ask. You
+do not have to restart it, and you do not have to run a bank sync to shake it
+loose.
+
+Two limits keep that from costing a round trip on every call:
+
+- A copy pulled less than **60 seconds** ago is treated as current, so a burst
+  of questions syncs once.
+- A read waits at most **20 seconds** for the pull. Past that it answers from
+  the local copy rather than hanging, and says so.
+
+When the pull does not happen, because the Actual server is down, unreachable
+or simply slow, the reply ends with a line saying it could not refresh and how
+old the figures are:
+
+```
+Could not refresh from the Actual server; these figures are from the last
+sync, 14 minutes ago. Anything changed in the Actual app since then may be
+missing.
+```
+
+That line is the point of it. A server that is down otherwise goes back to
+answering with figures from hours ago and nothing says which.
+
+Writes are not affected: they already pull before the checks that decide
+whether to write, so they do not pay for a second one.
+
+Each client needs its own `ACTUAL_DATA_DIR`. Two processes sharing one local
+copy will corrupt it, and a long-lived server makes that easier to do by
+accident, because it is there all day for a second client to point at.
+
 ## Configuration
 
 | Variable | Required | Description |
