@@ -95,6 +95,35 @@ describe('a sync that failed being reported as a problem opening the budget', ()
       expect(described).not.toMatch(/running and reachable/i);
     });
 
+    it('tells an expired session to restart the server, not to open anything', () => {
+      // Measured by deleting the server's sessions with the MCP server
+      // running: the budget stays open and only the sync is refused, so the
+      // sentence it arrives wearing, about a problem opening the budget, sends
+      // the reader after the one thing that is fine. Nothing here signs in
+      // again, so it fails the same way every 60 seconds until a restart.
+      const described = describeError(withCode('token-expired'));
+
+      expect(described).toMatch(/session .* expired/i);
+      // The act, not just the word: the second half of this message also
+      // mentions restarting, for the case where a restart alone is not enough.
+      expect(described).toMatch(/restart it to sign in/i);
+      // And it says so: the budget is fine. Actual's own sentence in front of
+      // this one is about a problem opening it, which is the one thing that
+      // did not happen.
+      expect(described).toMatch(/budget itself is open/i);
+      expect(described).not.toMatch(/running and reachable/i);
+      // Not the cached copy either: deleting it would cost a download and
+      // change nothing.
+      expect(described).not.toMatch(/ACTUAL_DATA_DIR/);
+    });
+
+    it('does not send a token user to restart with the same dead token', () => {
+      // Connecting already has a case for this, because a token is the one
+      // credential a restart cannot renew by itself. It is the same here: the
+      // advice that works for a password sends an OIDC user round a loop.
+      expect(describeError(withCode('token-expired'))).toMatch(/ACTUAL_SESSION_TOKEN/);
+    });
+
     it.each(['opening-budget', 'loading-budget'])(
       'sends %s to the cached copy, not to the server',
       (code) => {

@@ -378,6 +378,22 @@ describe('what the reader is told when it could not refresh', () => {
     expect(notice).toMatch(/encryption password/i);
   });
 
+  it('tells an always-on server its session expired', () => {
+    // The case this matters most for: a server left running for days whose
+    // session the Actual server has since forgotten. It keeps answering, from
+    // a copy that stops moving, and retries with the dead token every minute.
+    const failure = Object.assign(new Error('We had an unknown problem opening "budget-id"'), {
+      code: 'token-expired',
+    });
+
+    const notice = stalenessNotice({ current: false, lastGoodSync: Date.now() }, Date.now());
+    const withReason = stalenessNotice({ current: false, failure }, Date.now());
+
+    expect(notice).not.toMatch(/restart/i);
+    expect(withReason).toMatch(/session .* expired/i);
+    expect(withReason).toMatch(/restart/i);
+  });
+
   it('still gives the age when it gives a reason', () => {
     // The reason is extra, not a replacement: how old the figures are is the
     // question the reader came with.
