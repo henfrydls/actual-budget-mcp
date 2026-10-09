@@ -15,6 +15,11 @@ import {
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import {
+  findTransferTarget,
+  isOffBudget,
+  transferEffect,
+} from '../../utils/transfer-rule.js';
 
 export interface CreateTransactionInput {
   /** Go ahead even though a transaction with the same account, date and amount exists. */
@@ -60,80 +65,33 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   const accounts = await api.getAccounts();
 
   // A payee that names another account is a transfer: route it through that
-  // account's transfer payee with runTransfers so both sides are linked (#24).
-  // Writing the other account's name is how someone asks for a transfer, and
-  // before #24 only one side of it was created.
+  // account's transfer payee with runTransfers so both sides are linked (#24),
+  // unless a category was asked for and both accounts are on budget (#137).
   //
-  // Unless a category was asked for **and the other account is on budget**.
-  // Between two on-budget accounts the money has not left the budget, so there
-  // is nothing to categorise and Actual drops the category: naming one says
-  // the opposite of a transfer. That is #137 -- someone whose prepaid card is
-  // topped up at a station called "Fuel Station" has an account by that name
-  // too, and `payee: "Fuel Station", category: "Fuel"` moved money from the
-  // card to the prepaid account, dropped the category, and had to be deleted
-  // by hand.
-  //
-  // As soon as **either** account is off budget, money is crossing the budget's
-  // edge and the transfer is the point. Measured through this tool's own path
-  // -- `addTransactions` with `runTransfers` -- for all four combinations:
-  //
-  //   on  -> on    the rule applies: an ordinary purchase, no counterpart
-  //   on  -> off   transfer, category kept on the source row
-  //   off -> on    transfer, category kept on the source row
-  //   off -> off   transfer, category kept on the source row
-  //
-  // The category survives in every transfer, on the row it was asked for. What
-  // changes is whether that row counts: a category on an off-budget row is
-  // stored and ignored by the budget, because off-budget accounts are outside
-  // it. The reply says which of those happened rather than leaving someone to
-  // assume the category is doing something.
-  //
-  // Worth recording, because it cost a wrong conclusion: `importTransactions`
-  // does *not* behave this way -- it drops the category on three of the four.
-  // A probe written with it reported that the engine discards them, and the
-  // sentence nearly went into the reply. The path under test has to be the
-  // path the tool uses.
-  //
-  // Two earlier versions of this fix got the condition wrong, each time by
-  // looking at one side only. First it applied to every target, which turned a
-  // contribution into a plain expense with no counterpart. Then it looked at
-  // the target alone, so spending *from* an off-budget account into an
-  // on-budget one lost its counterpart the same way: the money left the asset
-  // and never arrived.
+  // The rule lives in transfer-rule.ts, where the batch tool reads the same
+  // one. Having it twice is what #154 is: the batch refused the row this
+  // creates, so an assistant that learned one tool got a different answer from
+  // the other for the same input.
+  const sourceOffBudget = isOffBudget(accounts.find((a) => a.id === accountId));
+  const target = findTransferTarget({
+    accounts,
+    sourceAccountId: accountId,
+    payee: input.payee,
+    hasCategory: Boolean(input.category),
+  });
+
   let transferPayeeId: string | undefined;
   let transferTargetName: string | undefined;
   let transferTargetOffBudget = false;
-  const sourceOffBudget = Boolean(
-    (accounts.find((a) => a.id === accountId) as { offbudget?: boolean } | undefined)?.offbudget,
-  );
-  if (input.payee) {
-    const lower = input.payee.toLowerCase();
-    // `!a.closed` is belt and braces: measured, `getAccounts()` leaves closed
-    // accounts out of the list altogether rather than returning them with the
-    // flag set, so a closed account's name falls through and becomes an
-    // ordinary payee either way. Which is the right answer -- there is nothing
-    // to transfer into -- and the reason removing this line changes no test.
-    const target = accounts.find(
-      (a) => !a.closed && (a.id === input.payee || a.name.toLowerCase() === lower),
-    );
-    if (target) {
-      if (target.id === accountId) {
-        throw new Error('Cannot transfer to the same account.');
-      }
-      const offBudget = Boolean((target as { offbudget?: boolean }).offbudget);
-      // The rule applies only when **both** sides are on budget. Anywhere else
-      // the money crosses the budget's edge and the transfer is what matters.
-      if (!input.category || offBudget || sourceOffBudget) {
-        const payees = await api.getPayees();
-        const transferPayee = payees.find((p) => p.transfer_acct === target.id);
-        if (!transferPayee) {
-          throw new Error(`No transfer payee found for account "${target.name}".`);
-        }
-        transferPayeeId = transferPayee.id;
-        transferTargetName = target.name;
-        transferTargetOffBudget = offBudget;
-      }
+  if (target) {
+    const payees = await api.getPayees();
+    const transferPayee = payees.find((p) => p.transfer_acct === target.id);
+    if (!transferPayee) {
+      throw new Error(`No transfer payee found for account "${target.name}".`);
     }
+    transferPayeeId = transferPayee.id;
+    transferTargetName = target.name;
+    transferTargetOffBudget = target.offBudget;
   }
 
   // Resolved whichever this turns out to be. A transfer to an off-budget
@@ -283,46 +241,40 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       `A matching row was created there.`,
     );
     // What this did to the budget, worked out from the two rows rather than
-    // from which accounts are off budget.
-    //
-    // Deciding by combination was wrong twice in a row, both times on the
-    // sign: with a positive amount the money runs the other way, so "left
-    // your budget" and "came into your budget" swapped places and the reply
-    // said the opposite of what the engine had done. The rows cannot be read
-    // two ways.
-    //
-    // Each transfer is two rows: this account gets `amountCents`, the other
-    // gets its negative. Only rows in on-budget accounts count, so the effect
-    // on the budget is their sum -- zero between two on-budget accounts,
-    // because the money only moved.
-    const effect =
-      (sourceOffBudget ? 0 : amountCents) + (transferTargetOffBudget ? 0 : -amountCents);
+    // from which accounts are off budget. Same classification the batch
+    // reports per row, from the same place.
+    const kind = transferEffect({
+      amountCents,
+      sourceOffBudget,
+      targetOffBudget: transferTargetOffBudget,
+    });
     const acctName = acct?.name || accountId;
     // Where the category landed, measured: on the row it was asked for, which
     // is this account's. It counts only if this account is in the budget.
     const categoryCounts = !sourceOffBudget;
     const otherName = transferTargetName ?? '';
 
-    if (!sourceOffBudget && !transferTargetOffBudget) {
+    if (kind === 'inside') {
       lines.push(
         'The money moved between accounts inside your budget, so it is not spending.',
         'To record a purchase instead, give it a category, or use a payee that is not an',
         'account name.',
       );
-    } else if (sourceOffBudget && transferTargetOffBudget) {
+    } else if (kind === 'outside') {
       lines.push(
         `${acctName} and ${otherName} are both off budget, so this does not affect your ` +
           `budget at all.`,
         ...(input.category
           ? [
-              `The category is stored on the row in ${acctName} but counts nowhere, since ` +
-                `neither account is in your budget.`,
+              `The category was not kept: Actual discards it on a transfer where neither ` +
+                `account is in the budget. Nothing counts it, so there is nothing to put it ` +
+                `on.`,
             ]
           : []),
       );
     } else {
       // One side in, one side out: the sign of the effect says which way.
-      const arrived = effect > 0;
+      const arrived = kind === 'incoming';
       const offBudgetSide = sourceOffBudget ? acctName : otherName;
       lines.push(
         `${offBudgetSide} is off budget, so this money ` +

@@ -7,6 +7,7 @@ vi.mock('@actual-app/api', () => ({
   getCategories: vi.fn(),
   getTransactions: vi.fn(),
   addTransactions: vi.fn(),
+  getPayees: vi.fn(),
   runQuery: vi.fn(),
   sync: vi.fn().mockResolvedValue(undefined),
   q: (table: string) => fakeQ(table),
@@ -45,6 +46,9 @@ describe('create_transactions', () => {
     vi.mocked(api.getAccounts).mockReset().mockResolvedValue(ACCOUNTS as never);
     vi.mocked(api.getCategories).mockReset().mockResolvedValue([] as never);
     vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.getPayees)
+      .mockReset()
+      .mockResolvedValue([{ id: 'payee-savings', name: 'Savings', transfer_acct: 'acc-2' }] as never);
     vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as never);
     vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as never);
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
@@ -140,5 +144,33 @@ describe('create_transactions', () => {
     const texts = [first.join('\n'), second.join('\n')];
     expect(texts.some((t) => t.includes('Checking: 0 -> 2'))).toBe(true);
     expect(texts.some((t) => t.includes('Checking: 2 -> 4'))).toBe(true);
+  });
+
+  /**
+   * `runTransfers` is per call, so it is a decision about the whole group.
+   *
+   * On when the group has a transfer in it and off when it does not. Leaving
+   * it off for a group that has one writes a one-legged movement, and the
+   * engine cannot be made to show the other direction: with it on and no
+   * transfer to run, nothing observable changes, so the flag itself is what
+   * has to be asserted.
+   */
+  it('turns runTransfers on only for a group that has one', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue([] as never);
+    vi.mocked(api.runQuery).mockResolvedValue({ data: [] } as never);
+
+    await createTransactions({
+      transactions: [{ account: 'Checking', amount: -10, payee: 'Shop', date: '2026-09-01' }],
+    });
+    expect(vi.mocked(api.addTransactions).mock.calls.at(-1)?.[2]).toMatchObject({
+      runTransfers: false,
+    });
+
+    await createTransactions({
+      transactions: [{ account: 'Checking', amount: -10, payee: 'Savings', date: '2026-09-02' }],
+    });
+    expect(vi.mocked(api.addTransactions).mock.calls.at(-1)?.[2]).toMatchObject({
+      runTransfers: true,
+    });
   });
 });
