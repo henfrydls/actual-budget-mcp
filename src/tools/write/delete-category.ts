@@ -6,6 +6,7 @@ import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 const ALL_TIME_START = '1900-01-01';
 const ALL_TIME_END = '9999-12-31';
@@ -71,7 +72,7 @@ export async function deleteCategoryGuarded(
   }
 
   await api.deleteCategory(categoryId, transferId);
-  await api.sync();
+  await syncNow();
 
   const lines = [`Category "${catName}" deleted.`];
   if (transferCat) {

@@ -7,6 +7,7 @@ import { formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 // Same trick as list-accounts: a far-future cutoff yields the full balance
 // instead of only transactions dated up to today (#21).
@@ -94,7 +95,7 @@ export async function deleteAccountGuarded(
   }
 
   await api.deleteAccount(accountId);
-  await api.sync();
+  await syncNow();
 
   return {
     deleted: true,

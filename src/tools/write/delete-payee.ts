@@ -6,6 +6,7 @@ import { resolvePayeeId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 const ALL_TIME_START = '1900-01-01';
 const ALL_TIME_END = '9999-12-31';
@@ -54,7 +55,7 @@ export async function deletePayeeGuarded(
   }
 
   await api.deletePayee(payeeId);
-  await api.sync();
+  await syncNow();
 
   return { deleted: true, lines: [`Payee "${payeeName}" deleted.`] };
 }

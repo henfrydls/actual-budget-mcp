@@ -49,8 +49,12 @@ import { registerDeletePayee } from './write/delete-payee.js';
 import { registerGetRules } from './read/get-rules.js';
 import { registerCreateRule } from './write/create-rule.js';
 import { registerDeleteRule } from './write/delete-rule.js';
+import { withReadSync } from '../utils/read-sync.js';
 
-export function registerAllTools(server: McpServer): void {
+export function registerAllTools(rawServer: McpServer): void {
+  // Every read tool pulls the server's changes first (#126). Here rather than
+  // in fifteen files: this is the one place they all go through.
+  const server = withReadSync(rawServer);
   // Read
   registerListAccounts(server);
   registerGetBudgetMonth(server);

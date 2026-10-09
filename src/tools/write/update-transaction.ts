@@ -8,6 +8,7 @@ import { resolveCategoryId, resolvePayeeName } from '../../utils/resolvers.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { describeError } from '../../utils/errors.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface UpdateTransactionInput {
   transaction_id: string;
@@ -90,7 +91,7 @@ export async function updateTransactionFields(input: UpdateTransactionInput): Pr
   // #25/#44: the guard that preserves a sub-transaction's amount lives in
   // updatePreservingChildAmount so every write path shares it.
   await updatePreservingChildAmount(input.transaction_id, updates);
-  await api.sync();
+  await syncNow();
 
   return [`Transaction ${input.transaction_id} updated:`, ...changes.map((c) => `  ${c}`)];
 }

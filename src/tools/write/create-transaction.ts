@@ -14,6 +14,7 @@ import {
 } from '../../utils/duplicate-check.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface CreateTransactionInput {
   /** Go ahead even though a transaction with the same account, date and amount exists. */
@@ -227,7 +228,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       }
     }
 
-    await api.sync();
+    await syncNow();
   } catch (error) {
     if (!mayHaveBeenApplied(error)) throw error;
 

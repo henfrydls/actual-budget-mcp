@@ -13,6 +13,7 @@ import {
   findPossibleDuplicates,
   describePossibleDuplicates,
 } from '../../utils/duplicate-check.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerCreateTransfer(server: McpServer): void {
   server.tool(
@@ -132,7 +133,7 @@ export function registerCreateTransfer(server: McpServer): void {
           await api.addTransactions(fromId, [transaction as any], {
             runTransfers: true,
           });
-          await api.sync();
+          await syncNow();
         } catch (error) {
           if (!mayHaveBeenApplied(error)) throw error;
           const { verdict, message } = await verifyFailedWrite(error, {

@@ -6,6 +6,7 @@ import { resolveCategoryId, resolveCategoryGroupId } from '../../utils/resolvers
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface DeleteCategoryGroupInput {
   group: string;
@@ -55,7 +56,7 @@ export async function deleteCategoryGroupGuarded(
   }
 
   await api.deleteCategoryGroup(groupId, transferId);
-  await api.sync();
+  await syncNow();
 
   return {
     deleted: true,

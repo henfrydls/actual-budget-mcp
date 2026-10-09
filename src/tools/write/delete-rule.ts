@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface DeleteRuleInput {
   rule_id: string;
@@ -60,7 +61,7 @@ export async function deleteRuleGuarded(
   }
 
   const result = await api.deleteRule(input.rule_id);
-  await api.sync();
+  await syncNow();
 
   if (!result) {
     return { deleted: false, lines: [`Rule ${input.rule_id} could not be deleted.`] };

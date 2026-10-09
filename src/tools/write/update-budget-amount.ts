@@ -8,6 +8,7 @@ import { resolveCategoryId } from '../../utils/resolvers.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
 import { makeQueue } from '../../utils/serialize.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 /**
  * Set a category's budgeted amount, absolutely or by adding to it.
@@ -125,7 +126,7 @@ export function registerUpdateBudgetAmount(server: McpServer): void {
         const amountCents = isDelta ? previous + inputCents : inputCents;
 
         await api.setBudgetAmount(month, categoryId, amountCents);
-        await api.sync();
+        await syncNow();
 
         return [
           `Budget updated for ${catName} in ${month}:`,

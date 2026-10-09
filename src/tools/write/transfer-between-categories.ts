@@ -9,6 +9,7 @@ import { describeError } from '../../utils/errors.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { isIncome } from '../../utils/income.js';
 import { budgetCurrencyCode } from '../../utils/currency.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 /**
  * Move budgeted money between two categories, creating no transaction.
@@ -238,7 +239,7 @@ export function registerTransferBetweenCategories(server: McpServer): void {
               `was moved: ${describeError(error)}`,
           );
         }
-        await api.sync();
+        await syncNow();
 
         const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
         const afterFrom = snapshot(after, fromId);

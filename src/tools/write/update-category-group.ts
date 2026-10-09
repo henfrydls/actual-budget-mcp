@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveCategoryGroupId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerUpdateCategoryGroup(server: McpServer): void {
   server.tool(
@@ -41,7 +42,7 @@ export function registerUpdateCategoryGroup(server: McpServer): void {
         }
 
         await api.updateCategoryGroup(groupId, updates as any);
-        await api.sync();
+        await syncNow();
 
         return {
           content: [{

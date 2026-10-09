@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolvePayeeId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerUpdatePayee(server: McpServer): void {
   server.tool(
@@ -24,7 +25,7 @@ export function registerUpdatePayee(server: McpServer): void {
         const oldName = p?.name || payee;
 
         await api.updatePayee(payeeId, { name } as any);
-        await api.sync();
+        await syncNow();
 
         return {
           content: [{

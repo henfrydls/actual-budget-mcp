@@ -1,6 +1,7 @@
 import * as api from '@actual-app/api';
 import { transactionsQuery } from './transaction-query.js';
 import { formatMoney } from './money.js';
+import { syncNow } from './sync-clock.js';
 
 /**
  * Look for a transaction that already says what this one is about to say.
@@ -75,7 +76,7 @@ export interface ExistingTransaction {
  */
 export async function pullBeforeReading(what: string): Promise<void> {
   try {
-    await api.sync();
+    await syncNow();
   } catch (error) {
     // stderr: stdout carries JSON-RPC.
     console.error(

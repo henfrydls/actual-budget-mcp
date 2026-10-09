@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 /**
  * Rename an account.
@@ -105,7 +106,7 @@ export function registerUpdateAccount(server: McpServer): void {
         // Built here rather than passed through: an unrecognised field reaches
         // SQLite as `no such column`.
         await api.updateAccount(accountId, { name: newName } as never);
-        await api.sync();
+        await syncNow();
 
         const after = (await api.getAccounts()).find((a) => a.id === accountId);
         if (!after || after.name !== newName) {

@@ -7,6 +7,7 @@ import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerRecategorizeTransaction(server: McpServer): void {
   server.tool(
@@ -35,7 +36,7 @@ export function registerRecategorizeTransaction(server: McpServer): void {
         // #44: routed through the guard so recategorizing a split child does
         // not reset its amount to 0 and unbalance the parent.
         await updatePreservingChildAmount(transaction_id, { category: categoryId });
-        await api.sync();
+        await syncNow();
 
         return {
           content: [
