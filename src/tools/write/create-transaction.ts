@@ -11,6 +11,8 @@ import { newWriteMarker, findByMarker, corroborateAbsence } from '../../utils/wr
 import {
   findPossibleDuplicates,
   describePossibleDuplicates,
+  findUnlinkedCounterpart,
+  describeCounterpartClash,
 } from '../../utils/duplicate-check.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
@@ -120,7 +122,21 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // the write it guards lies at the edges, which is the shape that produced two
   // regressions in #96.
   if (!input.allow_duplicate) {
-    const existing = await findPossibleDuplicates(accountId, txnDate, amountCents);
+    // The other account first, when this is a transfer. Its row is the one
+    // nothing used to look at: the check below asks about the account being
+    // written to, and a transfer also writes a row somewhere else.
+    if (target) {
+      const counterpart = await findUnlinkedCounterpart(target.id, txnDate, amountCents);
+      if (counterpart.length > 0) {
+        return describeCounterpartClash(counterpart, target.name);
+      }
+    }
+
+    const existing = await findPossibleDuplicates(accountId, txnDate, amountCents, {
+      // The call above already pulled, and a second round trip would ask the
+      // server the same question twice in a row.
+      alreadyPulled: Boolean(target),
+    });
     if (existing.length > 0) {
       // Nothing is created. A warning that warns after creating leaves the
       // duplicate behind, which is the harm this exists to prevent; the caller

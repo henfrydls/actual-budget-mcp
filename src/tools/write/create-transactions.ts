@@ -10,6 +10,7 @@ import { newWriteMarker } from '../../utils/write-marker.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import {
   findPossibleDuplicates,
+  findUnlinkedCounterpart,
   pullBeforeReading,
 } from '../../utils/duplicate-check.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
@@ -19,6 +20,7 @@ import {
   findTransferTarget,
   isOffBudget,
   transferEffect,
+  transferPairKey,
   type TransferEffect,
 } from '../../utils/transfer-rule.js';
 
@@ -77,6 +79,13 @@ import {
  *
  * The reply names the rows that became transfers at the end, once, rather than
  * repeating the explanation on each of them.
+ *
+ * Two checks come with them, because a transfer writes two rows and the
+ * existing checks only ever looked at one. Both halves of one movement in the
+ * same list, which is what reading a card payment off both statements gives,
+ * are refused as one movement written twice; and a transfer whose other side
+ * is already sitting in the target account, imported from the bank, is refused
+ * before it lands on top of it.
  *
  * ## `imported_id` does not deduplicate here
  *
@@ -345,6 +354,34 @@ export async function createTransactions(input: {
       // `allow_duplicate`, and for a turn that advice led nowhere, because the
       // check ran either way and refused the batch again. A test asking for the
       // way out is what found it.
+      // Both halves of one movement, first. A pay-off read from two statements
+      // arrives as `{Bank, -800, payee "Card"}` and `{Card, +800, payee
+      // "Bank"}`, and each of those asks for both legs, so writing both put
+      // the payment in twice. The check below could not see it: the two rows
+      // name different accounts.
+      const pairs = new Map<string, number>();
+      for (const row of resolved) {
+        if (!row.transfer) continue;
+        const key = transferPairKey({
+          sourceAccountId: row.accountId,
+          targetAccountId: row.transfer.targetId,
+          amountCents: row.amountCents,
+          date: row.date,
+        });
+        const first = pairs.get(key);
+        if (first !== undefined) {
+          complain(
+            row.index,
+            `is row ${first + 1} again: the same movement between the same two accounts on ` +
+              `the same day, written from the other account. One of them records both sides, ` +
+              `so only one is needed. If these really are two separate movements, pass ` +
+              `allow_duplicate.`,
+          );
+        } else {
+          pairs.set(key, row.index);
+        }
+      }
+
       const seen = new Map<string, number>();
       for (const row of resolved) {
         const key = `${row.accountId}|${row.date}|${row.amountCents}`;
@@ -371,6 +408,28 @@ export async function createTransactions(input: {
             row.index,
             `${row.accountName} already has a transaction on ${row.date} for ` +
               `${formatMoney(row.amountCents)}. If this is a second one, pass allow_duplicate.`,
+          );
+          continue;
+        }
+
+        // And the row the transfer is about to put in the other account, which
+        // nothing used to look at. A card payment already imported from the
+        // bank is an ordinary row there; the transfer's own leg lands on top of
+        // it and the account shows the money arriving twice.
+        if (!row.transfer) continue;
+        const counterpart = await findUnlinkedCounterpart(
+          row.transfer.targetId,
+          row.date,
+          row.amountCents,
+          { alreadyPulled: true },
+        );
+        if (counterpart.length > 0) {
+          complain(
+            row.index,
+            `${row.transfer.targetName} already has a transaction on ${row.date} for ` +
+              `${formatMoney(-row.amountCents)} that is not part of a transfer. This row would ` +
+              `put a second one there. If that is this same movement, already imported, drop ` +
+              `this row; if it is a different one, pass allow_duplicate.`,
           );
         }
       }
@@ -424,8 +483,19 @@ async function writeBatch(
     else byAccount.set(row.accountId, [row]);
   }
 
+  // Counted for every account the batch can touch, which is not only the ones
+  // it writes to: a transfer puts a row in the other account as well, and
+  // leaving those out of the table hid half of what the call did. It hid most
+  // of it when the batch stopped part way, where the counts are the only
+  // record of what landed.
+  const names = new Map<string, string>();
+  for (const [accountId, group] of byAccount) names.set(accountId, group[0].accountName);
+  for (const row of resolved) {
+    if (row.transfer?.payeeId) names.set(row.transfer.targetId, row.transfer.targetName);
+  }
+
   const before = new Map<string, number>();
-  for (const accountId of byAccount.keys()) {
+  for (const accountId of names.keys()) {
     const rows = await api.getTransactions(
       accountId,
       '1900-01-01',
@@ -514,14 +584,18 @@ async function writeBatch(
 
   const lines: string[] = [];
   const counts: string[] = [];
-  for (const accountId of byAccount.keys()) {
+  for (const [accountId, name] of names) {
     const rows = await api.getTransactions(
       accountId,
       '1900-01-01',
       '2999-12-31',
     );
-    const name = byAccount.get(accountId)![0].accountName;
-    counts.push(`  ${name}: ${before.get(accountId)} -> ${rows.length}`);
+    const was = before.get(accountId) ?? 0;
+    // An account that only ever received counterparts, and received none
+    // because the batch stopped first, has nothing to report: listing it
+    // unchanged would read as though something had been attempted there.
+    if (was === rows.length && !byAccount.has(accountId)) continue;
+    counts.push(`  ${name}: ${was} -> ${rows.length}`);
   }
 
   if (failure) {
@@ -559,7 +633,7 @@ const EFFECT_LABEL: Record<TransferEffect, string> = {
 const EFFECT_PARAGRAPH: Record<TransferEffect, string> = {
   inside:
     'Inside your budget means the money only changed account, so it is not spending. To ' +
-    'record a purchase instead, give the row a category and use a payee that is not an ' +
+    'record a purchase instead, give the row a category, or use a payee that is not an ' +
     'account name.',
   outside:
     'Outside your budget means both accounts are off budget, so your budget is not ' +
@@ -636,11 +710,25 @@ function describeTransfers(written: ResolvedRow[]): string[] {
   const crossing = entries.filter(
     (e) => (e.effect === 'incoming' || e.effect === 'outgoing') && e.row.categoryId,
   );
-  if (crossing.length > 0) {
+  // Split by where the category actually landed, rather than left as a
+  // condition for the reader to apply. "Counts only if that row is in your
+  // budget" is true and makes someone work out which case they are in, and
+  // the whole point of saying anything is that they should not have to.
+  const counted = crossing.filter((e) => !e.row.transfer!.sourceOffBudget);
+  const notCounted = crossing.filter((e) => e.row.transfer!.sourceOffBudget);
+  if (counted.length > 0) {
     lines.push(
       '',
-      'The category on a row that crossed the edge stays where you asked for it, and counts ' +
-        'only if that row is in an account that is in your budget.',
+      `The category on ${counted.length === 1 ? 'that row counts' : 'those rows counts'} where ` +
+        'you asked for it, since that side is in your budget.',
+    );
+  }
+  if (notCounted.length > 0) {
+    const names = [...new Set(notCounted.map((e) => e.row.accountName))].join(', ');
+    lines.push(
+      '',
+      `The category stayed on the ${names} row, but ${names} is off budget, so it does not ` +
+        'count anywhere. To make this count, put a category on the row in the other account.',
     );
   }
 

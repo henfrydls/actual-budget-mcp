@@ -191,6 +191,14 @@ describe.skipIf(skip)('a batch with payees that name accounts', () => {
     }
   });
 
+  it('offers either way out of an accidental transfer, not both at once', () => {
+    // The single-row tool says "give it a category, or use a payee that is not
+    // an account name". Either one is enough, and asking for both reads as a
+    // requirement that would not work: a category plus an account name is a
+    // transfer again as soon as one side is off budget.
+    expect(reply).toContain('give the row a category, or use a payee');
+  });
+
   it('explains each kind once, however many rows earned it', () => {
     // Two rows of every kind, and the paragraph is the part that would be
     // unreadable repeated: twenty transfers would print it twenty times.
@@ -202,8 +210,14 @@ describe.skipIf(skip)('a batch with payees that name accounts', () => {
     expect(occurrences('Outside your budget means')).toBe(1);
   });
 
-  it('says where the category counts, once, when a crossing row has one', () => {
-    expect(reply.split('The category on a row that crossed the edge').length - 1).toBe(1);
+  it('says where the category counts, and where it does not, once each', () => {
+    // Two crossing rows carry a category in this batch: one written on the
+    // budgeted side, where it counts, and one written on the off-budget side,
+    // where it does not. Saying only "counts if that row is in your budget"
+    // leaves the reader to work out which of the two they have.
+    expect(reply.split('since that side is in your budget').length - 1).toBe(1);
+    expect(reply).toMatch(/Invest is off budget, so it does not count anywhere/);
+    expect(reply.split('does not count anywhere').length - 1).toBe(1);
   });
 
   it('does not claim a category it no longer has', () => {
@@ -305,6 +319,12 @@ describe.skipIf(skip)('a month of records in one batch', () => {
     }
   });
 
+  it('counts the account that only received a counterpart', () => {
+    // The asset account is never written to directly; its row arrives as the
+    // other leg. Leaving it out of the table hid half of what the call did.
+    expect(reply).toMatch(/Inversion Familiar: 0 -> 1/);
+  });
+
   it('names both movements between accounts, and only those', () => {
     expect(reply).toContain('row 3  Nomina -> Tarjeta');
     expect(reply).toContain('row 4  Nomina -> Inversion Familiar');
@@ -354,7 +374,126 @@ describe.skipIf(skip)('a transfer row is still checked like any other', () => {
     });
 
     expect(await count(checking), 'nothing should have been written').toBe(before);
-    expect(lines.join('\n')).toContain('repeats row 1');
+    // Caught as one movement written twice rather than as two identical rows,
+    // which is the same conclusion with the reason that fits a transfer.
+    expect(lines.join('\n')).toContain('is row 1 again');
+  }, 60_000);
+
+  it('refuses the two sides of one payment sent as two rows', async () => {
+    // The regression this pair of checks exists for. Reading a card pay-off
+    // from both statements gives `{Bank, -800, payee "Card"}` and `{Card,
+    // +800, payee "Bank"}`: one movement, seen from each account. Each row
+    // asks the engine for both legs, so writing both put the payment in the
+    // budget twice, and a check keyed on account, date and amount could not
+    // see it, because the two rows name different accounts.
+    await budget('batch-both-sides');
+    const beforeChecking = await count(checking);
+    const beforeSavings = await count(savings);
+
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' },
+        { account: 'Savings', amount: 800, payee: 'Checking', date: '2026-09-25' },
+      ],
+    });
+
+    expect(await count(checking), 'the payment was recorded twice').toBe(beforeChecking);
+    expect(await count(savings), 'the payment was recorded twice').toBe(beforeSavings);
+    const text = lines.join('\n');
+    expect(text).toContain('Nothing was created');
+    expect(text).toContain('written from the other account');
+  }, 60_000);
+
+  it('still allows two real movements between the same accounts on one day', async () => {
+    // The way out has to work, or the check is a wall. Two genuine transfers
+    // of the same size on the same day do happen.
+    await budget('batch-both-sides-allowed');
+    const before = await count(checking);
+
+    await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' },
+        { account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' },
+      ],
+      allow_duplicate: true,
+    });
+
+    expect(await count(checking)).toBe(before + 2);
+  }, 60_000);
+
+  it('allows a there-and-back on the same day, which is two movements', async () => {
+    // The key is the pair **in the direction the money runs**, so two
+    // transfers that run opposite ways are not the same movement. Ordering the
+    // two accounts any other way would collapse these into one and refuse a
+    // legitimate pair.
+    await budget('batch-there-and-back');
+    const before = await count(checking);
+
+    await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' },
+        { account: 'Savings', amount: -800, payee: 'Checking', date: '2026-09-25' },
+      ],
+    });
+
+    expect(await count(checking), 'a real pair was refused').toBe(before + 2);
+  }, 60_000);
+
+  it('does not collapse two movements that differ only in amount or day', async () => {
+    await budget('batch-pair-key-parts');
+    const before = await count(checking);
+
+    await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' },
+        { account: 'Checking', amount: -900, payee: 'Savings', date: '2026-09-25' },
+        { account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-26' },
+      ],
+    });
+
+    expect(await count(checking)).toBe(before + 3);
+  }, 60_000);
+
+  it('refuses a transfer whose counterpart is already imported in the other account', async () => {
+    // Henfry's month: the card payment is already in the card account,
+    // imported from the bank as an ordinary row. A transfer from the bank
+    // account writes its own leg there too, and the card shows the money
+    // arriving twice. Nothing used to look at the other account.
+    await budget('batch-counterpart');
+
+    await createTransactions({
+      transactions: [
+        { account: 'Savings', amount: 800, payee: 'Bank import', date: '2026-09-25', imported_id: 'card-1' },
+      ],
+    });
+    const afterImport = await count(savings);
+
+    const lines = await createTransactions({
+      transactions: [{ account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' }],
+    });
+
+    expect(await count(savings), 'the money arrived twice').toBe(afterImport);
+    const text = lines.join('\n');
+    expect(text).toContain('Nothing was created');
+    expect(text).toContain('not part of a transfer');
+  }, 60_000);
+
+  it('lets allow_duplicate through when the matching row really is another movement', async () => {
+    await budget('batch-counterpart-allowed');
+
+    await createTransactions({
+      transactions: [
+        { account: 'Savings', amount: 800, payee: 'Bank import', date: '2026-09-25' },
+      ],
+    });
+    const afterImport = await count(savings);
+
+    await createTransactions({
+      transactions: [{ account: 'Checking', amount: -800, payee: 'Savings', date: '2026-09-25' }],
+      allow_duplicate: true,
+    });
+
+    expect(await count(savings)).toBe(afterImport + 1);
   }, 60_000);
 
   it('refuses a transfer the budget already has, so resending a month is safe', async () => {
@@ -406,5 +545,107 @@ describe.skipIf(skip)('a transfer row is still checked like any other', () => {
     });
 
     expect(again.join('\n')).toContain('has been recorded before');
+  }, 60_000);
+});
+
+/**
+ * The names a payee can arrive under (#154, round 2).
+ *
+ * Both of these move money, so neither can be decided by whichever row the
+ * database happened to return first.
+ */
+describe.skipIf(skip)('a payee that nearly names an account', () => {
+  let bank = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  const count = async (acct: string) =>
+    (await api.getTransactions(acct, '1900-01-01', '2999-12-31')).length;
+
+  it('refuses to guess between two accounts whose names match', async () => {
+    // Actual allows it, and the field that takes an account already refuses to
+    // guess (#155). Choosing the first would move money to whichever account
+    // came back first, which nobody can see from the reply.
+    await createFreshBudget(async () => {
+      bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
+      await api.createAccount({ name: 'Tarjeta', offbudget: false } as never, 0);
+      await api.createAccount({ name: 'tarjeta', offbudget: true } as never, 0);
+    }, 'batch-ambiguous-payee');
+    const before = await count(bank);
+
+    const lines = await createTransactions({
+      transactions: [{ account: 'Bank', amount: -200, payee: 'TARJETA', date: '2026-09-02' }],
+    });
+
+    expect(await count(bank)).toBe(before);
+    expect(lines.join('\n')).toContain('Ambiguous account name');
+  }, 60_000);
+
+  it('recognises an account whose own name has spaces in it', async () => {
+    // Measured: Actual stores the name exactly as given, spaces and all, so
+    // the account side needs trimming too. Someone who typed one into the app
+    // would otherwise have an account that can never be a transfer target.
+    let padded = '';
+    await createFreshBudget(async () => {
+      bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
+      padded = await api.createAccount({ name: '  Ahorro  ', offbudget: false } as never, 0);
+    }, 'batch-padded-account');
+
+    await createTransactions({
+      transactions: [{ account: 'Bank', amount: -300, payee: 'Ahorro', date: '2026-09-02' }],
+    });
+    for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+    const rows = (await api.getTransactions(padded, '1900-01-01', '2999-12-31')) as Array<
+      Record<string, unknown>
+    >;
+    expect(rows, 'no counterpart was created').toHaveLength(1);
+    expect(rows[0].amount).toBe(30000);
+  }, 60_000);
+
+  it('does not treat a payee that is only part of an account name as one', async () => {
+    // "Bank" is not the "Bank Account" account, and a shop can be called
+    // either. Matching on part of the name would move money instead of
+    // recording a purchase, which is the harm #137 is about.
+    let full = '';
+    await createFreshBudget(async () => {
+      bank = await api.createAccount({ name: 'Cash', offbudget: false } as never, 0);
+      full = await api.createAccount({ name: 'Bank Account', offbudget: false } as never, 0);
+    }, 'batch-partial-name');
+
+    await createTransactions({
+      transactions: [{ account: 'Cash', amount: -300, payee: 'Bank', date: '2026-09-02' }],
+    });
+
+    expect(await count(full), 'a purchase was turned into a transfer').toBe(0);
+  }, 60_000);
+
+  it('recognises an account name with spaces around it', async () => {
+    // Untrimmed, this became an ordinary payee called "Tarjeta" and the row
+    // went in with no counterpart: in the app it reads as a transfer with
+    // nothing on the other side.
+    let card = '';
+    await createFreshBudget(async () => {
+      bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
+      card = await api.createAccount({ name: 'Tarjeta', offbudget: false } as never, 0);
+    }, 'batch-padded-payee');
+
+    const lines = await createTransactions({
+      transactions: [{ account: 'Bank', amount: -200, payee: '  Tarjeta  ', date: '2026-09-02' }],
+    });
+    for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+    const onCard = (await api.getTransactions(card, '1900-01-01', '2999-12-31')) as Array<
+      Record<string, unknown>
+    >;
+    expect(onCard, 'no counterpart was created').toHaveLength(1);
+    expect(onCard[0].amount).toBe(20000);
+    expect(lines.join('\n')).toContain('Bank -> Tarjeta');
   }, 60_000);
 });

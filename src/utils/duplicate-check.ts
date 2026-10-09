@@ -142,6 +142,71 @@ export async function findPossibleDuplicates(
 }
 
 /**
+ * A row already sitting where the counterpart is about to land.
+ *
+ * A transfer writes two rows, and only the one in the account being written to
+ * goes through the duplicate check: the other appears in the target account
+ * with nothing having looked there. So a card payment already imported from
+ * the bank, as an ordinary row with its `imported_id`, is joined by the
+ * transfer's own leg for the same amount on the same day, and the account
+ * shows the money arriving twice. For anyone importing statements from more
+ * than one bank that is every month.
+ *
+ * Only rows that are **not** already part of a transfer count. A linked row is
+ * the far leg of some other movement, which is a different thing from a loose
+ * import that this one would duplicate.
+ *
+ * `amountCents` is the amount of the row being written, so the counterpart is
+ * its negative.
+ */
+export async function findUnlinkedCounterpart(
+  targetAccountId: string,
+  date: string,
+  amountCents: number,
+  options: { alreadyPulled?: boolean } = {},
+): Promise<ExistingTransaction[]> {
+  const rows = await findPossibleDuplicates(targetAccountId, date, -amountCents, options);
+  return rows.filter((row) => !row.isTransfer);
+}
+
+/**
+ * Say which row is already there, and that the transfer may not be needed.
+ *
+ * Deliberately not the same advice as a plain duplicate. Here the way out is
+ * usually not `allow_duplicate` at all: the movement is already recorded, as
+ * one side of it, and what is missing is the link rather than the money.
+ */
+export function describeCounterpartClash(
+  existing: ExistingTransaction[],
+  targetAccountName: string,
+): string[] {
+  const lines = [
+    existing.length === 1
+      ? `${targetAccountName} already has the other side of this movement, ${NOTHING_CREATED}`
+      : `${targetAccountName} already has ${existing.length} rows that could be the other ` +
+        `side of this movement, ${NOTHING_CREATED}`,
+    '',
+  ];
+
+  for (const t of existing) {
+    const bits = [t.date, formatMoney(t.amount), targetAccountName];
+    if (t.payeeName) bits.push(t.payeeName);
+    if (t.notes) bits.push(t.notes);
+    lines.push(`  ${bits.join('  ')}`);
+    lines.push(`    id: ${t.id}`);
+  }
+
+  lines.push(
+    '',
+    `A transfer would create a second row in ${targetAccountName} for the same amount on the`,
+    'same day. If the row above is this same payment, already imported from the bank, you do',
+    'not need the transfer. If it is a different movement that happens to match, call again',
+    'with allow_duplicate: true.',
+  );
+  return lines;
+}
+
+/**
  * Describe what was found, and how to go ahead anyway.
  *
  * A warning that only warns leaves the duplicate created, which is the harm.

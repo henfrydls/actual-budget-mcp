@@ -73,16 +73,39 @@ export function findTransferTarget(options: {
   const { accounts, sourceAccountId, payee, hasCategory } = options;
   if (!payee) return undefined;
 
-  const lower = payee.toLowerCase();
+  // Trimmed before comparing, on both sides. A payee of " Tarjeta " was not
+  // recognised as the account, so an ordinary payee called "Tarjeta" was
+  // created and the row went in with no counterpart. In the Actual app that
+  // row reads exactly like a transfer, with nothing on the other account to
+  // match it, which is worse than refusing it.
+  const wanted = payee.trim();
+  if (wanted === '') return undefined;
+
+  const lower = wanted.toLowerCase();
   // `!a.closed` is belt and braces: measured, `getAccounts()` leaves closed
   // accounts out of the list altogether rather than returning them with the
   // flag set, so a closed account's name falls through and becomes an ordinary
   // payee either way. Which is the right answer, since there is nothing to
   // transfer into.
-  const target = accounts.find(
-    (a) => !a.closed && (a.id === payee || a.name.toLowerCase() === lower),
-  );
-  if (!target) return undefined;
+  const open = accounts.filter((a) => !a.closed);
+  const byId = open.find((a) => a.id === wanted);
+  // By the whole name, never by part of it: a shop called "Tarjeta de Credito"
+  // is not the "Tarjeta" account, and turning a purchase into a transfer is
+  // the harm #137 is about.
+  const matches = byId ? [byId] : open.filter((a) => a.name.trim().toLowerCase() === lower);
+
+  if (matches.length === 0) return undefined;
+  if (matches.length > 1) {
+    // Actual allows two accounts to share a name, and the field that takes an
+    // account already refuses to guess between them (#155). Picking the first
+    // silently would move money to whichever one came back first from the
+    // database, which nobody can see from the reply.
+    throw new Error(
+      `Ambiguous account name "${payee}". Matches: ${matches.map((a) => a.name).join(', ')}. ` +
+        'Give the account id instead, or rename one of them.',
+    );
+  }
+  const target = matches[0];
 
   if (target.id === sourceAccountId) {
     throw new Error('Cannot transfer to the same account.');
@@ -141,4 +164,29 @@ export function transferEffect(options: {
   if (!sourceOffBudget && !targetOffBudget) return 'inside';
   if (sourceOffBudget && targetOffBudget) return 'outside';
   return budgetEffect(options) > 0 ? 'incoming' : 'outgoing';
+}
+
+/**
+ * One key for both halves of the same movement.
+ *
+ * A pay-off read from two statements arrives as two rows: `{Bank, -800, payee
+ * "Card"}` and `{Card, +800, payee "Bank"}`. They are one movement seen from
+ * each side, and each one asks the engine to create both legs, so recording
+ * them both leaves the payment in the budget twice. Nothing noticed, because a
+ * check keyed on account, date and amount sees two different accounts.
+ *
+ * The key is the pair of accounts in the direction the money actually runs,
+ * which the sign decides, plus the date and the size of it. The two rows above
+ * both come out as `Bank>Card|date|80000`.
+ */
+export function transferPairKey(options: {
+  sourceAccountId: string;
+  targetAccountId: string;
+  amountCents: number;
+  date: string;
+}): string {
+  const { sourceAccountId, targetAccountId, amountCents, date } = options;
+  const [from, to] =
+    amountCents < 0 ? [sourceAccountId, targetAccountId] : [targetAccountId, sourceAccountId];
+  return `${from}>${to}|${date}|${Math.abs(amountCents)}`;
 }

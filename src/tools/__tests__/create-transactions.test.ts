@@ -23,6 +23,7 @@ vi.mock('../../connection.js', () => ({
 
 vi.mock('../../utils/duplicate-check.js', () => ({
   findPossibleDuplicates: vi.fn().mockResolvedValue([]),
+  findUnlinkedCounterpart: vi.fn().mockResolvedValue([]),
   pullBeforeReading: vi.fn().mockResolvedValue(undefined),
 }));
 
