@@ -7,6 +7,7 @@ import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { transactionsQuery } from '../../utils/transaction-query.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface DeleteTransactionInput {
   transaction_id: string;
@@ -160,7 +161,7 @@ export async function deleteTransactionGuarded(
   }
 
   await api.deleteTransaction(input.transaction_id);
-  await api.sync();
+  await syncNow();
 
   return {
     deleted: true,

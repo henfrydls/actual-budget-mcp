@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface CreateAccountInput {
   name: string;
@@ -43,7 +44,7 @@ export async function createNewAccount(input: CreateAccountInput): Promise<strin
     initialCents,
   );
 
-  await api.sync();
+  await syncNow();
 
   const lines = [
     'Account created:',

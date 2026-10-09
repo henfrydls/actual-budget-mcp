@@ -2,8 +2,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
 import { ensureConnection } from './connection.js';
 import { formatMoney } from './utils/money.js';
+import { withReadSync } from './utils/read-sync.js';
 
-export function registerAllResources(server: McpServer): void {
+export function registerAllResources(rawServer: McpServer): void {
+  // Resources are reads, so they pull the server's changes first and carry the
+  // same staleness notice the read tools do (#126). They were missed the first
+  // time round: `actual://accounts` went on serving balances from a copy that
+  // was behind while every tool had stopped doing it, which is worse than
+  // before, because now only one of the two ways of asking is honest.
+  const server = withReadSync(rawServer);
+
   server.resource(
     'accounts',
     'actual://accounts',

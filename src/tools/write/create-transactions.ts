@@ -14,6 +14,7 @@ import {
 } from '../../utils/duplicate-check.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 /**
  * Create many transactions in one call.
@@ -439,7 +440,7 @@ async function writeBatch(
     }
   }
 
-  await api.sync();
+  await syncNow();
 
   const lines: string[] = [];
   const counts: string[] = [];

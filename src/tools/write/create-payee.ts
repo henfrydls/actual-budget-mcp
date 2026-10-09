@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerCreatePayee(server: McpServer): void {
   server.tool(
@@ -16,7 +17,7 @@ export function registerCreatePayee(server: McpServer): void {
       try {
         await ensureConnection();
         const id = await api.createPayee({ name } as any);
-        await api.sync();
+        await syncNow();
 
         return {
           content: [{

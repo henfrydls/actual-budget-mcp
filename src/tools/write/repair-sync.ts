@@ -3,6 +3,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection, getConfig, getInternal } from '../../connection.js';
 import { probeServer } from '../../utils/server-probe.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 /**
  * Rebuild the local sync state, then sync.
@@ -93,7 +94,7 @@ export async function repairSyncState(): Promise<string[]> {
     throw new Error(`Sync repair failed: ${describeError(error)}`);
   }
 
-  await api.sync();
+  await syncNow();
 
   return [
     'Sync repair completed.',

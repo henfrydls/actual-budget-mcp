@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveCategoryGroupId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerCreateCategory(server: McpServer): void {
   server.tool(
@@ -22,7 +23,7 @@ export function registerCreateCategory(server: McpServer): void {
         const grp = groups.find((g) => g.id === groupId);
 
         const id = await api.createCategory({ name, group_id: groupId } as any);
-        await api.sync();
+        await syncNow();
 
         return {
           content: [{

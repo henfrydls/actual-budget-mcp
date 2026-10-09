@@ -13,6 +13,7 @@ import {
   findPossibleDuplicates,
   describePossibleDuplicates,
 } from '../../utils/duplicate-check.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export interface SplitInput {
   category: string;
@@ -121,7 +122,7 @@ export async function createSplitTransaction(
       learnCategories: false,
       runTransfers: false,
     });
-    await api.sync();
+    await syncNow();
   } catch (error) {
     if (!mayHaveBeenApplied(error)) throw error;
     const { verdict, message } = await verifyFailedWrite(error, {

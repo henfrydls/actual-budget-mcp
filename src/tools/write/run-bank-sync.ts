@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerRunBankSync(server: McpServer): void {
   server.tool(
@@ -34,7 +35,7 @@ export function registerRunBankSync(server: McpServer): void {
           const acct = accounts.find((a) => a.id === accountId);
 
           await api.runBankSync({ accountId });
-          await api.sync();
+          await syncNow();
 
           return {
             content: [
@@ -48,7 +49,7 @@ export function registerRunBankSync(server: McpServer): void {
 
         // Sync all accounts (no arg = all)
         await api.runBankSync();
-        await api.sync();
+        await syncNow();
 
         const openAccounts = accounts.filter((a) => !a.closed);
         return {

@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { syncNow } from '../../utils/sync-clock.js';
 
 export function registerCreateRule(server: McpServer): void {
   server.tool(
@@ -53,7 +54,7 @@ export function registerCreateRule(server: McpServer): void {
         };
 
         const result = await api.createRule(rule as any);
-        await api.sync();
+        await syncNow();
 
         return {
           content: [{
