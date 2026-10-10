@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
-import { resolveCategoryId, resolvePayeeIn, resolvePayeeName } from '../../utils/resolvers.js';
+import { resolveCategoryId, resolvePayeeIn } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
@@ -29,27 +29,14 @@ const PAYEE_ID_OPS = new Set(['is', 'isNot']);
  * because transactions hold the id. Tested against the engine: an imported
  * Amazon transaction stayed uncategorised under exactly that rule.
  *
- * A condition matches names the way the other tools do: an id, an exact name,
- * or part of a name when only one payee fits. A payee that does not exist is
- * refused, since that rule could never match anything.
- *
- * An action takes an id or an exact name, and creates the payee when there is
- * none, as `update_transaction` does.
+ * Conditions and actions match names the way the other tools do: an id, an
+ * exact name, or part of a name when only one payee fits. A payee that does
+ * not exist is refused on both sides. A condition on it could never match, and
+ * an action used to create it, so a typo like "Amazn" quietly became a new
+ * payee that the rule then moved transactions to.
  */
-async function resolveRulePayee(value: string, use: 'condition' | 'action'): Promise<string> {
-  const payees = await api.getPayees();
-  if (use === 'condition') return resolvePayeeIn(payees, value);
-
-  const byId = payees.find((p) => p.id === value);
-  if (byId) return byId.id;
-
-  const existing = await resolvePayeeName(value);
-  if (existing) return existing;
-
-  if (value.trim() === '') {
-    throw new Error('A rule cannot set a blank payee. Pass a payee name or id.');
-  }
-  return api.createPayee({ name: value });
+async function resolveRulePayee(value: string): Promise<string> {
+  return resolvePayeeIn(await api.getPayees(), value);
 }
 
 /**
@@ -68,14 +55,14 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
   if (condition_field === 'category') {
     resolvedCondValue = await resolveCategoryId(condition_value);
   } else if (condition_field === 'payee' && PAYEE_ID_OPS.has(condition_op)) {
-    resolvedCondValue = await resolveRulePayee(condition_value, 'condition');
+    resolvedCondValue = await resolveRulePayee(condition_value);
   }
 
   let resolvedActionValue: any = action_value;
   if (action_field === 'category') {
     resolvedActionValue = await resolveCategoryId(action_value);
   } else if (action_field === 'payee') {
-    resolvedActionValue = await resolveRulePayee(action_value, 'action');
+    resolvedActionValue = await resolveRulePayee(action_value);
   }
 
   const rule = {
@@ -122,7 +109,7 @@ export function registerCreateRule(server: McpServer): void {
       action_value: z
         .string()
         .describe(
-          'Value to set (category name/ID, payee name/ID, or note text). A payee name that does not exist yet is created.',
+          'Value to set (category name/ID, payee name/ID, or note text). The payee must already exist; use create_payee for a new one.',
         ),
       stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
     },

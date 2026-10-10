@@ -835,7 +835,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **delete_payee** - `payee` (required): name or ID | `confirm` + `confirm_name` (required to delete)
 
-**create_rule** - `condition_field` (required): payee, category, amount, notes | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required): for payee or category, a name or ID | `action_field` (required): category, payee, notes | `action_value` (required): a payee name that does not exist yet is created | `stage` (optional)
+**create_rule** - `condition_field` (required): payee, category, amount, notes | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required): for payee or category, a name or ID | `action_field` (required): category, payee, notes | `action_value` (required): for payee or category, a name or ID that already exists | `stage` (optional)
 
 **delete_rule** - `rule_id` (required) | `confirm` (required to delete)
 

@@ -184,17 +184,21 @@ describe.skipIf(skip)('create_rule with a payee', () => {
     expect(rule?.actions[0].value).toBe(payeeId);
   });
 
-  it('creates the payee a rule action names when there is none', async () => {
-    const lines = await createRuleFromInput({
-      condition_field: 'notes',
-      condition_op: 'contains',
-      condition_value: 'NFLX',
-      action_field: 'payee',
-      action_value: 'Netflix',
-    });
-    const rule = await storedRule(idFrom(lines));
-    const created = (await api.getPayees()).find((p) => p.name === 'Netflix');
-    expect(created).toBeDefined();
-    expect(rule?.actions[0].value).toBe(created!.id);
+  it('refuses an action on a payee that does not exist, and saves no rule and no payee', async () => {
+    // Creating it would turn a typo like "Amazn" into a new payee that the
+    // rule then moves transactions to, with nothing reporting it.
+    const rulesBefore = (await api.getRules()).length;
+    const payeesBefore = (await api.getPayees()).length;
+    await expect(
+      createRuleFromInput({
+        condition_field: 'notes',
+        condition_op: 'contains',
+        condition_value: 'AMZN',
+        action_field: 'payee',
+        action_value: 'Amazn',
+      }),
+    ).rejects.toThrow(/No payee found matching "Amazn"/);
+    expect((await api.getRules()).length).toBe(rulesBefore);
+    expect((await api.getPayees()).length).toBe(payeesBefore);
   });
 });
