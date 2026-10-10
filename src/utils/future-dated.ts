@@ -102,6 +102,13 @@ export function describeFutureRows(
   accountName: string,
   balanceToToday: number,
   targetCents: number,
+  /**
+   * The rows inside the balance above that are not marked cleared (#108).
+   * Shown here too, because this is the one reply that appears before anything
+   * is written, so it is where someone whose bank figure is measuring the
+   * other thing has a chance to notice.
+   */
+  uncleared?: { count: number; total: number },
 ): string[] {
   const lines = [
     `No adjustment was booked for ${accountName}.`,
@@ -127,6 +134,14 @@ export function describeFutureRows(
   lines.push(
     '',
     `  Balance to today:        ${formatMoney(balanceToToday)}`,
+  );
+  if (uncleared && uncleared.count > 0) {
+    lines.push(
+      `    including:             ${uncleared.count} row${uncleared.count === 1 ? '' : 's'} not marked cleared, ${formatMoney(uncleared.total)}`,
+      `    cleared rows alone:    ${formatMoney(balanceToToday - uncleared.total)}`,
+    );
+  }
+  lines.push(
     `  Those rows come to:      ${formatMoney(total)}`,
     `  Balance counting them:   ${formatMoney(balanceToToday + total)}`,
     `  You said the bank says:  ${formatMoney(targetCents)}`,

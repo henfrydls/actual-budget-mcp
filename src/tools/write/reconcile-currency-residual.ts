@@ -11,6 +11,7 @@ import { rowsDatedAfterToday, describeFutureRows } from '../../utils/future-date
 import { describeError } from '../../utils/errors.js';
 import { WriteReportedError } from '../../utils/write-outcome.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
+import { balanceBreakdown } from '../../utils/account-balance.js';
 
 export interface ReconcileResidualInput {
   account: string;
@@ -50,6 +51,38 @@ function futureNote(base: string, futureCount: number, reading?: 'exclude' | 'in
   return reading === 'include'
     ? `${base} (counting ${what} dated after today)`
     : `${base} (not counting ${what} dated after today)`;
+}
+
+/**
+ * What the figure counted, and what the other reading would have produced.
+ *
+ * Reported, not acted on. Whether a row that is not marked cleared is in
+ * flight or simply unticked is not something the data says, and measured on a
+ * real budget it is overwhelmingly the second. So this states both numbers and
+ * leaves the reading to the person holding the statement.
+ *
+ * Said whenever there is something to say, which the rows decide rather than a
+ * list of cases: with nothing uncleared the two figures are the same number
+ * and printing both would be noise on every ordinary reconciliation.
+ *
+ * The alternative adjustment is spelled out rather than left as arithmetic.
+ * Working it out from three numbers in a reply is how a wrong adjustment stays
+ * unnoticed in a residual category, which is the complaint #100 made.
+ */
+function unclearedNote(
+  breakdown: { unclearedCount: number; unclearedTotal: number },
+  currentCents: number,
+  targetCents: number,
+): string[] {
+  if (breakdown.unclearedCount === 0) return [];
+  const count = breakdown.unclearedCount;
+  const clearedOnly = currentCents - breakdown.unclearedTotal;
+  return [
+    `    includes ${count} row${count === 1 ? '' : 's'} not marked cleared, ${formatMoney(breakdown.unclearedTotal)}`,
+    `    cleared rows alone come to ${formatMoney(clearedOnly)}, and against that`,
+    `    figure the adjustment would have been ${formatMoney(targetCents - clearedOnly)}.`,
+    `    Check which of the two the balance you gave is measuring.`,
+  ];
 }
 
 export async function reconcileCurrencyResidual(input: ReconcileResidualInput): Promise<string[]> {
@@ -156,7 +189,25 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   const accounts = await api.getAccounts();
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
-  const balanceToToday = await api.getAccountBalance(accountId, today as never);
+  // Against every row up to today, which is what it has always compared
+  // against and what it still compares against (#108).
+  //
+  // A statement shows what has posted and `getAccountBalance` counts an
+  // uncleared row too, so the two can measure different things. Changing the
+  // comparison was considered and measured against a real budget first. Most
+  // of the rows not marked cleared had been sitting there for weeks and none
+  // carried a `financial_id`, so none had come from a bank: they were rows
+  // nobody ticked off, not items in flight, which clear in a day or two. Some
+  // had been written by this server, before it marked its own adjustments
+  // cleared. Reconciling against the cleared figure would have booked the
+  // whole accumulated difference as an adjustment into a residual category.
+  //
+  // So the figure is unchanged and the breakdown is reported instead: both
+  // numbers, what separates them, and what the other one would have produced.
+  // That is enough to see the question without answering it on the caller's
+  // behalf, and it is the shape #108 itself proposed as the lightest option.
+  const breakdown = await balanceBreakdown(accountId, today);
+  const balanceToToday = breakdown.all;
   const future = await rowsDatedAfterToday(accountId, today);
 
   if (future.rows.length > 0 && !input.future_rows) {
@@ -166,9 +217,13 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
       acctName,
       balanceToToday,
       amountToCents(input.target_balance ?? 0),
+      { count: breakdown.unclearedCount, total: breakdown.unclearedTotal },
     );
   }
 
+  // The caller has already said what their figure does with the rows dated
+  // ahead, so those are added whole. Whether one of them is also uncleared
+  // does not come back into it: the question was answered about those rows.
   const currentCents =
     input.future_rows === 'include' ? balanceToToday + future.total : balanceToToday;
   const targetCents = amountToCents(input.target_balance ?? 0);
@@ -177,6 +232,7 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   if (deltaCents === 0) {
     return [
       `No adjustment needed: ${acctName} already at ${formatMoney(currentCents)}.`,
+      ...unclearedNote(breakdown, currentCents, targetCents),
     ];
   }
 
@@ -208,6 +264,12 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     // once, pass it on.
     date: txnDate,
     payee: input.payee,
+    // Cleared, where `create_transaction` leaves a row uncleared by default.
+    // The adjustment exists to make the cleared balance match the bank, so a
+    // row that the cleared balance does not count achieves nothing and the
+    // next run computes the same delta again. That is the shape of #97 and
+    // #100: an adjustment outside the figure it was written to move.
+    cleared: true,
     allow_duplicate: input.allow_duplicate,
     // Not "pass allow_duplicate", which is this tool's least safe move: it
     // forces the write past the check while the delta was computed from a
@@ -237,6 +299,7 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     'Currency residual reconciled:',
     `  Account:    ${acctName}`,
     `  Was:        ${formatMoney(currentCents)}`,
+    ...unclearedNote(breakdown, currentCents, targetCents),
     `  Target:     ${formatMoney(targetCents)}`,
     `  Adjustment: ${formatMoney(deltaCents)}`,
     ...lines,
@@ -247,6 +310,7 @@ export function registerReconcileCurrencyResidual(server: McpServer): void {
   server.tool(
     'reconcile_currency_residual',
     'Book an adjustment transaction to bring a multi-currency account to the balance the bank reports, clearing accumulated FX-rate residual. ' +
+      'It compares against every transaction up to today, and the reply says how much of that figure is not marked cleared and what the adjustment would have been against the cleared rows alone, since a statement generally shows only what has posted. ' +
       'The date must be today or earlier. If a transaction with the same account, date and amount already exists this books nothing and ' +
       'reports it instead; run it again to recompute, or pass allow_duplicate if the match is unrelated. ' +
       'If the account holds transactions dated after today, it reports those and books nothing until future_rows says ' +

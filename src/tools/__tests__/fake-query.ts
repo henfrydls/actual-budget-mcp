@@ -63,6 +63,16 @@ export function answerByFilter(answers: {
   byAccountDateAmount?: unknown;
   /** The rows-dated-after-today lookup (#100), which filters `date: { $gt }`. */
   byFutureDate?: unknown;
+  /**
+   * The uncleared rows the balance leaves out (#108), which filter
+   * `date: { $lte }` and `cleared: false`.
+   *
+   * Its own branch because both lookups pass an operator object for the date,
+   * so without this one the balance breakdown was handed the future-dated
+   * fixture and counted those rows as uncleared, which is the kind of
+   * stand-in that makes a test pass through a path it never exercised.
+   */
+  byUncleared?: unknown;
   fallback?: unknown;
 }) {
   return async () => {
@@ -75,7 +85,10 @@ export function answerByFilter(answers: {
     // lookup the duplicate fixture and made every account look as though it
     // held transactions dated ahead.
     if (typeof filter.date === 'object' && filter.date !== null) {
-      return answers.byFutureDate ?? { data: [] };
+      const date = filter.date as Record<string, unknown>;
+      if ('$gt' in date) return answers.byFutureDate ?? { data: [] };
+      if (filter.cleared === false) return answers.byUncleared ?? { data: [] };
+      return answers.fallback ?? { data: [] };
     }
     if ('account' in filter) return answers.byAccountDateAmount ?? { data: [] };
     return answers.fallback ?? { data: [] };
