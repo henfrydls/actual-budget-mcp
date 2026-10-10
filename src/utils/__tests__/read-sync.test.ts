@@ -61,13 +61,24 @@ describe('refreshing before a read', () => {
   });
 
   it('syncs again once the TTL has passed', async () => {
-    const start = Date.now();
-    await refreshBeforeRead(start);
-    // The clock the second call is told about is the one that decides, so the
-    // test does not have to wait a minute.
-    await refreshBeforeRead(start + SYNC_TTL_MS + 1);
+    // Fake timers, so the clock this test reasons about and the clock the sync
+    // records are the same one. With the real clock, `markGoodSync` stamps the
+    // moment the sync finished, which is a millisecond or two after `start`,
+    // and `start + TTL + 1` can land inside the TTL. Measured by making the
+    // sync take 5 ms: the test fails. That is a test that goes red only when
+    // the machine is busy, which is the worst way to find out.
+    vi.useFakeTimers();
+    try {
+      const start = Date.now();
+      await refreshBeforeRead(start);
+      // The clock the second call is told about is the one that decides, so
+      // the test does not have to wait a minute.
+      await refreshBeforeRead(start + SYNC_TTL_MS + 1);
 
-    expect(sync).toHaveBeenCalledTimes(2);
+      expect(sync).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shares one sync between concurrent reads', async () => {
@@ -232,17 +243,26 @@ describe('a server that is not answering', () => {
 
   it('is tried again once the pause is over', async () => {
     // A pause, not giving up: a server that comes back has to be noticed.
-    sync.mockImplementationOnce(async () => {
-      throw new Error('network-failure');
-    });
-    const start = Date.now();
-    await refreshBeforeRead(start);
+    //
+    // Fake timers for the same reason as the TTL case above: the failure is
+    // stamped with the real clock, so a margin of one millisecond is not a
+    // margin at all once anything takes time.
+    vi.useFakeTimers();
+    try {
+      sync.mockImplementationOnce(async () => {
+        throw new Error('network-failure');
+      });
+      const start = Date.now();
+      await refreshBeforeRead(start);
 
-    sync.mockResolvedValue(undefined);
-    const second = await refreshBeforeRead(start + SYNC_RETRY_MS + 1);
+      sync.mockResolvedValue(undefined);
+      const second = await refreshBeforeRead(start + SYNC_RETRY_MS + 1);
 
-    expect(sync).toHaveBeenCalledTimes(2);
-    expect(second.current).toBe(true);
+      expect(sync).toHaveBeenCalledTimes(2);
+      expect(second.current).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not make the next read wait out the deadline again', async () => {
