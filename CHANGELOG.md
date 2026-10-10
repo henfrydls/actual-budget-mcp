@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.10.3
+
+### Your reads now see what the Actual app sees (#126)
+
+A server left running answered from the copy of the budget it had downloaded.
+Two transactions recategorised in the app came back with their old figures
+three times, until a bank sync happened to move it, and nothing said the
+figures were behind.
+
+Every read now pulls from the Actual server first. Three limits keep that from
+costing a round trip on every call: a copy pulled less than a minute ago counts
+as current, a read waits at most 20 seconds for the pull, and after a pull that
+fails or runs past that the next minute of reads answers from the local copy
+instead of trying again.
+
+When the pull did not happen the reply says so, how old the figures are, and
+why: an out of sync budget points at `repair_sync`, a refused login at your
+credentials, an expired session at restarting the server. Without that, a
+server that is down goes quietly back to answering with figures from hours ago.
+
+If you run this as a process that stays up, an always on bot or a service,
+there is a section in the README that covers it: "Running it for days at a
+time".
+
+### A batch can record the transfers a month of entries contains (#154)
+
+`create_transaction` has treated a payee that names one of your accounts as a
+transfer for a while. `create_transactions` refused the same row and sent you
+to `create_transfer`, saying a batch could not mix transfers with ordinary
+rows, which was not true. So a month of entries, where the card spending, the
+payment that clears the card and a contribution that leaves the budget all
+arrive together, had to be split up and sent one movement at a time.
+
+The batch now applies the same rule, and the reply lists the rows that became
+transfers at the end, with the direction and what each did to your budget.
+
+Two checks came with it, because a transfer writes two rows:
+
+- Reading a card payment off both statements gives two rows that are one
+  movement seen from each account. Sending both used to record the payment
+  twice. They are now recognised as the same movement, and a there and back on
+  the same day still goes through.
+- A transfer whose other side is already in the target account, imported from
+  your bank, is refused before it lands on top of it, rather than leaving the
+  money showing up twice.
+
+Account names are also matched more carefully: a payee with spaces around an
+account name is recognised, and two accounts whose names differ only in case
+are refused rather than guessed between.
+
+### Currency reconciliation says what it is comparing (#108)
+
+`reconcile_currency_residual` compares against every transaction in the account
+up to today, which is unchanged, and the adjustment it writes is the same
+amount as before.
+
+What is new is that it tells you how much of that figure is not marked cleared,
+what the marked rows come to on their own, and what the adjustment would have
+been against that. A bank statement generally shows only what has posted, so if
+your account holds rows nobody has ticked off, the two figures may not be
+measuring the same thing. It does not decide that for you, and nothing appears
+when every row is marked.
+
+The adjustment is now written marked as cleared.
+
+### A correction to 0.10.2
+
+0.10.2 said a transfer keeps its category in every case. Between two accounts
+that are both outside your budget it does not: Actual discards it, because
+nothing could count it. The row is there for a moment after it is written and
+then the category is gone, which is why it was recorded the other way round.
+Both tools now say what happens instead of claiming the category is stored.
+
+### Known, and not fixed here
+
+- In a currency with no decimal places (JPY, KRW, IRR), amounts are out by a
+  factor of a hundred in both directions: asking to spend 100 records 10,000,
+  and a real 1,000 is reported as 10.00. Budgets in any other currency are
+  unaffected. (#141)
+- In one batch, a payment sent as a transfer from one side and as an ordinary
+  row from the other is not recognised as the same movement, and neither is one
+  whose two sides are dated a day apart. (#161)
+
 ## 0.10.2
 
 Five things that went wrong in use, and one of them changes how a transaction
