@@ -70,19 +70,41 @@ function futureNote(base: string, futureCount: number, reading?: 'exclude' | 'in
  * unnoticed in a residual category, which is the complaint #100 made.
  */
 function unclearedNote(
-  breakdown: { unclearedCount: number; unclearedTotal: number },
+  unmarked: { count: number; total: number },
   currentCents: number,
   targetCents: number,
+  /**
+   * False when nothing is being written. The alternative adjustment is a
+   * number to check a figure against, not a thing to go and book, and after a
+   * reconciliation that already balances an assistant reading "the adjustment
+   * would have been -20.00" has every reason to book one.
+   */
+  booking: boolean,
 ): string[] {
-  if (breakdown.unclearedCount === 0) return [];
-  const count = breakdown.unclearedCount;
-  const clearedOnly = currentCents - breakdown.unclearedTotal;
-  return [
-    `    includes ${count} row${count === 1 ? '' : 's'} not marked cleared, ${formatMoney(breakdown.unclearedTotal)}`,
-    `    cleared rows alone come to ${formatMoney(clearedOnly)}, and against that`,
-    `    figure the adjustment would have been ${formatMoney(targetCents - clearedOnly)}.`,
-    `    Check which of the two the balance you gave is measuring.`,
+  if (unmarked.count === 0) return [];
+  const count = unmarked.count;
+  const clearedOnly = currentCents - unmarked.total;
+  const lines = [
+    `    includes ${count} row${count === 1 ? '' : 's'} not marked cleared, ${formatMoney(unmarked.total)}`,
   ];
+  if (booking) {
+    lines.push(
+      `    cleared rows alone come to ${formatMoney(clearedOnly)}, and against that`,
+      `    figure the adjustment would have been ${formatMoney(targetCents - clearedOnly)}.`,
+      `    Check which of the two the balance you gave is measuring.`,
+    );
+  } else {
+    // Derived rather than asserted: the unmarked rows can cancel out, and
+    // then both readings agree and saying otherwise would be wrong.
+    lines.push(
+      targetCents - clearedOnly === 0
+        ? `    cleared rows alone come to the same figure, so both readings agree.`
+        : `    cleared rows alone come to ${formatMoney(clearedOnly)}, which is not the` +
+          ` balance you gave.`,
+      `    Nothing was written. This is here so you can tell the two apart.`,
+    );
+  }
+  return lines;
 }
 
 export async function reconcileCurrencyResidual(input: ReconcileResidualInput): Promise<string[]> {
@@ -222,17 +244,28 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
   }
 
   // The caller has already said what their figure does with the rows dated
-  // ahead, so those are added whole. Whether one of them is also uncleared
-  // does not come back into it: the question was answered about those rows.
-  const currentCents =
-    input.future_rows === 'include' ? balanceToToday + future.total : balanceToToday;
+  // ahead, so those are added whole.
+  const counting = input.future_rows === 'include';
+  const currentCents = counting ? balanceToToday + future.total : balanceToToday;
+
+  // And the breakdown covers the same rows as the figure it describes. It did
+  // not: `breakdown` stops at today, so counting the rows ahead left the
+  // balance including them while "cleared rows alone" subtracted only what was
+  // unmarked up to today. The reply then stated a cleared figure that was not
+  // the cleared figure of anything, and contradicted the preview, which had
+  // reported the same account over the narrower window.
+  const futureUnmarked = counting ? future.rows.filter((row) => !row.cleared) : [];
+  const unmarked = {
+    count: breakdown.unclearedCount + futureUnmarked.length,
+    total: breakdown.unclearedTotal + futureUnmarked.reduce((sum, row) => sum + row.amount, 0),
+  };
   const targetCents = amountToCents(input.target_balance ?? 0);
   const deltaCents = targetCents - currentCents;
 
   if (deltaCents === 0) {
     return [
       `No adjustment needed: ${acctName} already at ${formatMoney(currentCents)}.`,
-      ...unclearedNote(breakdown, currentCents, targetCents),
+      ...unclearedNote(unmarked, currentCents, targetCents, false),
     ];
   }
 
@@ -299,7 +332,7 @@ export async function reconcileCurrencyResidual(input: ReconcileResidualInput): 
     'Currency residual reconciled:',
     `  Account:    ${acctName}`,
     `  Was:        ${formatMoney(currentCents)}`,
-    ...unclearedNote(breakdown, currentCents, targetCents),
+    ...unclearedNote(unmarked, currentCents, targetCents, true),
     `  Target:     ${formatMoney(targetCents)}`,
     `  Adjustment: ${formatMoney(deltaCents)}`,
     ...lines,

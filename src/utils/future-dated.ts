@@ -12,6 +12,15 @@ export interface FutureRow {
   cameFromBank: boolean;
   /** Entered here and not reconciled, so the bank may not have it. */
   enteredByHand: boolean;
+  /**
+   * Marked cleared or not.
+   *
+   * Exposed because a caller that folds these rows into its balance has to
+   * fold them into the breakdown of that balance as well, or the two describe
+   * different sets of rows. `enteredByHand` is not the same question: a row
+   * can carry an `imported_id` and still not be marked.
+   */
+  cleared: boolean;
 }
 
 /**
@@ -82,6 +91,7 @@ export async function rowsDatedAfterToday(
     notes: (row.notes as string | null) ?? null,
     cameFromBank: row.imported_id != null,
     enteredByHand: row.imported_id == null && row.cleared !== true,
+    cleared: row.cleared === true,
   }));
 
   return { rows, total: rows.reduce((sum, r) => sum + r.amount, 0) };

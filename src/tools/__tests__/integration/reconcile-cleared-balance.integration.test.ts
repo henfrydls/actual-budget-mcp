@@ -465,3 +465,182 @@ describe.skipIf(skip)('an account holding rows ahead and rows not posted', () =>
     expect(text).not.toMatch(/not marked cleared/);
   }, 60_000);
 });
+
+/**
+ * The breakdown has to describe the same rows as the figure above it
+ * (#108, round 2).
+ *
+ * `breakdown` stops at today. Folding the rows dated ahead into the balance
+ * without folding them into the breakdown left "cleared rows alone" naming a
+ * figure that was the cleared total of nothing, and contradicting the preview
+ * for the same account.
+ */
+describe.skipIf(skip)('the breakdown covers the same window as the figure', () => {
+  let acct = '';
+  const ahead = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const later = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 10);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+
+  beforeAll(async () => {
+    await initTestEngine();
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  // One budget per case: the first of these writes an adjustment, and a shared
+  // fixture would leave the second measuring an account it had already moved.
+  async function budget(name: string) {
+    await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Card (USD)', type: 'credit' } as never, 0);
+      const group = await api.createCategoryGroup({ name: 'G' } as never);
+      await api.createCategory({ name: 'Cashback', group_id: group } as never);
+      await api.addTransactions(
+        acct,
+        [
+          { date: '2026-05-01', amount: -10000, cleared: true, payee_name: 'marked' },
+          { date: '2026-05-02', amount: -2000, cleared: false, payee_name: 'not marked' },
+          // Dated ahead, one of each, so counting them changes both halves of
+          // the breakdown and by different amounts.
+          { date: ahead, amount: -900, cleared: false, payee_name: 'AHEAD-UNMARKED' },
+          { date: later, amount: -100, cleared: true, payee_name: 'AHEAD-MARKED' },
+        ] as never,
+        { learnCategories: false, runTransfers: false },
+      );
+    }, name);
+    for (let i = 0; i < 6; i += 1) await api.getCategories();
+  }
+
+  it('counts the rows ahead in the breakdown when it counts them in the balance', async () => {
+    await budget('cleared-window-include');
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: -50,
+        category: 'Cashback',
+        date: TODAY,
+        future_rows: 'include',
+      })
+    ).join('\n');
+
+    // -100.00 and -20.00 up to today, -9.00 and -1.00 ahead.
+    expect(text).toMatch(/Was: *-130\.00/);
+    // Two rows are not marked: the -20.00 and the -9.00.
+    expect(text).toMatch(/includes 2 rows not marked cleared, -29\.00/);
+    // Which leaves -101.00 marked, not -110.00.
+    expect(text).toMatch(/cleared rows alone come to -101\.00/);
+    expect(text).toMatch(/would have been 51\.00/);
+  }, 60_000);
+
+  it('leaves them out of both when the balance leaves them out', async () => {
+    await budget('cleared-window-exclude');
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: -50,
+        category: 'Cashback',
+        date: TODAY,
+        future_rows: 'exclude',
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/Was: *-120\.00/);
+    expect(text).toMatch(/includes 1 row not marked cleared, -20\.00/);
+    expect(text).toMatch(/cleared rows alone come to -100\.00/);
+  }, 60_000);
+});
+
+/**
+ * What an account that already balances is told (#108, round 2).
+ *
+ * The alternative figure is there to check a balance against, not to book. An
+ * assistant reading "the adjustment would have been -20.00" under a line
+ * saying no adjustment is needed has every reason to go and book one.
+ */
+describe.skipIf(skip)('an account that already balances', () => {
+  let acct = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  async function budget(name: string, rows: Array<{ amount: number; cleared: boolean }>) {
+    await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Card (USD)', type: 'credit' } as never, 0);
+      const group = await api.createCategoryGroup({ name: 'G' } as never);
+      await api.createCategory({ name: 'Cashback', group_id: group } as never);
+      await api.addTransactions(
+        acct,
+        rows.map((r, i) => ({
+          date: `2026-05-0${i + 1}`,
+          amount: r.amount,
+          cleared: r.cleared,
+          payee_name: r.cleared ? 'marked' : 'not marked',
+        })) as never,
+        { learnCategories: false, runTransfers: false },
+      );
+    }, name);
+    for (let i = 0; i < 6; i += 1) await api.getCategories();
+  }
+
+  it('does not hand it a number that reads as an adjustment to book', async () => {
+    await budget('cleared-balanced', [
+      { amount: -10000, cleared: true },
+      { amount: -2000, cleared: false },
+    ]);
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: -120,
+        category: 'Cashback',
+        date: TODAY,
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/No adjustment needed/);
+    expect(text).toMatch(/includes 1 row not marked cleared, -20\.00/);
+    expect(text).toMatch(/not the balance you gave/);
+    expect(text).toMatch(/Nothing was written/);
+    expect(text, 'offered an adjustment under a line saying none is needed').not.toMatch(
+      /adjustment would have been/,
+    );
+  }, 60_000);
+
+  it('says both readings agree when the unmarked rows cancel out', async () => {
+    // Derived from the figures rather than assumed: unmarked rows that sum to
+    // zero leave the two readings identical, and saying one does not match
+    // would be false.
+    await budget('cleared-balanced-cancel', [
+      { amount: -10000, cleared: true },
+      { amount: -2000, cleared: false },
+      { amount: 2000, cleared: false },
+    ]);
+
+    const text = (
+      await reconcileCurrencyResidual({
+        account: 'Card (USD)',
+        target_balance: -100,
+        category: 'Cashback',
+        date: TODAY,
+      })
+    ).join('\n');
+
+    expect(text).toMatch(/No adjustment needed/);
+    expect(text).toMatch(/includes 2 rows not marked cleared, 0\.00/);
+    expect(text).toMatch(/both readings agree/);
+    expect(text).not.toMatch(/not the balance you gave/);
+  }, 60_000);
+});
