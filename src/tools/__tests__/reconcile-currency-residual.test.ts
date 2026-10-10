@@ -698,9 +698,16 @@ describe('reconcile_currency_residual: transactions dated after today', () => {
       });
 
       const cutoff = vi.mocked(api.getAccountBalance).mock.calls[0][1];
-      const gt = (filters[0].date as { $gt: string }).$gt;
+      // By operator, not by position: the balance breakdown (#108) queries
+      // first, with `$lte`, so taking the first filter would compare the
+      // wrong one and pass whatever the lookup did.
+      const ahead = filters.find((f) => '$gt' in (f.date as Record<string, unknown>));
+      const upTo = filters.find((f) => '$lte' in (f.date as Record<string, unknown>));
       expect(cutoff).toBe('2026-09-26');
-      expect(gt).toBe(cutoff);
+      expect((ahead!.date as { $gt: string }).$gt).toBe(cutoff);
+      // All three readings are the same day, which is the whole point of
+      // threading one `today` through.
+      expect((upTo!.date as { $lte: string }).$lte).toBe(cutoff);
     } finally {
       vi.useRealTimers();
       if (realTZ === undefined) delete process.env.TZ;

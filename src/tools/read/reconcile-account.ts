@@ -5,8 +5,9 @@ import { ensureConnection } from '../../connection.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
-import { transactionsQuery } from '../../utils/transaction-query.js';
+
 import { findReconcileCandidates, type Candidate } from '../../utils/reconcile-candidates.js';
+import { balanceBreakdown } from '../../utils/account-balance.js';
 import { describeError } from '../../utils/errors.js';
 
 /**
@@ -25,19 +26,26 @@ import { describeError } from '../../utils/errors.js';
  * `getAccountBalance` sums everything up to its cutoff, cleared or not, and a
  * statement generally shows only what has posted, so the two can measure
  * different things (#108). Measured on a real budget file before choosing a
- * default: 41 uncleared rows across 9 of 16 accounts, **none** carrying a
- * `financial_id`, so not one came from a bank. Every one was typed in by hand,
- * and the oldest was six weeks old. There, `cleared = 0` does not mean the bank
- * has not posted it, it means nobody ticked it off, and the bank does show it.
+ * default: most uncleared rows were weeks old and **none** carried a
+ * `financial_id`, so not one had come from a bank. They had been typed in by
+ * hand. There, `cleared = 0` does not mean the bank has not posted it, it
+ * means nobody ticked it off, and the bank does show it.
  *
- * Defaulting to a cleared-only balance would have dropped all 41 rows and
- * invented a large gap on nine accounts at once, sending the reader to look for
- * a transaction that is not missing. So counting everything is the default, the
- * other is `balance_counts: "cleared_only"`, and the reply always says which
- * one produced the figure.
+ * Defaulting to a cleared-only balance would have dropped every one of them
+ * and invented a gap on most of the accounts at once, sending the reader to
+ * look for a transaction that is not missing. So counting everything is the
+ * default, the other is `balance_counts: "cleared_only"`, and the reply always
+ * says which one produced the figure.
  *
  * The `reconciled` flag is 0 on every row in that file, so nothing here is
  * built on it.
+ *
+ * `reconcile_currency_residual` reads the same way, for the same reason, and
+ * reports the other figure rather than switching to it: measured again when
+ * that change was considered, the same pattern held and had grown, so
+ * reconciling against the cleared figure would have booked the accumulated
+ * difference as an adjustment. Both tools read the same two numbers from
+ * `balanceBreakdown`, which is what keeps them from drifting.
  */
 
 const KIND_TEXT: Record<Candidate['kind'], (c: Candidate) => string> = {
@@ -126,18 +134,12 @@ export function registerReconcileAccount(server: McpServer): void {
         const lookback =
           lookback_days === undefined ? 90 : Math.max(1, Math.round(lookback_days));
 
-        let actualCents: number;
-        if (countsAll) {
-          actualCents = await api.getAccountBalance(accountId, asOf as unknown as Date);
-        } else {
-          const result = await api.runQuery(
-            transactionsQuery('all')
-              .filter({ account: accountId, date: { $lte: asOf }, is_child: false, cleared: true })
-              .select(['amount']),
-          );
-          const rows = (result as { data?: Array<{ amount: number }> } | undefined)?.data ?? [];
-          actualCents = rows.reduce((sum, r) => sum + Number(r.amount), 0);
-        }
+        // Both figures from one place, so this and the tool that books an
+        // adjustment cannot answer "what does the balance count" differently
+        // (#108). It computed its own cleared sum before, which was the same
+        // arithmetic written twice.
+        const breakdown = await balanceBreakdown(accountId, asOf);
+        const actualCents = countsAll ? breakdown.all : breakdown.cleared;
 
         const expectedCents = amountToCents(expected_balance);
         const difference = expectedCents - actualCents;

@@ -565,6 +565,40 @@ What it does not catch:
 - `create_transfer` and `create_split_transaction`, which do not run the check
   yet, and an opening balance from `create_account`. Tracked in #98.
 
+#### reconcile_currency_residual and rows that are not marked cleared
+
+It compares against every transaction in the account up to today, which is what
+it has always done. A bank statement generally shows only what has posted, so
+if the account holds rows nobody has ticked off, the two figures may not be
+measuring the same thing.
+
+It does not decide that for you. It reports it:
+
+```
+Currency residual reconciled:
+  Account:    Card (USD)
+  Was:        -120.00
+    includes 1 row not marked cleared, -20.00
+    cleared rows alone come to -100.00, and against that
+    figure the adjustment would have been 100.00.
+    Check which of the two the balance you gave is measuring.
+  Target:     0.00
+  Adjustment: 120.00
+```
+
+Nothing appears when every row is marked cleared.
+
+Comparing against the cleared rows instead was considered and measured against
+a real budget first. Most rows that were not marked cleared turned out to have
+been sitting there for weeks, and none of them had come from a bank: they were
+rows nobody had ticked off, not items in flight, which clear in a day or two.
+Reconciling against the cleared figure would have booked all of that as an
+adjustment into a residual category, which is the failure this is about reached
+from the other side. So the figure stays as it is and you get both numbers.
+
+`reconcile_account`, which writes nothing, reads the same two numbers and takes
+`balance_counts` to choose between them.
+
 #### reconcile_currency_residual and dates
 
 It refuses a date in the future for the adjustment it writes. Its whole promise
@@ -748,7 +782,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **create_split_transaction** - `account` (required) | `amount` (required): total, must equal the sum of the splits | `splits` (required): two or more `{category, amount, notes}` | `payee`, `date`, `notes`, `cleared` (all optional)
 
-**reconcile_currency_residual** - `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day | `future_rows` (optional): `exclude` or `include`, whether the balance you gave already counts transactions dated after today
+**reconcile_currency_residual** - compares against every row up to today, and says how much of that figure is not marked cleared and what the adjustment would have been without it. `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day | `future_rows` (optional): `exclude` or `include`, whether the balance you gave already counts transactions dated after today
 
 **run_bank_sync** - `account` (optional): sync specific account or all if omitted
 
