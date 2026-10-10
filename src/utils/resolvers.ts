@@ -65,6 +65,34 @@ export function resolveCategoryIn(
   return cats[0].id;
 }
 
+/**
+ * A payee by id or name, against a list already in hand.
+ *
+ * Transfer payees are left out of the name match by `transfer_acct`. They carry
+ * their account's name, so "Checking" would otherwise find the payee every
+ * transfer into that account uses. Asked for by id, any payee is found.
+ */
+export function resolvePayeeIn(
+  payees: Array<{ id: string; name: string; transfer_acct?: string | null }>,
+  nameOrId: string,
+): string {
+  const byId = payees.find((p) => p.id === nameOrId);
+  if (byId) return byId.id;
+
+  const candidates = payees.filter((p) => !p.transfer_acct && p.name !== '');
+  const matches = matchByName(candidates, nameOrId, (p) => p.name);
+
+  if (matches.length === 0) {
+    const names = candidates.map((p) => p.name).join(', ');
+    throw new Error(`No payee found matching "${nameOrId}". Available: ${names}`);
+  }
+  if (matches.length > 1) {
+    const names = matches.map((p) => p.name).join(', ');
+    throw new Error(`Ambiguous payee name "${nameOrId}". Matches: ${names}`);
+  }
+  return matches[0].id;
+}
+
 export async function resolveAccountId(nameOrId: string): Promise<string> {
   await ensureConnection();
   const accounts = await api.getAccounts();
