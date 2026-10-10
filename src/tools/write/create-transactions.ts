@@ -10,11 +10,19 @@ import { newWriteMarker } from '../../utils/write-marker.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import {
   findPossibleDuplicates,
+  findUnlinkedCounterpart,
   pullBeforeReading,
 } from '../../utils/duplicate-check.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import {
+  findTransferTarget,
+  isOffBudget,
+  transferEffect,
+  transferPairKey,
+  type TransferEffect,
+} from '../../utils/transfer-rule.js';
 
 /**
  * Create many transactions in one call.
@@ -57,6 +65,28 @@ import { syncNow } from '../../utils/sync-clock.js';
  * validated first precisely to make that unlikely, and if it happens the reply
  * says what landed rather than reporting a clean failure (#79).
  *
+ * ## A payee that names an account
+ *
+ * It is a transfer, by the same rule `create_transaction` applies, read from
+ * the same module (#154). This used to be refused with "a batch cannot mix
+ * transfers and ordinary rows", which was not true: `runTransfers` is a
+ * per-call flag and a mixed call writes both kinds correctly. Measured through
+ * this tool's own path, one account, three rows and the flag on:
+ *
+ *   payee_name + category + imported_id    kept, no counterpart
+ *   transfer payee + category              counterpart created, category kept
+ *   payee_name only                        kept, no counterpart
+ *
+ * The reply names the rows that became transfers at the end, once, rather than
+ * repeating the explanation on each of them.
+ *
+ * Two checks come with them, because a transfer writes two rows and the
+ * existing checks only ever looked at one. Both halves of one movement in the
+ * same list, which is what reading a card payment off both statements gives,
+ * are refused as one movement written twice; and a transfer whose other side
+ * is already sitting in the target account, imported from the bank, is refused
+ * before it lands on top of it.
+ *
  * ## `imported_id` does not deduplicate here
  *
  * Measured: the same `imported_id` sent twice through `addTransactions`
@@ -93,6 +123,18 @@ interface ResolvedRow {
   cleared: boolean;
   importedId?: string;
   marker: string;
+  /**
+   * Set when the payee named another account, so this row is a transfer.
+   * `payeeId` is filled in after the loop, from one `getPayees()` for the
+   * whole batch rather than one per row.
+   */
+  transfer?: {
+    targetId: string;
+    targetName: string;
+    targetOffBudget: boolean;
+    sourceOffBudget: boolean;
+    payeeId?: string;
+  };
 }
 
 interface Problem {
@@ -161,23 +203,22 @@ export async function createTransactions(input: {
         const accountName =
           accounts.find((a) => a.id === accountId)?.name ?? row.account;
 
-        // A payee naming another account means a transfer, which needs both
-        // sides linked and `runTransfers` on the write. That is a per-call flag,
-        // not a per-row one, so a batch cannot carry a mix. Refused rather than
-        // written as an ordinary payee, which would leave one-legged movements.
-        if (row.payee) {
-          const lower = row.payee.toLowerCase();
-          const target = accounts.find(
-            (a) =>
-              !a.closed && (a.id === row.payee || a.name.toLowerCase() === lower),
-          );
-          if (target) {
-            throw new Error(
-              `payee "${row.payee}" names an account, which makes this a transfer. ` +
-                `Use create_transfer for it; a batch cannot mix transfers and ordinary rows.`,
-            );
-          }
-        }
+        // A payee naming another account means a transfer, by the same rule
+        // `create_transaction` uses and read from the same place (#154).
+        //
+        // This used to refuse the row and send the caller to `create_transfer`
+        // with the reason that a batch cannot mix transfers and ordinary rows.
+        // That was not true. `runTransfers` is a per-call flag, and measured
+        // through this tool's own path a mixed call writes both kinds
+        // correctly: the ordinary rows keep their payee, category and
+        // imported_id and get no counterpart, and the transfer rows get
+        // theirs, with the category kept on the row it was asked for.
+        const target = findTransferTarget({
+          accounts,
+          sourceAccountId: accountId,
+          payee: row.payee,
+          hasCategory: Boolean(row.category),
+        });
 
         const categoryId = row.category
           ? resolveCategoryIn(categories, row.category)
@@ -195,9 +236,37 @@ export async function createTransactions(input: {
           cleared: row.cleared ?? false,
           importedId: row.imported_id,
           marker: newWriteMarker(),
+          transfer: target
+            ? {
+                targetId: target.id,
+                targetName: target.name,
+                targetOffBudget: target.offBudget,
+                sourceOffBudget: isOffBudget(accounts.find((a) => a.id === accountId)),
+              }
+            : undefined,
         });
       } catch (error) {
         problems.push({ index, reason: describeError(error) });
+      }
+    }
+
+    // One read for the batch, and only when there is a transfer in it: every
+    // other row costs nothing. A missing transfer payee is a problem with that
+    // row, not an exception that takes the batch down, so it joins the others
+    // and gets reported with them.
+    const transfers = resolved.filter((row) => row.transfer);
+    if (transfers.length > 0) {
+      const payees = await api.getPayees();
+      for (const row of transfers) {
+        const transferPayee = payees.find((p) => p.transfer_acct === row.transfer!.targetId);
+        if (!transferPayee) {
+          problems.push({
+            index: row.index,
+            reason: `no transfer payee found for account "${row.transfer!.targetName}".`,
+          });
+          continue;
+        }
+        row.transfer!.payeeId = transferPayee.id;
       }
     }
 
@@ -285,6 +354,34 @@ export async function createTransactions(input: {
       // `allow_duplicate`, and for a turn that advice led nowhere, because the
       // check ran either way and refused the batch again. A test asking for the
       // way out is what found it.
+      // Both halves of one movement, first. A pay-off read from two statements
+      // arrives as `{Bank, -800, payee "Card"}` and `{Card, +800, payee
+      // "Bank"}`, and each of those asks for both legs, so writing both put
+      // the payment in twice. The check below could not see it: the two rows
+      // name different accounts.
+      const pairs = new Map<string, number>();
+      for (const row of resolved) {
+        if (!row.transfer) continue;
+        const key = transferPairKey({
+          sourceAccountId: row.accountId,
+          targetAccountId: row.transfer.targetId,
+          amountCents: row.amountCents,
+          date: row.date,
+        });
+        const first = pairs.get(key);
+        if (first !== undefined) {
+          complain(
+            row.index,
+            `is row ${first + 1} again: the same movement between the same two accounts on ` +
+              `the same day, written from the other account. One of them records both sides, ` +
+              `so only one is needed. If these really are two separate movements, pass ` +
+              `allow_duplicate.`,
+          );
+        } else {
+          pairs.set(key, row.index);
+        }
+      }
+
       const seen = new Map<string, number>();
       for (const row of resolved) {
         const key = `${row.accountId}|${row.date}|${row.amountCents}`;
@@ -311,6 +408,28 @@ export async function createTransactions(input: {
             row.index,
             `${row.accountName} already has a transaction on ${row.date} for ` +
               `${formatMoney(row.amountCents)}. If this is a second one, pass allow_duplicate.`,
+          );
+          continue;
+        }
+
+        // And the row the transfer is about to put in the other account, which
+        // nothing used to look at. A card payment already imported from the
+        // bank is an ordinary row there; the transfer's own leg lands on top of
+        // it and the account shows the money arriving twice.
+        if (!row.transfer) continue;
+        const counterpart = await findUnlinkedCounterpart(
+          row.transfer.targetId,
+          row.date,
+          row.amountCents,
+          { alreadyPulled: true },
+        );
+        if (counterpart.length > 0) {
+          complain(
+            row.index,
+            `${row.transfer.targetName} already has a transaction on ${row.date} for ` +
+              `${formatMoney(-row.amountCents)} that is not part of a transfer. This row would ` +
+              `put a second one there. If that is this same movement, already imported, drop ` +
+              `this row; if it is a different one, pass allow_duplicate.`,
           );
         }
       }
@@ -364,8 +483,19 @@ async function writeBatch(
     else byAccount.set(row.accountId, [row]);
   }
 
+  // Counted for every account the batch can touch, which is not only the ones
+  // it writes to: a transfer puts a row in the other account as well, and
+  // leaving those out of the table hid half of what the call did. It hid most
+  // of it when the batch stopped part way, where the counts are the only
+  // record of what landed.
+  const names = new Map<string, string>();
+  for (const [accountId, group] of byAccount) names.set(accountId, group[0].accountName);
+  for (const row of resolved) {
+    if (row.transfer?.payeeId) names.set(row.transfer.targetId, row.transfer.targetName);
+  }
+
   const before = new Map<string, number>();
-  for (const accountId of byAccount.keys()) {
+  for (const accountId of names.keys()) {
     const rows = await api.getTransactions(
       accountId,
       '1900-01-01',
@@ -385,7 +515,11 @@ async function writeBatch(
         amount: row.amountCents,
         cleared: row.cleared,
       };
-      if (row.payee) transaction.payee_name = row.payee;
+      // A transfer goes through the other account's transfer payee, not by
+      // name: that is what links the two rows. Everything else keeps its
+      // payee_name, in the same call.
+      if (row.transfer?.payeeId) transaction.payee = row.transfer.payeeId;
+      else if (row.payee) transaction.payee_name = row.payee;
       if (row.categoryId) transaction.category = row.categoryId;
       if (row.notes) transaction.notes = row.notes;
       if (row.importedId) transaction.imported_id = row.importedId;
@@ -396,8 +530,14 @@ async function writeBatch(
       // `learnCategories: false` for the same reason as the single-row tool:
       // the learned payee→category mapping is applied on add and would
       // silently replace an explicit category (#26).
+      // Per call, not per row, so it is on whenever this account's group has a
+      // transfer in it. Measured: with it on, the ordinary rows in the same
+      // call keep their payee, category and imported_id and get no
+      // counterpart. Leaving it off for a group that has one would write a
+      // one-legged movement, which is the thing worth refusing.
       await api.addTransactions(accountId, payload as never, {
         learnCategories: false,
+        runTransfers: group.some((row) => row.transfer?.payeeId),
       });
       written.push(...group);
     } catch (error) {
@@ -444,14 +584,18 @@ async function writeBatch(
 
   const lines: string[] = [];
   const counts: string[] = [];
-  for (const accountId of byAccount.keys()) {
+  for (const [accountId, name] of names) {
     const rows = await api.getTransactions(
       accountId,
       '1900-01-01',
       '2999-12-31',
     );
-    const name = byAccount.get(accountId)![0].accountName;
-    counts.push(`  ${name}: ${before.get(accountId)} -> ${rows.length}`);
+    const was = before.get(accountId) ?? 0;
+    // An account that only ever received counterparts, and received none
+    // because the batch stopped first, has nothing to report: listing it
+    // unchanged would read as though something had been attempted there.
+    if (was === rows.length && !byAccount.has(accountId)) continue;
+    counts.push(`  ${name}: ${was} -> ${rows.length}`);
   }
 
   if (failure) {
@@ -474,6 +618,130 @@ async function writeBatch(
     'Transactions on each account, before and after:',
     ...counts,
   );
+  lines.push(...describeTransfers(written));
+  return lines;
+}
+
+/** What each label in the summary means, said once however many rows earned it. */
+const EFFECT_LABEL: Record<TransferEffect, string> = {
+  inside: 'inside your budget',
+  outside: 'outside your budget',
+  incoming: 'came into your budget',
+  outgoing: 'left your budget',
+};
+
+const EFFECT_PARAGRAPH: Record<TransferEffect, string> = {
+  inside:
+    'Inside your budget means the money only changed account, so it is not spending. To ' +
+    'record a purchase instead, give the row a category, or use a payee that is not an ' +
+    'account name.',
+  outside:
+    'Outside your budget means both accounts are off budget, so your budget is not ' +
+    'affected at all.',
+  incoming:
+    'Came into your budget means one of the two accounts is off budget and the money came ' +
+    'from there.',
+  outgoing:
+    'Left your budget means one of the two accounts is off budget and the money went that ' +
+    'way.',
+};
+
+/**
+ * Name the rows that turned into transfers, at the end, once.
+ *
+ * The caller wrote a payee and got something else, and in #137 the person did
+ * not find out until they went looking for spending they thought they had
+ * recorded. Saying it per row would repeat the same paragraph up to twenty
+ * times in one reply, so the rows are listed and the explanation follows once
+ * per kind of effect that actually occurred.
+ */
+function describeTransfers(written: ResolvedRow[]): string[] {
+  const transfers = written.filter((row) => row.transfer?.payeeId);
+  if (transfers.length === 0) return [];
+
+  const entries = transfers.map((row) => {
+    const effect = transferEffect({
+      amountCents: row.amountCents,
+      sourceOffBudget: row.transfer!.sourceOffBudget,
+      targetOffBudget: row.transfer!.targetOffBudget,
+    });
+    // Direction from the sign, not from which account the row was written to:
+    // a positive amount is money arriving, so the other account is where it
+    // came from. Reading it the other way says the opposite of what the engine
+    // did, which is the mistake #137 made twice.
+    const route =
+      row.amountCents >= 0
+        ? `${row.transfer!.targetName} -> ${row.accountName}`
+        : `${row.accountName} -> ${row.transfer!.targetName}`;
+    return { index: row.index, route, amount: Math.abs(row.amountCents), effect, row };
+  });
+
+  const routeWidth = Math.max(...entries.map((e) => e.route.length));
+  const amountWidth = Math.max(...entries.map((e) => formatMoney(e.amount).length));
+
+  const count = entries.length;
+  const lines = [
+    '',
+    `${count} of them named one of your accounts, so ${count === 1 ? 'it was' : 'they were'} ` +
+      `recorded as ${count === 1 ? 'a transfer' : 'transfers'} and a matching row was created ` +
+      `in the other account:`,
+    '',
+    ...entries.map(
+      (e) =>
+        `  row ${e.index + 1}  ${e.route.padEnd(routeWidth)}  ` +
+        `${formatMoney(e.amount).padStart(amountWidth)}  ${EFFECT_LABEL[e.effect]}`,
+    ),
+  ];
+
+  // One paragraph per kind that happened, in a fixed order so two replies about
+  // the same batch read the same way.
+  const kinds: TransferEffect[] = ['inside', 'outgoing', 'incoming', 'outside'];
+  for (const kind of kinds) {
+    if (entries.some((e) => e.effect === kind)) {
+      lines.push('', EFFECT_PARAGRAPH[kind]);
+    }
+  }
+
+  // Only when there is a category to talk about, and the two cases are not the
+  // same thing. On a row that crosses the edge of the budget the category is
+  // kept where it was asked for; between two off-budget accounts Actual
+  // removes it, which #137 recorded the other way round because it read the
+  // row before the engine had finished with it.
+  const crossing = entries.filter(
+    (e) => (e.effect === 'incoming' || e.effect === 'outgoing') && e.row.categoryId,
+  );
+  // Split by where the category actually landed, rather than left as a
+  // condition for the reader to apply. "Counts only if that row is in your
+  // budget" is true and makes someone work out which case they are in, and
+  // the whole point of saying anything is that they should not have to.
+  const counted = crossing.filter((e) => !e.row.transfer!.sourceOffBudget);
+  const notCounted = crossing.filter((e) => e.row.transfer!.sourceOffBudget);
+  if (counted.length > 0) {
+    lines.push(
+      '',
+      `The category on ${counted.length === 1 ? 'that row counts' : 'those rows counts'} where ` +
+        'you asked for it, since that side is in your budget.',
+    );
+  }
+  if (notCounted.length > 0) {
+    const names = [...new Set(notCounted.map((e) => e.row.accountName))].join(', ');
+    lines.push(
+      '',
+      `The category stayed on the ${names} row, but ${names} is off budget, so it does not ` +
+        'count anywhere. To make this count, put a category on the row in the other account.',
+    );
+  }
+
+  const outside = entries.filter((e) => e.effect === 'outside' && e.row.categoryId);
+  if (outside.length > 0) {
+    lines.push(
+      '',
+      `The category on ${outside.length === 1 ? 'the row that is outside your budget was' : 'the rows that are outside your budget were'} ` +
+        'not kept: Actual discards a category on a transfer where neither account is in the ' +
+        'budget, since nothing could count it.',
+    );
+  }
+
   return lines;
 }
 
@@ -482,7 +750,9 @@ export function registerCreateTransactions(server: McpServer): void {
     'create_transactions',
     'Create several transactions in one call. This is the way to record more than one: ' +
       'the rows are validated first and written together, so nothing is created unless every ' +
-      'row is usable. Calling create_transaction many times in parallel is what this replaces.',
+      'row is usable. Calling create_transaction many times in parallel is what this replaces. ' +
+      'A row whose payee names one of your accounts becomes a transfer, the same way ' +
+      'create_transaction treats it, so a month of records can be sent as one list.',
     {
       transactions: z
         .array(
@@ -497,7 +767,9 @@ export function registerCreateTransactions(server: McpServer): void {
               .string()
               .optional()
               .describe(
-                'Payee name. Naming an account is a transfer, which a batch refuses: use create_transfer.',
+                'Payee name, or the name of one of your accounts to make a transfer, the ' +
+                  'same way create_transaction does. Giving a category turns it into an ' +
+                  'ordinary purchase instead, but only when both accounts are on budget.',
               ),
             category: z.string().optional().describe('Category name or ID'),
             date: z

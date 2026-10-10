@@ -527,9 +527,12 @@ describe.skipIf(skip)('create_transactions', () => {
     expect(text).toContain('Savings:');
   }, 60_000);
 
-  it('refuses a row whose payee names an account', async () => {
+  it('makes a transfer of a row whose payee names an account (#154)', async () => {
+    // This used to be refused, with "a batch cannot mix transfers and ordinary
+    // rows". Both rows go in one call, and the ordinary one is untouched.
     await budget('batch-transfer');
-    const before = await count(checking);
+    const beforeChecking = await count(checking);
+    const beforeSavings = await count(savings);
 
     const lines = await createTransactions({
       transactions: [
@@ -538,8 +541,12 @@ describe.skipIf(skip)('create_transactions', () => {
       ],
     });
 
-    expect(await count(checking)).toBe(before);
-    expect(lines.join('\n')).toContain('create_transfer');
+    expect(await count(checking)).toBe(beforeChecking + 2);
+    // The counterpart, which is the half that used to be missing.
+    expect(await count(savings)).toBe(beforeSavings + 1);
+    const text = lines.join('\n');
+    expect(text).not.toContain('create_transfer');
+    expect(text).toContain('row 2  Checking -> Savings');
   }, 60_000);
 
   it('refuses an ambiguous account rather than guessing', async () => {

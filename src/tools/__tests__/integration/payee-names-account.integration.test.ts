@@ -256,9 +256,17 @@ describe.skipIf(skip)('a payee that names an account', () => {
         date: '2026-09-10',
       });
 
+      // Settled, not straight away. Reading immediately is what made #137
+      // record `off -> off` as keeping its category: it is there for a moment
+      // and then Actual removes it, on that combination only. The note in
+      // unsettled-reads.ts has the shape of this; a handful of engine calls
+      // closes the window.
+      for (let i = 0; i < 6; i += 1) await api.getCategories();
+
       const onSource = await rows(source);
       const onTarget = await rows(target);
       const bothOnBudget = !from && !to;
+      const bothOffBudget = from && to;
 
       if (bothOnBudget) {
         // The #137 rule: an ordinary purchase, no counterpart, category kept.
@@ -271,10 +279,14 @@ describe.skipIf(skip)('a payee that names an account', () => {
         expect(onTarget, `${label}: the counterpart is missing`).toHaveLength(1);
         expect(onTarget[0].amount).toBe(10000);
         expect((onSource[0] as { transfer_id?: string | null }).transfer_id, label).toBeTruthy();
-        // Measured through this tool's own path: the category survives on the
-        // row it was asked for, in every transfer. Whether it *counts* is a
-        // different question, and that is what the reply explains.
-        expect(onSource[0].category ?? null, `${label}: category on the source row`).toBe(cat);
+        // Measured through this tool's own path, once the write has settled:
+        // the category survives on the row it was asked for, except when
+        // neither account is in the budget. There Actual removes it, because
+        // nothing could count it, and the reply says so rather than claiming
+        // it is stored.
+        expect(onSource[0].category ?? null, `${label}: category on the source row`).toBe(
+          bothOffBudget ? null : cat,
+        );
       }
     }, 60_000);
 
@@ -518,4 +530,90 @@ describe.skipIf(skip)('a payee that names an account', () => {
     expect(await rows(station)).toHaveLength(0);
     expect((await rows(card))[0].category).toBe(fuel);
   });
+});
+
+/**
+ * What the single-row tool checks before it writes a transfer (#154, round 2).
+ *
+ * A transfer writes two rows and only one of them used to be looked at.
+ */
+describe.skipIf(skip)('a transfer whose other side already exists', () => {
+  let bank = '';
+  let card = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  async function budget(name: string) {
+    await createFreshBudget(async () => {
+      bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
+      card = await api.createAccount({ name: 'Card', offbudget: false } as never, 0);
+    }, name);
+  }
+
+  const count = async (acct: string) =>
+    (await api.getTransactions(acct, '1900-01-01', '2999-12-31')).length;
+
+  it('stops when the other account already has the row, imported from the bank', async () => {
+    await budget('one-counterpart');
+    const create = handlerFor(registerCreateTransaction);
+
+    // The payment, already imported into the card account as an ordinary row.
+    await create({ account: 'Card', amount: 800, payee: 'Bank payment', date: '2026-09-25' });
+    const afterImport = await count(card);
+
+    const result = await create({
+      account: 'Bank',
+      amount: -800,
+      payee: 'Card',
+      date: '2026-09-25',
+    });
+
+    expect(await count(card), 'the money arrived twice').toBe(afterImport);
+    expect(result.content[0].text).toContain('already has the other side of this movement');
+  }, 60_000);
+
+  it('calls a repeated transfer a duplicate, not a counterpart clash', async () => {
+    // The row in the other account is this tool's own far leg. It is linked,
+    // so it is not a loose import that a second transfer would duplicate, and
+    // the reply that fits is the ordinary duplicate one about this account.
+    await budget('one-repeat');
+    const create = handlerFor(registerCreateTransaction);
+
+    await create({ account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' });
+    const after = await count(bank);
+
+    const result = await create({
+      account: 'Bank',
+      amount: -800,
+      payee: 'Card',
+      date: '2026-09-25',
+    });
+
+    expect(await count(bank)).toBe(after);
+    const text = result.content[0].text;
+    expect(text).toContain('already exists');
+    expect(text, 'the linked far leg was read as a loose import').not.toContain(
+      'the other side of this movement',
+    );
+  }, 60_000);
+
+  it('does not turn a payee that merely contains an account name into a transfer', async () => {
+    await budget('one-partial-name');
+    const create = handlerFor(registerCreateTransaction);
+
+    await create({
+      account: 'Bank',
+      amount: -200,
+      payee: 'Card Repair Shop',
+      date: '2026-09-02',
+    });
+
+    expect(await count(card), 'a purchase was turned into a transfer').toBe(0);
+  }, 60_000);
 });
