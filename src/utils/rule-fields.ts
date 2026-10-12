@@ -114,3 +114,45 @@ export function warnTextOpOnIdField(field: string, op: string): string {
     `by name, so the rule may look right where you wrote it. ${alternativeFor(field)}`
   );
 }
+
+/**
+ * The fields the engine accepts a list on, for `oneOf` and `notOneOf`.
+ *
+ * Measured against the engine, one rule per field: the four id fields plus
+ * the two string fields that are not `notes`. Everything else answers with a
+ * bare "Failed creating a new rule", which tells the caller nothing about
+ * which part of their rule was wrong.
+ *
+ * `FIELD_INFO` agrees and says why: `notes` carries `disallowedOps` with
+ * `oneOf` and `notOneOf` in it, and the date, number and boolean types do not
+ * list those operators at all. The list is checked against the engine's own
+ * by the same test that checks the id fields.
+ */
+export const LIST_FIELDS = new Set([
+  'payee',
+  'category',
+  'category_group',
+  'account',
+  'payee_name',
+  'imported_payee',
+]);
+
+export function refuseListOnField(field: string, op: string): string {
+  return (
+    `A rule cannot use \`${op}\` on \`${field}\`. Actual takes a list only on ` +
+    `${[...LIST_FIELDS].join(', ')}. Use \`is\` or \`isNot\` for one value, or one of ` +
+    `those fields to match several.`
+  );
+}
+
+/**
+ * Whether a stored rule value is a name where the engine wanted an id.
+ *
+ * This is what a rule left behind by #167 and #170 looks like: the condition
+ * reads perfectly well, and the rule has never matched anything. Told apart
+ * from a deleted thing by the shape: an id that resolves to nothing was
+ * something once, a value that is not an id shape never was.
+ */
+export function looksLikeAnId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+}

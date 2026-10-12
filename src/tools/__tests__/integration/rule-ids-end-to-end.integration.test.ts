@@ -311,4 +311,60 @@ describe.skipIf(skip)('a rule written with names', () => {
       }),
     ).rejects.toThrow(/takes one value, not a list/);
   }, 60_000);
+
+  it('refuses a list on a field that cannot take one, before the engine does', async () => {
+    // The engine answers a list on the wrong field with a bare "Failed
+    // creating a new rule", which says nothing about which part was wrong.
+    // Measured, one rule per field: the four id fields plus payee_name and
+    // imported_payee take a list, and nothing else does.
+    await budget('rule-list-wrong-field');
+
+    for (const field of ['notes', 'amount'] as const) {
+      const message = await createRuleFromInput({
+        condition_field: field,
+        condition_op: 'oneOf',
+        condition_value: ['a', 'b'],
+        action_field: 'category',
+        action_value: 'Groceries',
+      }).catch((e: Error) => e.message);
+
+      expect(message).toMatch(new RegExp(`cannot use \`oneOf\` on \`${field}\``));
+      expect(message, 'did not say where a list does work').toMatch(/payee_name/);
+    }
+  }, 60_000);
+
+  it('warns that an account action moves transactions', async () => {
+    // Measured: the action really moves the row, the importer does not
+    // recognise one it has moved, so re-importing the same movement leaves
+    // two; and a row moved off budget loses its category. Someone syncing a
+    // bank on a schedule gets that every time.
+    await budget('rule-account-action');
+
+    const lines = await createRuleFromInput({
+      condition_field: 'notes',
+      condition_op: 'contains',
+      condition_value: 'move me',
+      action_field: 'account',
+      action_value: 'Savings',
+    });
+    const text = lines.join('\n');
+
+    expect(text).toMatch(/moves transactions to another account/);
+    expect(text).toMatch(/bank sync can leave a second copy/);
+    expect(text).toMatch(/off-budget account loses its category/);
+  }, 60_000);
+
+  it('says nothing about moving when the action is not an account', async () => {
+    await budget('rule-no-account-action');
+
+    const lines = await createRuleFromInput({
+      condition_field: 'notes',
+      condition_op: 'contains',
+      condition_value: 'anything',
+      action_field: 'category',
+      action_value: 'Groceries',
+    });
+
+    expect(lines.join('\n')).not.toMatch(/moves transactions/);
+  }, 60_000);
 });

@@ -4,7 +4,13 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolvePayeeIn, resolveByWholeName } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
-import { ID_FIELDS, isTextOpOnIdField, refuseTextOpOnIdField } from '../../utils/rule-fields.js';
+import {
+  ID_FIELDS,
+  LIST_FIELDS,
+  isTextOpOnIdField,
+  refuseTextOpOnIdField,
+  refuseListOnField,
+} from '../../utils/rule-fields.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
 export interface CreateRuleInput {
@@ -103,6 +109,14 @@ async function resolveRuleValue(
 ): Promise<{ stored: string | string[]; matched: string[] }> {
   const list = Array.isArray(value) ? value : [value];
 
+  // Refused here rather than by the engine, which answers a list on the wrong
+  // field with a bare "Failed creating a new rule" and says nothing about
+  // which part was wrong. Measured, one rule per field: the four id fields
+  // plus payee_name and imported_payee take a list, and nothing else does.
+  if (LIST_OPS.has(op) && !LIST_FIELDS.has(field)) {
+    throw new Error(refuseListOnField(field, op));
+  }
+
   if (!LIST_OPS.has(op) && Array.isArray(value)) {
     throw new Error(
       `\`${op}\` takes one value, not a list. Use \`oneOf\` or \`notOneOf\` to match ` +
@@ -182,6 +196,20 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
   // they did not have in mind is invisible otherwise, and a rule runs until
   // somebody deletes it.
   const matched: string[] = [];
+  if (action_field === 'account') {
+    // Measured, and worth saying every time: the action really moves the
+    // transaction, and the engine's importer does not recognise a row it has
+    // moved. Re-importing the same `imported_id` then leaves two rows, which
+    // for anyone syncing a bank on a schedule is a duplicate per sync.
+    matched.push(
+      '',
+      'This action moves transactions to another account. Two things follow from that,',
+      'both measured: a row the rule has moved is not recognised when the same movement is',
+      'imported again, so a bank sync can leave a second copy of it; and a row moved to an',
+      'off-budget account loses its category.',
+      '',
+    );
+  }
   if (condition.matched.length > 0) {
     matched.push(`  Condition ${condition_field}: ${condition.matched.join(', ')}`);
   }
@@ -228,13 +256,20 @@ export function registerCreateRule(server: McpServer): void {
             'name or an ID. Pass a list for oneOf and notOneOf; a single value for every ' +
             'other operator.',
         ),
-      action_field: z.string().describe('Field to set: category, payee, notes'),
+      action_field: z
+        .string()
+        .describe(
+          'Field to set: category, payee, notes, account. Setting account moves the ' +
+            'transaction, which a later import of the same movement does not recognise, so ' +
+            'a bank sync can leave a duplicate; a row moved off budget also loses its ' +
+            'category.',
+        ),
       action_value: z
         .string()
         .describe(
           'Value to set (category name/ID, payee name/ID, account name/ID, or note text). ' +
-            'A payee or category must already exist; use create_payee or create_category ' +
-            'for a new one.',
+            'A payee, category or account must already exist; use create_payee or ' +
+            'create_category for a new one.',
         ),
       stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
     },
