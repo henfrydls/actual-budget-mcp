@@ -57,3 +57,33 @@ export function transactionsQuery(splits: SplitHandling) {
   // today; the shape invites it, which is why it is written down here.
   return api.q('transactions').options({ splits });
 }
+
+/**
+ * A closed date range, written the way AQL actually honours.
+ *
+ * The obvious form is wrong and silent. Measured on an account holding five
+ * consecutive days, the 23rd to the 27th:
+ *
+ *   { date: { $gte: 24th, $lte: 26th } }                24 25 26 **27**
+ *   { $and: [{ date: { $gte: 24th } },
+ *            { date: { $lte: 26th } }] }                24 25 26
+ *   { date: { $gte: 24th } }                            24 25 26 27
+ *   { date: { $lte: 26th } }                            23 24 25 26
+ *
+ * Each key works on its own. Put together in one object the upper bound is
+ * dropped, with no error, so a query asking for a window gets everything from
+ * its start to the end of the budget. That shipped twice: once in a duplicate
+ * check written for #161, where a test caught it before it was released, and
+ * once in `reconcile_account`, where it had been offering transactions dated
+ * after the cutoff as explanations since 0.10.0 (#179).
+ *
+ * It lives here, next to the builder, so the mistake has one place to not be
+ * made. A test over the syntax tree fails on a literal with both keys as
+ * siblings anywhere in `src/`.
+ *
+ * Both ends are inclusive, which is what every caller here wants: a window up
+ * to and including a cutoff date.
+ */
+export function dateBetween(from: string, to: string): Record<string, unknown> {
+  return { $and: [{ date: { $gte: from } }, { date: { $lte: to } }] };
+}

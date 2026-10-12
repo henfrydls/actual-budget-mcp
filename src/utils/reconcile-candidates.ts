@@ -1,5 +1,5 @@
 import * as api from '@actual-app/api';
-import { transactionsQuery } from './transaction-query.js';
+import { transactionsQuery, dateBetween } from './transaction-query.js';
 
 /**
  * What might explain the gap between an account's balance here and a bank's.
@@ -103,7 +103,11 @@ export async function findReconcileCandidates(
   const inWindow = rowsOf(
     await api.runQuery(
       transactionsQuery('all')
-        .filter({ account: accountId, date: { $gte: from, $lte: asOf }, is_child: false })
+        // The window, with both ends honoured. Written as one object with
+        // both keys, which is how this started, the upper bound is dropped
+        // and the window runs to the end of the budget: rows dated after the
+        // cutoff were offered as explanations for the difference (#179).
+        .filter({ account: accountId, ...dateBetween(from, asOf), is_child: false })
         .orderBy('date')
         .select(['id', 'date', 'amount', 'payee', 'notes', 'cleared']),
     ),
@@ -171,7 +175,7 @@ export async function findReconcileCandidates(
         .filter({
           amount: missing,
           is_child: false,
-          date: { $gte: from, $lte: asOf },
+          ...dateBetween(from, asOf),
         })
         .select(['id', 'date', 'amount', 'payee', 'notes', 'cleared', 'account']),
     ),
