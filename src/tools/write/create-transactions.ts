@@ -12,6 +12,7 @@ import {
   findPossibleDuplicates,
   findUnlinkedCounterpart,
   pullBeforeReading,
+  COUNTERPART_WINDOW_DAYS,
 } from '../../utils/duplicate-check.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { describeError } from '../../utils/errors.js';
@@ -140,6 +141,14 @@ interface ResolvedRow {
 interface Problem {
   index: number;
   reason: string;
+}
+
+/** Whether two `YYYY-MM-DD` dates are at most `days` apart. */
+function withinDays(a: string, b: string, days: number): boolean {
+  const day = 24 * 60 * 60 * 1000;
+  const from = new Date(`${a}T00:00:00`).getTime();
+  const to = new Date(`${b}T00:00:00`).getTime();
+  return Math.abs(from - to) <= days * day;
 }
 
 function describeRow(row: BatchInput, index: number): string {
@@ -396,6 +405,39 @@ export async function createTransactions(input: {
         }
       }
 
+      // Both sides of one movement, where one of them is an ordinary row.
+      //
+      // A card statement lists the payment as something like "PAYMENT
+      // RECEIVED", not as an account name, so a month read off both statements
+      // arrives as a transfer from the current account and an ordinary credit
+      // on the card. The transfer writes both sides, so the ordinary row is
+      // the same money a second time. The pair key above cannot see it: that
+      // one compares two transfers.
+      //
+      // The ordinary row is the one refused, not the transfer: the transfer
+      // records both sides, so it is the row that can go.
+      const transfers = resolved.filter((r) => r.transfer);
+      if (transfers.length > 0) {
+        for (const ordinary of resolved) {
+          if (ordinary.transfer) continue;
+          const twin = transfers.find(
+            (t) =>
+              t.transfer!.targetId === ordinary.accountId &&
+              t.amountCents === -ordinary.amountCents &&
+              withinDays(t.date, ordinary.date, COUNTERPART_WINDOW_DAYS),
+          );
+          if (!twin) continue;
+          complain(
+            ordinary.index,
+            `is the other side of the transfer in row ${twin.index + 1}: that row moves ` +
+              `${formatMoney(Math.abs(twin.amountCents))} on ${twin.date} and writes the ` +
+              `matching row in ${ordinary.accountName} itself, and this one records the same ` +
+              `money on ${ordinary.date}. Keeping both puts it in twice. Drop this row, or ` +
+              `pass allow_duplicate if they really are two movements.`,
+          );
+        }
+      }
+
       for (const row of resolved) {
         const existing = await findPossibleDuplicates(
           row.accountId,
@@ -424,12 +466,18 @@ export async function createTransactions(input: {
           { alreadyPulled: true },
         );
         if (counterpart.length > 0) {
+          // The dates, because they are the part that is not obvious: the
+          // match may be a day either side, and saying only "already has a
+          // transaction" sends someone to look on the wrong day.
+          const when = counterpart.map((c) => c.date).join(', ');
           complain(
             row.index,
-            `${row.transfer.targetName} already has a transaction on ${row.date} for ` +
-              `${formatMoney(-row.amountCents)} that is not part of a transfer. This row would ` +
-              `put a second one there. If that is this same movement, already imported, drop ` +
-              `this row; if it is a different one, pass allow_duplicate.`,
+            `${row.transfer.targetName} already has a transaction for ` +
+              `${formatMoney(-row.amountCents)} on ${when}, which is not part of a transfer. ` +
+              `This row is dated ${row.date}, and the two sides of one movement are often a ` +
+              `day apart. The transfer would put a second row there. If that is this same ` +
+              `movement, already imported, drop this row; if it is a different one, pass ` +
+              `allow_duplicate.`,
           );
         }
       }

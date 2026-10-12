@@ -99,11 +99,35 @@ export async function findPossibleDuplicates(
   // the default. Nothing another client writes in between would be seen
   // anyway, because the rows are checked in one pass. The default is
   // unchanged, so a single-row caller still pulls.
-  options: { alreadyPulled?: boolean } = {},
+  options: {
+    alreadyPulled?: boolean;
+    /**
+     * How many days either side of `date` to look, for a caller comparing
+     * against something a different bank posted (#161). Zero, the default,
+     * is the exact date and is what a duplicate of a row means.
+     */
+    withinDays?: number;
+  } = {},
 ): Promise<ExistingTransaction[]> {
   if (!options.alreadyPulled) {
     await pullBeforeReading('checking whether this transaction already exists');
   }
+
+  const within = options.withinDays ?? 0;
+  // A range as two conditions, not as one object with both keys. Measured on
+  // five consecutive days: `{ $gte, $lte }` together returns everything from
+  // the lower bound onwards, silently ignoring the upper one, so a window of
+  // one day either side matched anything from the day before to the end of
+  // the budget. Each key on its own works, and so does `$and`.
+  const dateFilter =
+    within === 0
+      ? { date }
+      : {
+          $and: [
+            { date: { $gte: shiftDate(date, -within) } },
+            { date: { $lte: shiftDate(date, within) } },
+          ],
+        };
 
   const result = await api.runQuery(
     transactionsQuery('all')
@@ -119,7 +143,7 @@ export async function findPossibleDuplicates(
       // matching the -40 share of a -70 supermarket split, under the name
       // "Super". The parent is still matched, at the full amount, which is the
       // row a duplicate would actually collide with.
-      .filter({ account: accountId, date, amount: amountCents, is_child: false })
+      .filter({ account: accountId, ...dateFilter, amount: amountCents, is_child: false })
       .select(['id', 'date', 'amount', 'notes', 'payee', 'transfer_id']),
   );
   const rows = (result as { data?: Array<Record<string, unknown>> } | undefined)?.data;
@@ -165,8 +189,36 @@ export async function findUnlinkedCounterpart(
   amountCents: number,
   options: { alreadyPulled?: boolean } = {},
 ): Promise<ExistingTransaction[]> {
-  const rows = await findPossibleDuplicates(targetAccountId, date, -amountCents, options);
+  const rows = await findPossibleDuplicates(targetAccountId, date, -amountCents, {
+    ...options,
+    withinDays: COUNTERPART_WINDOW_DAYS,
+  });
   return rows.filter((row) => !row.isTransfer);
+}
+
+/**
+ * How far apart the two sides of one movement can be dated.
+ *
+ * One day either side, fixed. A payment leaving a current account on the 10th
+ * and arriving on the card on the 11th is the ordinary case when the two
+ * statements come from different banks, and the exact date was the only thing
+ * being compared.
+ *
+ * It is a trade, not a free improvement: two genuine movements of the same
+ * size a day apart now collide, and a second card payment of the same amount
+ * does happen. The way out is `allow_duplicate`, and the message says which
+ * row it collided with and on what date, so the person can tell which of the
+ * two cases they are in rather than being stopped without a reason.
+ */
+export const COUNTERPART_WINDOW_DAYS = 1;
+
+/** A date shifted by whole days, in the same `YYYY-MM-DD` form. */
+function shiftDate(date: string, days: number): string {
+  const at = new Date(`${date}T00:00:00`);
+  at.setDate(at.getDate() + days);
+  const month = String(at.getMonth() + 1).padStart(2, '0');
+  const day = String(at.getDate()).padStart(2, '0');
+  return `${at.getFullYear()}-${month}-${day}`;
 }
 
 /**
