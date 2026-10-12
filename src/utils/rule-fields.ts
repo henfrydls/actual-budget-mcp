@@ -42,13 +42,11 @@ export function isTextOpOnIdField(field: string, op: string): boolean {
 /**
  * What works instead, per field, and only what works **today**.
  *
- * Measured, because the obvious advice was wrong twice. `oneOf` is not offered
- * at all: sending it through this tool fails outright, since the engine wants
- * an array and a single string is what goes out (#171). And `is` with a name
- * is only useful where the name is resolved to an id before the rule is
- * saved, which is payee and category; on `account` and `category_group` the
- * name is stored as typed and the rule never fires (#170). Those two get the
- * id instead, which is what the engine compares against.
+ * Measured, because the obvious advice was wrong twice before it was right.
+ * `oneOf` used to fail outright from here, since the engine wants an array and
+ * a single string went out, and `is` with a name only worked where the name
+ * was resolved before saving. Both are fixed (#170, #171), so a name works on
+ * all four fields and `oneOf` takes a list of them.
  *
  * Matching a payee as text is awkward, and neither field covers every case.
  * The engine fills `payee_name` in only when the transaction's payee is one
@@ -61,7 +59,8 @@ export function isTextOpOnIdField(field: string, op: string): boolean {
  * So the first charge from a shop, under whatever name the bank writes, is
  * exactly the one a text rule on the name misses. `imported_payee` holds the
  * text the row arrived with instead, which is the bank's wording on an
- * imported row and whatever was typed on one created here.
+ * imported row and whatever was typed on one created here, and measured both
+ * ways it does fire on that first charge.
  *
  * Both are named, and neither is offered as the one that always works,
  * because an earlier version of this said `payee_name` worked "whether the
@@ -72,18 +71,17 @@ function alternativeFor(field: string): string {
   switch (field) {
     case 'payee':
       return (
-        'To match the payee itself, use `is` with a payee name. For text, the two fields ' +
+        'To match the payee itself, use `is`, or `oneOf` with a list, and a payee name. For ' +
+        'text, the two fields ' +
         'are `imported_payee`, which holds the text the row arrived with, from your bank or ' +
         'from whoever created it here, and `payee_name`, which compares against the payee\'s ' +
-        'current name but only once that payee exists, so it misses the first charge under a ' +
-        'name you have not seen before.'
+        'current name but only once that payee exists, so `imported_payee` is the one that ' +
+        'catches the first charge under a name you have not seen before.'
       );
-    case 'category':
-      return 'Use `is` with a category name instead.';
     default:
-      // account and category_group: the name is stored as typed and the rule
-      // never fires, so the id is the only thing that works today.
-      return `Use \`is\` with the ${field} id instead. A name is not resolved for this field yet.`;
+      // Every one of these resolves a whole name to an id now (#170), so the
+      // name works in all four, and `oneOf` takes a list of them (#171).
+      return `Use \`is\`, or \`oneOf\` with a list, and a ${field.replace('_', ' ')} name.`;
   }
 }
 
@@ -115,4 +113,46 @@ export function warnTextOpOnIdField(field: string, op: string): string {
     `may be firing on transactions it has nothing to do with. Actual's own filters compare ` +
     `by name, so the rule may look right where you wrote it. ${alternativeFor(field)}`
   );
+}
+
+/**
+ * The fields the engine accepts a list on, for `oneOf` and `notOneOf`.
+ *
+ * Measured against the engine, one rule per field: the four id fields plus
+ * the two string fields that are not `notes`. Everything else answers with a
+ * bare "Failed creating a new rule", which tells the caller nothing about
+ * which part of their rule was wrong.
+ *
+ * `FIELD_INFO` agrees and says why: `notes` carries `disallowedOps` with
+ * `oneOf` and `notOneOf` in it, and the date, number and boolean types do not
+ * list those operators at all. The list is checked against the engine's own
+ * by the same test that checks the id fields.
+ */
+export const LIST_FIELDS = new Set([
+  'payee',
+  'category',
+  'category_group',
+  'account',
+  'payee_name',
+  'imported_payee',
+]);
+
+export function refuseListOnField(field: string, op: string): string {
+  return (
+    `A rule cannot use \`${op}\` on \`${field}\`. Actual takes a list only on ` +
+    `${[...LIST_FIELDS].join(', ')}. Use \`is\` or \`isNot\` for one value, or one of ` +
+    `those fields to match several.`
+  );
+}
+
+/**
+ * Whether a stored rule value is a name where the engine wanted an id.
+ *
+ * This is what a rule left behind by #167 and #170 looks like: the condition
+ * reads perfectly well, and the rule has never matched anything. Told apart
+ * from a deleted thing by the shape: an id that resolves to nothing was
+ * something once, a value that is not an id shape never was.
+ */
+export function looksLikeAnId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
 }
