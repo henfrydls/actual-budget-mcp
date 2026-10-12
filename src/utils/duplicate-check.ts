@@ -1,5 +1,5 @@
 import * as api from '@actual-app/api';
-import { transactionsQuery } from './transaction-query.js';
+import { transactionsQuery, dateBetween } from './transaction-query.js';
 import { formatMoney } from './money.js';
 import { syncNow } from './sync-clock.js';
 
@@ -114,20 +114,12 @@ export async function findPossibleDuplicates(
   }
 
   const within = options.withinDays ?? 0;
-  // A range as two conditions, not as one object with both keys. Measured on
-  // five consecutive days: `{ $gte, $lte }` together returns everything from
-  // the lower bound onwards, silently ignoring the upper one, so a window of
-  // one day either side matched anything from the day before to the end of
-  // the budget. Each key on its own works, and so does `$and`.
+  // `dateBetween` rather than a range written here. The obvious form drops
+  // one of its bounds without saying so, and the note beside the helper has
+  // the measurement; writing it twice is how the same mistake reached
+  // `reconcile_account` and went unnoticed for four releases (#179).
   const dateFilter =
-    within === 0
-      ? { date }
-      : {
-          $and: [
-            { date: { $gte: shiftDate(date, -within) } },
-            { date: { $lte: shiftDate(date, within) } },
-          ],
-        };
+    within === 0 ? { date } : dateBetween(shiftDate(date, -within), shiftDate(date, within));
 
   const result = await api.runQuery(
     transactionsQuery('all')
