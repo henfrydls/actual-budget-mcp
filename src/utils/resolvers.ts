@@ -90,32 +90,74 @@ export function resolvePayeeIn(
   payees: Array<{ id: string; name: string; transfer_acct?: string | null }>,
   nameOrId: string,
 ): string {
-  const byId = payees.find((p) => p.id === nameOrId);
+  // Transfer payees are left out of the name match by `transfer_acct`. They
+  // carry their account's name, so "Checking" would otherwise find the payee
+  // every transfer into that account uses. Asked for by id, any payee is
+  // found, which is why the id lookup happens inside `resolveByWholeName`
+  // against the unfiltered list.
+  return resolveByWholeName(payees, payees.filter((p) => !p.transfer_acct && p.name !== ''), nameOrId, 'payee');
+}
+
+/**
+ * The same matching, for anything a rule stores by id.
+ *
+ * Shared because the four of them have to answer alike: a rule is stored and
+ * keeps running, so a name matched loosely in one field and strictly in
+ * another is the kind of difference that is invisible until a rule does
+ * something nobody asked for.
+ *
+ * `all` is searched by id and `candidates` by name. They differ where some
+ * entries can be named but not matched, which is the transfer payees.
+ */
+/** "a" or "an", so a message built from a field name reads like English. */
+function article(label: string): string {
+  return /^[aeiou]/i.test(label) ? 'An' : 'A';
+}
+
+export function resolveByWholeName(
+  all: Array<{ id: string; name: string }>,
+  candidates: Array<{ id: string; name: string }>,
+  nameOrId: string,
+  label: string,
+): string {
+  const byId = all.find((item) => item.id === nameOrId);
   if (byId) return byId.id;
 
-  const candidates = payees.filter((p) => !p.transfer_acct && p.name !== '');
-  const wanted = nameOrId.toLowerCase();
-  const matches = candidates.filter((p) => p.name.toLowerCase() === wanted);
+  const wanted = nameOrId.trim().toLowerCase();
+  const matches = candidates.filter((item) => item.name.trim().toLowerCase() === wanted);
+
+  // An id that is not in the list is a different problem from a name that
+  // matched nothing, and the advice about whole names reads as nonsense next
+  // to a UUID. Measured for accounts: a closed one is returned by neither
+  // `getAccounts()` nor a query, so it cannot be reached at all, by name or by
+  // id.
+  if (matches.length === 0 && /^[0-9a-f-]{36}$/i.test(nameOrId.trim())) {
+    throw new Error(
+      `No ${label} with the id "${nameOrId}". It may have been deleted, or, for an account, ` +
+        `closed: a closed account is not returned by the API at all, so nothing here can ` +
+        `name it.`,
+    );
+  }
 
   if (matches.length === 0) {
-    // The payees that contain what was asked for, where there are any: those
-    // are what someone meant, and listing every payee in the budget instead
+    // The entries that contain what was asked for, where there are any: those
+    // are what someone meant, and listing everything in the budget instead
     // buries it.
-    const near = candidates.filter((p) => p.name.toLowerCase().includes(wanted));
+    const near = candidates.filter((item) => item.name.toLowerCase().includes(wanted));
     const detail =
       near.length > 0
-        ? ` Did you mean: ${near.map((p) => p.name).join(', ')}?`
-        : ` Available: ${candidates.map((p) => p.name).join(', ')}`;
+        ? ` Did you mean: ${near.map((item) => item.name).join(', ')}?`
+        : ` Available: ${candidates.map((item) => item.name).join(', ')}`;
     throw new Error(
-      `No payee found matching "${nameOrId}". A payee is matched by its whole name here, ` +
-        `not by part of one.${detail}`,
+      `No ${label} found matching "${nameOrId}". ${article(label)} ${label} is matched by ` +
+        `its whole name here, not by part of one.${detail}`,
     );
   }
   if (matches.length > 1) {
-    const names = matches.map((p) => `${p.name} (${p.id})`).join(', ');
+    const names = matches.map((item) => `${item.name} (${item.id})`).join(', ');
     throw new Error(
-      `Ambiguous payee name "${nameOrId}". More than one payee is called that: ${names}. ` +
-        `Give the id instead.`,
+      `Ambiguous ${label} name "${nameOrId}". More than one ${label} is called that: ` +
+        `${names}. Give the id instead.`,
     );
   }
   return matches[0].id;

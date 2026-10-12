@@ -364,10 +364,11 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
     );
   }, 60_000);
 
-  it('does not offer oneOf, which does not work through this tool yet', async () => {
-    // Sending `oneOf` from here fails outright: the engine wants an array and
-    // a single string goes out. Advice that cannot be followed is worse than
-    // no advice, because it costs a round trip to find out.
+  it('offers oneOf now that a list works through this tool', async () => {
+    // It used to be left out, because sending it from here failed outright:
+    // the engine wants an array and a single string went out. Advice that
+    // cannot be followed is worse than no advice, so it only goes back in once
+    // the tool sends a list (#171).
     for (const field of FIELDS) {
       const message = await createRuleFromInput({
         condition_field: field,
@@ -377,15 +378,15 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
         action_value: 'marked',
       }).catch((e: Error) => e.message);
 
-      expect(message, `${field} was told to use oneOf`).not.toMatch(/oneOf/);
+      expect(message, `${field} was not told about oneOf`).toMatch(/oneOf/);
     }
   }, 60_000);
 
-  it('points account and category_group at an id, since a name is not resolved there yet', async () => {
-    // Measured: `account is "Checking"` is stored as the name and never
-    // fires, while `account is <id>` does. Telling someone to use a name
-    // would hand them a rule that does nothing.
-    for (const field of ['account', 'category_group'] as const) {
+  it('points every id field at a name, now that all four resolve one', async () => {
+    // `account` and `category_group` used to be pointed at an id, because a
+    // name was stored as typed and the rule never fired. Both resolve a name
+    // now (#170), so the advice is the same for the four of them.
+    for (const field of FIELDS) {
       const message = await createRuleFromInput({
         condition_field: field,
         condition_op: 'contains',
@@ -394,7 +395,8 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
         action_value: 'marked',
       }).catch((e: Error) => e.message);
 
-      expect(message).toMatch(new RegExp(`Use \`is\` with the ${field} id`));
+      expect(message, `${field} was still pointed at an id`).not.toMatch(/with the \w+ id/);
+      expect(message).toMatch(/name/);
     }
   }, 60_000);
 
