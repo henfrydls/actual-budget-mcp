@@ -50,19 +50,33 @@ export function isTextOpOnIdField(field: string, op: string): boolean {
  * name is stored as typed and the rule never fires (#170). Those two get the
  * id instead, which is what the engine compares against.
  *
- * For matching the payee as text, the field is `payee_name`: the engine fills
- * it in while a transaction is being matched, and measured, a rule on it fires
- * on a row imported from a bank and on a row entered here. `imported_payee`
- * holds the raw text the bank sent, which is a narrower thing and not always
- * what someone means by the payee's name.
+ * Matching a payee as text is awkward, and neither field covers every case.
+ * The engine fills `payee_name` in only when the transaction's payee is one
+ * that already exists: a payee that does not exist yet is created **after**
+ * the rules run. Measured, with a rule `payee_name contains "Netfl"`:
+ *
+ *   a row whose payee "Netflix" already exists   fires
+ *   a row under a name not seen before           does not fire
+ *
+ * So the first charge from a shop, under whatever name the bank writes, is
+ * exactly the one a text rule on the name misses. `imported_payee` holds the
+ * text the row arrived with instead, which is the bank's wording on an
+ * imported row and whatever was typed on one created here.
+ *
+ * Both are named, and neither is offered as the one that always works,
+ * because an earlier version of this said `payee_name` worked "whether the
+ * transaction came from your bank or was entered here" and that is false in
+ * the case someone writing a rule cares most about.
  */
 function alternativeFor(field: string): string {
   switch (field) {
     case 'payee':
       return (
-        'Use `payee_name` with a text operator to match the name, or `is` with a payee name ' +
-        'to match the payee itself. `imported_payee` holds the raw text the bank sent, if ' +
-        'that is what you want to match.'
+        'To match the payee itself, use `is` with a payee name. For text, the two fields ' +
+        'are `imported_payee`, which holds the text the row arrived with, from your bank or ' +
+        'from whoever created it here, and `payee_name`, which compares against the payee\'s ' +
+        'current name but only once that payee exists, so it misses the first charge under a ' +
+        'name you have not seen before.'
       );
     case 'category':
       return 'Use `is` with a category name instead.';
@@ -98,7 +112,7 @@ export function refuseTextOpOnIdField(field: string, op: string): string {
 export function warnTextOpOnIdField(field: string, op: string): string {
   return (
     `\`${op}\` on \`${field}\` compares against the internal id, not the name, so this rule ` +
-    `may be firing on transactions it has nothing to do with. The Actual app's rule preview ` +
-    `compares names, so it looks correct there. ${alternativeFor(field)}`
+    `may be firing on transactions it has nothing to do with. Actual's own filters compare ` +
+    `by name, so the rule may look right where you wrote it. ${alternativeFor(field)}`
   );
 }

@@ -342,20 +342,26 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
     expect((await api.getRules()).length).toBe(before);
   }, 60_000);
 
-  it('points a payee at payee_name, which works on any transaction', async () => {
-    // Measured both ways: a rule on `payee_name` fires on a row imported from
-    // a bank and on a row entered here. `imported_payee` is the raw text the
-    // bank sent, which is a narrower thing, and the advice used to name only
-    // that.
-    await expect(
-      createRuleFromInput({
-        condition_field: 'payee',
-        condition_op: 'contains',
-        condition_value: 'Netfl',
-        action_field: 'notes',
-        action_value: 'marked',
-      }),
-    ).rejects.toThrow(/payee_name/);
+  it('names both text fields for a payee, and promises neither', async () => {
+    // An earlier version said `payee_name` worked whether the transaction came
+    // from a bank or was entered here. It does not: the engine fills that
+    // field in only when the payee already exists, so the first charge under
+    // a name nobody has seen is exactly the one it misses. Advice that is
+    // wrong in the case someone cares about is worse than no advice.
+    const message = await createRuleFromInput({
+      condition_field: 'payee',
+      condition_op: 'contains',
+      condition_value: 'Netfl',
+      action_field: 'notes',
+      action_value: 'marked',
+    }).catch((e: Error) => e.message);
+
+    expect(message).toMatch(/imported_payee/);
+    expect(message).toMatch(/payee_name/);
+    expect(message).toMatch(/only once that payee exists/);
+    expect(message, 'promised one of them works everywhere').not.toMatch(
+      /whether the transaction came from|works on any/,
+    );
   }, 60_000);
 
   it('does not offer oneOf, which does not work through this tool yet', async () => {
@@ -418,5 +424,59 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
     const stored = rules.find((r) => r.id === lines.find((l) => l.includes('ID:'))!.split('ID:')[1].trim());
     expect((stored as { conditions: Array<{ value: unknown }> }).conditions[0].value).toBe(fun);
     void acct;
+  }, 60_000);
+});
+
+/**
+ * Why a text rule on a payee name is not the whole answer (#169, round 3).
+ *
+ * The engine fills `payee_name` in from the transaction's payee, and a payee
+ * that does not exist yet is created after the rules have run. So the first
+ * charge from a shop, under whatever name the bank writes, is the one a text
+ * rule on the name misses, which is the case someone writing the rule cares
+ * most about.
+ */
+describe.skipIf(skip)('a text rule on a payee that does not exist yet', () => {
+  let acct = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+    await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      // One payee exists from the start, the other does not.
+      await api.createPayee({ name: 'Netflix' } as never);
+    }, 'rule-new-payee');
+
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'payee_name', op: 'contains', value: 'Netfl' }],
+      actions: [{ op: 'set', field: 'notes', value: 'FIRED' }],
+    } as never);
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  const importOne = async (date: string, payeeName: string) => {
+    await api.importTransactions(acct, [
+      { date, amount: -2500, payee_name: payeeName },
+    ] as never);
+    for (let i = 0; i < 4; i += 1) await api.getCategories();
+    const rows = (await api.getTransactions(acct, date, date)) as Array<Record<string, unknown>>;
+    return rows[0];
+  };
+
+  it('fires when the payee already exists', async () => {
+    const row = await importOne('2026-09-01', 'Netflix');
+    expect(row?.notes).toBe('FIRED');
+  }, 60_000);
+
+  it('does not fire on the first charge under a name nobody has seen', async () => {
+    // Which is why the refusal names this limit instead of selling the field
+    // as the answer.
+    const row = await importOne('2026-09-02', 'Netflix Intl');
+    expect(row?.notes ?? null).toBeNull();
   }, 60_000);
 });

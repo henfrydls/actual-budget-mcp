@@ -124,12 +124,13 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
     expect(text.match(/warning: /g)).toHaveLength(3);
   }, 60_000);
 
-  it('says the app shows these as correct, which is why nobody noticed', async () => {
-    // The rule editor's preview compares against the name, so a rule that can
-    // never fire looks right in the app. Without that, the warning reads as
-    // contradicting what the person can see.
+  it('says the rule may look right where it was written', async () => {
+    // Actual's own filters compare by name, so a rule that can never fire can
+    // still look correct. Hedged on purpose: what was checked is the engine's
+    // filter translation, not the editor's screen, and claiming the screen
+    // would be stating something nobody measured.
     const text = (await handlerFor()()).content[0].text;
-    expect(text).toMatch(/rule preview compares names/);
+    expect(text).toMatch(/filters compare by name, so the rule may look right/);
   }, 60_000);
 
   it('says nothing about a rule that is fine', async () => {

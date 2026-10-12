@@ -148,7 +148,8 @@ export function registerCreateRule(server: McpServer): void {
           'Operator: is, isNot, contains, doesNotContain, matches, gt, lt, gte, lte. ' +
             'contains, doesNotContain and matches are refused on payee, category, ' +
             'category_group and account, which Actual stores as ids: they would compare ' +
-            'against the id. Use payee_name to match a payee by text.',
+            'against the id. For text on a payee, imported_payee holds what the row arrived with, ' +
+            'and payee_name the payee name, once that payee exists.',
         ),
       condition_value: z
         .string()
