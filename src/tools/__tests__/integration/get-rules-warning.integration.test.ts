@@ -81,13 +81,55 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
       conditions: [{ field: 'account', op: 'matches', value: 'Check' }],
       actions: [{ op: 'set', field: 'notes', value: 'marked' }],
     } as never);
+    // The fourth id field, which the first version of this missed.
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'category_group', op: 'contains', value: 'Spend' }],
+      actions: [{ op: 'set', field: 'notes', value: 'marked' }],
+    } as never);
 
     const text = (await handlerFor()()).content[0].text;
 
-    // The one from the previous case plus these two.
-    expect(text).toMatch(/3 conditions above compare/);
+    // The one from the previous case plus these three.
+    expect(text).toMatch(/4 conditions above compare/);
     // And each is named where it is, not only in the total.
+    expect(text.match(/warning: /g)).toHaveLength(4);
+  }, 60_000);
+
+  it('counts every bad condition in one rule, not the rule once', async () => {
+    // A rule carries a list of conditions, and the count is about conditions.
+    // Counting rules instead reads as fewer problems than there are.
+    await createFreshBudget(async () => {
+      await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      const group = await api.createCategoryGroup({ name: 'Spending' } as never);
+      await api.createCategory({ name: 'Fun', group_id: group } as never);
+    }, 'get-rules-multi');
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [
+        { field: 'payee', op: 'contains', value: 'Netfl' },
+        { field: 'category', op: 'matches', value: 'Fun' },
+        { field: 'category_group', op: 'doesNotContain', value: 'Spend' },
+        { field: 'notes', op: 'contains', value: 'fine' },
+        { field: 'amount', op: 'gt', value: 100 },
+      ],
+      actions: [{ op: 'set', field: 'notes', value: 'marked' }],
+    } as never);
+
+    const text = (await handlerFor()()).content[0].text;
+
+    expect(text).toMatch(/3 conditions above compare/);
     expect(text.match(/warning: /g)).toHaveLength(3);
+  }, 60_000);
+
+  it('says the app shows these as correct, which is why nobody noticed', async () => {
+    // The rule editor's preview compares against the name, so a rule that can
+    // never fire looks right in the app. Without that, the warning reads as
+    // contradicting what the person can see.
+    const text = (await handlerFor()()).content[0].text;
+    expect(text).toMatch(/rule preview compares names/);
   }, 60_000);
 
   it('says nothing about a rule that is fine', async () => {

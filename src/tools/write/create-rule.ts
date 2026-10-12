@@ -136,14 +136,19 @@ export function registerCreateRule(server: McpServer): void {
     'create_rule',
     'Create a transaction rule. When a transaction matches the condition, the action is applied automatically.',
     {
-      condition_field: z.string().describe('Field to match: payee, category, amount, notes, imported_payee'),
+      condition_field: z
+        .string()
+        .describe(
+          'Field to match: payee, payee_name, category, category_group, account, amount, ' +
+            'notes, imported_payee',
+        ),
       condition_op: z
         .string()
         .describe(
-          'Operator: is, contains, oneOf, isNot, doesNotContain, matches, gt, lt, gte, lte. ' +
-            'contains, doesNotContain and matches are refused on payee, category and account, ' +
-            'which Actual stores as ids: they would compare against the id. Use imported_payee ' +
-            'for text matching.',
+          'Operator: is, isNot, contains, doesNotContain, matches, gt, lt, gte, lte. ' +
+            'contains, doesNotContain and matches are refused on payee, category, ' +
+            'category_group and account, which Actual stores as ids: they would compare ' +
+            'against the id. Use payee_name to match a payee by text.',
         ),
       condition_value: z
         .string()

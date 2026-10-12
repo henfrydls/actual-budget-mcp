@@ -293,13 +293,14 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
       const group = await api.createCategoryGroup({ name: 'Spending' } as never);
       fun = await api.createCategory({ name: 'Fun', group_id: group } as never);
     }, 'rule-text-ops');
+    void fun;
   }, 60_000);
 
   afterAll(async () => {
     await shutdownTestEngine();
   });
 
-  const FIELDS = ['payee', 'category', 'account'] as const;
+  const FIELDS = ['payee', 'category', 'category_group', 'account'] as const;
   const OPS = ['contains', 'doesNotContain', 'matches'] as const;
 
   for (const field of FIELDS) {
@@ -321,6 +322,75 @@ describe.skipIf(skip)('a text operator on a field stored by id', () => {
       }, 60_000);
     }
   }
+
+  it('is the field the engine itself calls an id, not a list someone typed', async () => {
+    // `category_group` was missing from the first version of this, because the
+    // issue named three fields and nobody checked the fourth. Measured: a
+    // rule `category_group doesNotContain "Spending"` fires on a transaction
+    // in Spending, which is the same damage as the others.
+    const before = (await api.getRules()).length;
+
+    await expect(
+      createRuleFromInput({
+        condition_field: 'category_group',
+        condition_op: 'doesNotContain',
+        condition_value: 'Spending',
+        action_field: 'notes',
+        action_value: 'marked',
+      }),
+    ).rejects.toThrow(/cannot use `doesNotContain` on `category_group`/);
+    expect((await api.getRules()).length).toBe(before);
+  }, 60_000);
+
+  it('points a payee at payee_name, which works on any transaction', async () => {
+    // Measured both ways: a rule on `payee_name` fires on a row imported from
+    // a bank and on a row entered here. `imported_payee` is the raw text the
+    // bank sent, which is a narrower thing, and the advice used to name only
+    // that.
+    await expect(
+      createRuleFromInput({
+        condition_field: 'payee',
+        condition_op: 'contains',
+        condition_value: 'Netfl',
+        action_field: 'notes',
+        action_value: 'marked',
+      }),
+    ).rejects.toThrow(/payee_name/);
+  }, 60_000);
+
+  it('does not offer oneOf, which does not work through this tool yet', async () => {
+    // Sending `oneOf` from here fails outright: the engine wants an array and
+    // a single string goes out. Advice that cannot be followed is worse than
+    // no advice, because it costs a round trip to find out.
+    for (const field of FIELDS) {
+      const message = await createRuleFromInput({
+        condition_field: field,
+        condition_op: 'contains',
+        condition_value: 'whatever',
+        action_field: 'notes',
+        action_value: 'marked',
+      }).catch((e: Error) => e.message);
+
+      expect(message, `${field} was told to use oneOf`).not.toMatch(/oneOf/);
+    }
+  }, 60_000);
+
+  it('points account and category_group at an id, since a name is not resolved there yet', async () => {
+    // Measured: `account is "Checking"` is stored as the name and never
+    // fires, while `account is <id>` does. Telling someone to use a name
+    // would hand them a rule that does nothing.
+    for (const field of ['account', 'category_group'] as const) {
+      const message = await createRuleFromInput({
+        condition_field: field,
+        condition_op: 'contains',
+        condition_value: 'whatever',
+        action_field: 'notes',
+        action_value: 'marked',
+      }).catch((e: Error) => e.message);
+
+      expect(message).toMatch(new RegExp(`Use \`is\` with the ${field} id`));
+    }
+  }, 60_000);
 
   it('still allows a text operator on imported_payee, which holds text', async () => {
     // The field someone reaching for `payee contains` usually wants.

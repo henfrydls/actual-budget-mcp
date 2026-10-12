@@ -835,7 +835,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **delete_payee** - `payee` (required): name or ID | `confirm` + `confirm_name` (required to delete)
 
-**create_rule** - `condition_field` (required): payee, category, amount, notes, imported_payee | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required): for payee or category, a name or ID | `action_field` (required): category, payee, notes | `action_value` (required): for payee or category, a name or ID that already exists | `stage` (optional). `contains`, `doesNotContain` and `matches` are refused on payee, category and account: Actual stores those as ids, so the comparison runs against the id and the rule fires on the wrong transactions. Use `imported_payee` to match the text your bank sent, or `is` with a name. `get_rules` marks any rule already saved that way.
+**create_rule** - `condition_field` (required): payee, payee_name, category, category_group, account, amount, notes, imported_payee | `condition_op` (required): is, isNot, contains, gt, lt, etc. | `condition_value` (required): for payee or category, a name or ID | `action_field` (required): category, payee, notes | `action_value` (required): for payee or category, a name or ID that already exists | `stage` (optional). `contains`, `doesNotContain` and `matches` are refused on payee, category, category_group and account: Actual stores those as ids, so the comparison runs against the id and the rule fires on the wrong transactions. Use `payee_name` to match a payee by text, which works whether the transaction came from your bank or was entered here. `get_rules` marks any rule already saved the other way.
 
 **delete_rule** - `rule_id` (required) | `confirm` (required to delete)
 
