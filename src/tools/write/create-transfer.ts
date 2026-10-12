@@ -12,6 +12,8 @@ import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import {
   findPossibleDuplicates,
   describePossibleDuplicates,
+  findUnlinkedCounterpart,
+  describeCounterpartClash,
 } from '../../utils/duplicate-check.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
@@ -85,6 +87,26 @@ export function registerCreateTransfer(server: McpServer): void {
         // the other. The id is also what survives a rename: the payee follows
         // its account either way, so nothing is lost by not reading the name.
         if (!allow_duplicate) {
+          // The other account first, which nothing here looked at (#161).
+          // Measured: with the payment already imported into the destination
+          // as an ordinary row, this wrote its own leg on top and the account
+          // showed the money arriving twice, on the same day and a day apart
+          // alike. The batch learned to check this; the single transfer did
+          // not, so the same import still duplicated through this door.
+          const counterpart = await findUnlinkedCounterpart(toId, txnDate, -amountCents);
+          if (counterpart.length > 0) {
+            const toName =
+              (await api.getAccounts()).find((a) => a.id === toId)?.name ?? to_account;
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: describeCounterpartClash(counterpart, toName, txnDate).join('\n'),
+                },
+              ],
+            };
+          }
+
           const existing = await findPossibleDuplicates(fromId, txnDate, -amountCents);
           const sameTransfer = existing.filter(
             (t) => t.isTransfer && t.payeeId === transferPayee.id,

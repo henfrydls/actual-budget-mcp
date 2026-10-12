@@ -231,6 +231,15 @@ function shiftDate(date: string, days: number): string {
 export function describeCounterpartClash(
   existing: ExistingTransaction[],
   targetAccountName: string,
+  /**
+   * The date of the row that was about to be written.
+   *
+   * Needed because the two sides can be a day apart, and the sentence used to
+   * say "on the same day" regardless: a row from the 25th was described as
+   * being on the same day as a transfer dated the 26th, which reads as though
+   * the tool had found something that is not there.
+   */
+  newRowDate?: string,
 ): string[] {
   const lines = [
     existing.length === 1
@@ -248,12 +257,21 @@ export function describeCounterpartClash(
     lines.push(`    id: ${t.id}`);
   }
 
+  // From the dates themselves. Same day, a day either side, or a mix of the
+  // two when more than one row matched.
+  const dates = [...new Set(existing.map((t) => t.date))];
+  const when =
+    newRowDate === undefined
+      ? 'for the same amount'
+      : dates.every((d) => d === newRowDate)
+        ? `for the same amount on the same day, ${newRowDate}`
+        : `for the same amount, dated ${dates.join(' and ')} against this row's ${newRowDate}`;
+
   lines.push(
     '',
-    `A transfer would create a second row in ${targetAccountName} for the same amount on the`,
-    'same day. If the row above is this same payment, already imported from the bank, you do',
-    'not need the transfer. If it is a different movement that happens to match, call again',
-    'with allow_duplicate: true.',
+    `A transfer would create a second row in ${targetAccountName} ${when}. If the row above`,
+    'is this same payment, already imported from the bank, you do not need the transfer. If',
+    'it is a different movement that happens to match, call again with allow_duplicate: true.',
   );
   return lines;
 }

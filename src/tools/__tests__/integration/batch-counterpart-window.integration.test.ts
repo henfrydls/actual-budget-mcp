@@ -263,4 +263,268 @@ describe.skipIf(skip)('a payment that arrives from both sides', () => {
     for (let i = 0; i < 6; i += 1) await api.getCategories();
     expect(await count(bank), 'the way out did not work').toBe(beforeBank + 2);
   }, 60_000);
+
+  describe('across a daylight saving change', () => {
+    // The window was counted in hours, and the day a clock goes back is 25 of
+    // them, so two consecutive dates stopped being within one day and the
+    // pair was written twice. Measured with TZ=America/New_York on 1 and 2
+    // November: "Created 2 transactions" and the card holding the money
+    // twice, while the same batch in a zone without daylight saving refused
+    // it.
+    const realTZ = process.env.TZ;
+
+    afterAll(() => {
+      if (realTZ === undefined) delete process.env.TZ;
+      else process.env.TZ = realTZ;
+    });
+
+    for (const [zone, label] of [
+      ['America/New_York', 'a zone that changes its clocks'],
+      ['America/Santo_Domingo', 'a zone that does not'],
+      ['UTC', 'UTC'],
+    ] as const) {
+      it(`refuses the pair in ${label}`, async () => {
+        process.env.TZ = zone;
+        await budget(`batch-dst-${zone.replace(/\W+/g, '-')}`);
+        const beforeCard = await count(card);
+
+        const lines = await createTransactions({
+          transactions: [
+            { account: 'Bank', amount: -800, payee: 'Card', date: '2026-11-01' },
+            { account: 'Card', amount: 800, payee: 'PAYMENT RECEIVED', date: '2026-11-02' },
+          ],
+        });
+        for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+        expect(await count(card), `written in ${zone}`).toBe(beforeCard);
+        expect(lines.join('\n')).toContain('is the other side of the transfer');
+      }, 60_000);
+    }
+
+    it('still lets two days apart through on a clock-change day', async () => {
+      process.env.TZ = 'America/New_York';
+      await budget('batch-dst-two-days');
+      const beforeCard = await count(card);
+
+      await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-11-01' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT RECEIVED', date: '2026-11-03' },
+        ],
+      });
+      for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+      // The transfer's own leg plus the ordinary row.
+      expect(await count(card)).toBe(beforeCard + 2);
+    }, 60_000);
+  });
+
+  describe('one transfer accounts for one row', () => {
+    it('does not refuse two credits for one transfer', async () => {
+      // A transfer writes one counterpart, so it can only explain one row.
+      // Matching each ordinary row against the first transfer that fits
+      // rejected a refund that had nothing to do with the payment.
+      await budget('batch-one-to-one');
+      const beforeCard = await count(card);
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT RECEIVED', date: '2026-09-24' },
+          { account: 'Card', amount: 800, payee: 'Refund shop', date: '2026-09-26' },
+        ],
+      });
+      const text = lines.join('\n');
+
+      // Nothing is written, since the batch is all or nothing, but only one
+      // row is named as the other side.
+      expect(await count(card)).toBe(beforeCard);
+      expect(text.match(/is the other side of the transfer/g)).toHaveLength(1);
+      expect(text).toContain('row 2  Card');
+      expect(text, 'the refund was refused as well').not.toContain('row 3  Card');
+    }, 60_000);
+
+    it('pairs by date even when that is not the order they were sent in', async () => {
+      // The transfers arrive in the opposite order to their twins. Taking the
+      // first transfer that fits pairs row 3 with row 1, two days from its
+      // own date, while the row dated the same day sits in row 2.
+      await budget('batch-one-to-one-crossed');
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-26' },
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT TWO', date: '2026-09-26' },
+        ],
+      });
+      const rows = lines.join('\n').split('\n');
+
+      const third = rows.findIndex((l) => l.includes('row 3  Card'));
+      const fourth = rows.findIndex((l) => l.includes('row 4  Card'));
+      // Row 3 is dated the 25th, which is row 2's date.
+      expect(rows[third + 1]).toContain('transfer in row 2');
+      expect(rows[fourth + 1]).toContain('transfer in row 1');
+    }, 60_000);
+
+    it('does not spend a transfer on a row that has another one', async () => {
+      // Row 3 fits both transfers; row 5 fits only the second. Letting one
+      // row be paired twice consumes that second transfer and leaves row 5
+      // unreported, which is the money going in twice with nothing said.
+      await budget('batch-one-to-one-greedy');
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-26' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-25' },
+          { account: 'Card', amount: -45.5, payee: 'Supermarket', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT TWO', date: '2026-09-27' },
+        ],
+      });
+      const text = lines.join('\n');
+
+      expect(text.match(/is the other side of the transfer/g)).toHaveLength(2);
+      expect(text).toContain('row 3  Card');
+      expect(text).toContain('row 5  Card');
+    }, 60_000);
+
+    it('pairs each transfer with the row on its own date', async () => {
+      // Two of each, one pair on the 25th and one on the 26th. Taking the
+      // first transfer that fits crossed them, so a row was told it repeated
+      // a transfer two days away while its own twin sat on the same date.
+      await budget('batch-one-to-one-pairs');
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-26' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT TWO', date: '2026-09-26' },
+        ],
+      });
+      const text = lines.join('\n');
+
+      // Row 3 is dated the 25th, so it belongs to row 1; row 4 to row 2.
+      const third = text.split('\n').findIndex((l) => l.includes('row 3  Card'));
+      const fourth = text.split('\n').findIndex((l) => l.includes('row 4  Card'));
+      expect(third).toBeGreaterThan(-1);
+      expect(fourth).toBeGreaterThan(-1);
+      expect(text.split('\n')[third + 1]).toContain('transfer in row 1');
+      expect(text.split('\n')[fourth + 1]).toContain('transfer in row 2');
+    }, 60_000);
+  });
+
+  describe('through create_transfer', () => {
+    // The batch learned this in 0.10.4 and the single transfer did not, so a
+    // monthly import still duplicated through that door. Measured before
+    // fixing it: with the payment already imported into the destination, the
+    // transfer wrote its own leg on top, on the same day and a day apart
+    // alike.
+    type Handler = (a: Record<string, unknown>) => Promise<{
+      content: Array<{ type: string; text: string }>;
+    }>;
+
+    const transferHandler = async (): Promise<Handler> => {
+      const { registerCreateTransfer } = await import('../../write/create-transfer.js');
+      let handler: Handler | undefined;
+      registerCreateTransfer({
+        tool: (...a: unknown[]) => {
+          handler = a.at(-1) as Handler;
+        },
+      } as never);
+      return handler as Handler;
+    };
+
+    const CASES = [
+      { label: 'the same day', imported: '2026-09-25', transfer: '2026-09-25', refused: true },
+      { label: 'a day apart', imported: '2026-09-26', transfer: '2026-09-25', refused: true },
+      { label: 'two days apart', imported: '2026-09-27', transfer: '2026-09-25', refused: false },
+    ] as const;
+
+    for (const c of CASES) {
+      it(`${c.label}: ${c.refused ? 'refused' : 'written'}`, async () => {
+        await budget(`transfer-${c.label.replace(/\W+/g, '-')}`, async () => {
+          const accounts = await api.getAccounts();
+          await api.addTransactions(
+            accounts.find((a) => a.name === 'Card')!.id,
+            [{ date: c.imported, amount: 80000, payee_name: 'PAYMENT RECEIVED' }] as never,
+            { learnCategories: false, runTransfers: false },
+          );
+        });
+        const beforeCard = await count(card);
+
+        const result = await (await transferHandler())({
+          from_account: 'Bank',
+          to_account: 'Card',
+          amount: 800,
+          date: c.transfer,
+        });
+        for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+        if (c.refused) {
+          expect(await count(card), 'the money arrived twice').toBe(beforeCard);
+          const text = result.content[0].text;
+          expect(text).toContain('already has the other side of this movement');
+          // The dates, from the dates: "the same day" when they are, and both
+          // of them when they are not.
+          if (c.imported === c.transfer) {
+            expect(text).toContain(`on the same day, ${c.transfer}`);
+          } else {
+            expect(text).toContain(c.imported);
+            expect(text).toContain(c.transfer);
+            expect(text, 'called two different days the same day').not.toContain('the same day');
+          }
+        } else {
+          expect(await count(card)).toBe(beforeCard + 1);
+        }
+      }, 60_000);
+    }
+
+    it('writes it when the caller says it is a different movement', async () => {
+      await budget('transfer-allowed', async () => {
+        const accounts = await api.getAccounts();
+        await api.addTransactions(
+          accounts.find((a) => a.name === 'Card')!.id,
+          [{ date: '2026-09-25', amount: 80000, payee_name: 'PAYMENT RECEIVED' }] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+      const beforeCard = await count(card);
+
+      await (await transferHandler())({
+        from_account: 'Bank',
+        to_account: 'Card',
+        amount: 800,
+        date: '2026-09-25',
+        allow_duplicate: true,
+      });
+      for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+      expect(await count(card)).toBe(beforeCard + 1);
+    }, 60_000);
+
+    it('is not stopped by a counterpart that is already linked', async () => {
+      // The far leg of an earlier transfer is not a loose import, so a second
+      // transfer between the same accounts is judged by the existing
+      // duplicate check and not by this one.
+      await budget('transfer-linked');
+      const handler = await transferHandler();
+
+      await handler({ from_account: 'Bank', to_account: 'Card', amount: 800, date: '2026-09-25' });
+      for (let i = 0; i < 6; i += 1) await api.getCategories();
+      const afterFirst = await count(card);
+
+      const second = await handler({
+        from_account: 'Bank',
+        to_account: 'Card',
+        amount: 800,
+        date: '2026-09-26',
+      });
+      for (let i = 0; i < 6; i += 1) await api.getCategories();
+
+      expect(await count(card), 'a second transfer a day later was refused').toBe(afterFirst + 1);
+      expect(second.content[0].text).toContain('Transfer created');
+    }, 60_000);
+  });
 });

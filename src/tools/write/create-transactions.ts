@@ -143,12 +143,26 @@ interface Problem {
   reason: string;
 }
 
-/** Whether two `YYYY-MM-DD` dates are at most `days` apart. */
+/**
+ * Whether two `YYYY-MM-DD` dates are at most `days` apart, counted in days.
+ *
+ * In days and not in hours. The first version parsed both as local midnight
+ * and compared milliseconds against 24 hours, which is wrong on the day a
+ * clock goes back: that day is 25 hours long, so two consecutive dates are
+ * more than 24 hours apart and the pair stopped being recognised. Measured
+ * with TZ=America/New_York on 1 and 2 November: the batch wrote both rows and
+ * the card ended up with the money twice, while the same batch in a zone
+ * without daylight saving refused it.
+ *
+ * `Date.UTC` has no offsets to change, so the subtraction is exact everywhere.
+ */
+function dayNumber(date: string): number {
+  const [year, month, day] = date.split('-').map(Number);
+  return Date.UTC(year, month - 1, day) / 86_400_000;
+}
+
 function withinDays(a: string, b: string, days: number): boolean {
-  const day = 24 * 60 * 60 * 1000;
-  const from = new Date(`${a}T00:00:00`).getTime();
-  const to = new Date(`${b}T00:00:00`).getTime();
-  return Math.abs(from - to) <= days * day;
+  return Math.abs(dayNumber(a) - dayNumber(b)) <= days;
 }
 
 function describeRow(row: BatchInput, index: number): string {
@@ -418,22 +432,46 @@ export async function createTransactions(input: {
       // records both sides, so it is the row that can go.
       const transfers = resolved.filter((r) => r.transfer);
       if (transfers.length > 0) {
+        // One to one, nearest date first.
+        //
+        // Matching each ordinary row against the first transfer that fits
+        // refuses more than it should: one transfer rejected two separate
+        // credits of the same amount, and with two of each the pairs came out
+        // crossed, so a row was told it repeated a transfer two days away
+        // while its own twin sat on the same date. A transfer writes one
+        // counterpart, so it can only account for one row.
+        const pairs: Array<{ transfer: ResolvedRow; ordinary: ResolvedRow; apart: number }> = [];
         for (const ordinary of resolved) {
           if (ordinary.transfer) continue;
-          const twin = transfers.find(
-            (t) =>
-              t.transfer!.targetId === ordinary.accountId &&
-              t.amountCents === -ordinary.amountCents &&
-              withinDays(t.date, ordinary.date, COUNTERPART_WINDOW_DAYS),
-          );
-          if (!twin) continue;
+          for (const t of transfers) {
+            if (t.transfer!.targetId !== ordinary.accountId) continue;
+            if (t.amountCents !== -ordinary.amountCents) continue;
+            const apart = Math.abs(dayNumber(t.date) - dayNumber(ordinary.date));
+            if (apart > COUNTERPART_WINDOW_DAYS) continue;
+            pairs.push({ transfer: t, ordinary, apart });
+          }
+        }
+        // Same date first, then nearest, then in the order they were sent, so
+        // two equally close candidates resolve the same way every time.
+        pairs.sort(
+          (x, y) => x.apart - y.apart || x.transfer.index - y.transfer.index || x.ordinary.index - y.ordinary.index,
+        );
+
+        const takenTransfer = new Set<number>();
+        const takenOrdinary = new Set<number>();
+        for (const pair of pairs) {
+          if (takenTransfer.has(pair.transfer.index)) continue;
+          if (takenOrdinary.has(pair.ordinary.index)) continue;
+          takenTransfer.add(pair.transfer.index);
+          takenOrdinary.add(pair.ordinary.index);
           complain(
-            ordinary.index,
-            `is the other side of the transfer in row ${twin.index + 1}: that row moves ` +
-              `${formatMoney(Math.abs(twin.amountCents))} on ${twin.date} and writes the ` +
-              `matching row in ${ordinary.accountName} itself, and this one records the same ` +
-              `money on ${ordinary.date}. Keeping both puts it in twice. Drop this row, or ` +
-              `pass allow_duplicate if they really are two movements.`,
+            pair.ordinary.index,
+            `is the other side of the transfer in row ${pair.transfer.index + 1}: that row ` +
+              `moves ${formatMoney(Math.abs(pair.transfer.amountCents))} on ` +
+              `${pair.transfer.date} and writes the matching row in ` +
+              `${pair.ordinary.accountName} itself, and this one records the same money on ` +
+              `${pair.ordinary.date}. Keeping both puts it in twice. Drop this row, or pass ` +
+              `allow_duplicate if they really are two movements.`,
           );
         }
       }
