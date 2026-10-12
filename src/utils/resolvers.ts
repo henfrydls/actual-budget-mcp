@@ -65,6 +65,62 @@ export function resolveCategoryIn(
   return cats[0].id;
 }
 
+/**
+ * A payee by id or by its whole name, against a list already in hand.
+ *
+ * By the **whole** name, where `resolveAccountId` and `resolveCategoryId` fall
+ * back to part of one. The difference is what the answer is used for: those
+ * resolve something for one call, and this one is stored. A rule keeps running
+ * until somebody deletes it, so "Uber" saved as "Uber Eats" because that was
+ * the only payee containing it goes on recategorising transactions for months,
+ * and the reply that said the rule was created named "Uber".
+ *
+ * Case is ignored, because that is a way of writing the same name rather than
+ * a different one.
+ *
+ * Transfer payees are left out of the name match by `transfer_acct`. They carry
+ * their account's name, so "Checking" would otherwise find the payee every
+ * transfer into that account uses. Asked for by id, any payee is found.
+ *
+ * Two payees can share a name: measured, `createPayee` accepts a second
+ * "Amazon" and both come back. That is ambiguous and is refused, since picking
+ * either would be picking at random.
+ */
+export function resolvePayeeIn(
+  payees: Array<{ id: string; name: string; transfer_acct?: string | null }>,
+  nameOrId: string,
+): string {
+  const byId = payees.find((p) => p.id === nameOrId);
+  if (byId) return byId.id;
+
+  const candidates = payees.filter((p) => !p.transfer_acct && p.name !== '');
+  const wanted = nameOrId.toLowerCase();
+  const matches = candidates.filter((p) => p.name.toLowerCase() === wanted);
+
+  if (matches.length === 0) {
+    // The payees that contain what was asked for, where there are any: those
+    // are what someone meant, and listing every payee in the budget instead
+    // buries it.
+    const near = candidates.filter((p) => p.name.toLowerCase().includes(wanted));
+    const detail =
+      near.length > 0
+        ? ` Did you mean: ${near.map((p) => p.name).join(', ')}?`
+        : ` Available: ${candidates.map((p) => p.name).join(', ')}`;
+    throw new Error(
+      `No payee found matching "${nameOrId}". A payee is matched by its whole name here, ` +
+        `not by part of one.${detail}`,
+    );
+  }
+  if (matches.length > 1) {
+    const names = matches.map((p) => `${p.name} (${p.id})`).join(', ');
+    throw new Error(
+      `Ambiguous payee name "${nameOrId}". More than one payee is called that: ${names}. ` +
+        `Give the id instead.`,
+    );
+  }
+  return matches[0].id;
+}
+
 export async function resolveAccountId(nameOrId: string): Promise<string> {
   await ensureConnection();
   const accounts = await api.getAccounts();
