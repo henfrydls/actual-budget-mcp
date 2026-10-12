@@ -43,11 +43,11 @@ describe.skipIf(skip)('update_account', () => {
   async function budget(name: string) {
     await createFreshBudget(async () => {
       onBudget = await api.createAccount(
-        { name: 'BHD Nomina', offbudget: false } as never,
+        { name: 'Main Checking', offbudget: false } as never,
         50000,
       );
       offBudget = await api.createAccount(
-        { name: 'Inversion', offbudget: true } as never,
+        { name: 'Investments', offbudget: true } as never,
         900000,
       );
       await api.addTransactions(onBudget, [
@@ -81,15 +81,15 @@ describe.skipIf(skip)('update_account', () => {
     const before = await stateOf(onBudget);
     expect(before.transactions).toBe(3);
 
-    const result = await handlerFor()({ account: 'BHD Nomina', name: 'BHD Nomina DOP' });
+    const result = await handlerFor()({ account: 'Main Checking', name: 'Main Checking DOP' });
 
     expect(result.isError).toBeFalsy();
     const after = await stateOf(onBudget);
 
-    expect(after.name).toBe('BHD Nomina DOP');
+    expect(after.name).toBe('Main Checking DOP');
     expect(after.balance).toBe(before.balance);
     expect(after.transactions).toBe(before.transactions);
-    expect(result.content[0].text).toContain('Renamed "BHD Nomina" to "BHD Nomina DOP"');
+    expect(result.content[0].text).toContain('Renamed "Main Checking" to "Main Checking DOP"');
   }, 60_000);
 
   it('leaves the budget status alone, on and off budget', async () => {
@@ -98,8 +98,8 @@ describe.skipIf(skip)('update_account', () => {
     await budget('acct-status');
     const handler = handlerFor();
 
-    await handler({ account: 'BHD Nomina', name: 'Nomina' });
-    await handler({ account: 'Inversion', name: 'Inversion ASOTRAPUSA' });
+    await handler({ account: 'Main Checking', name: 'Payroll' });
+    await handler({ account: 'Investments', name: 'Investments Fund' });
 
     const on = await stateOf(onBudget);
     const off = await stateOf(offBudget);
@@ -114,11 +114,11 @@ describe.skipIf(skip)('update_account', () => {
   it('says nothing changed when the name is already that', async () => {
     await budget('acct-noop');
 
-    const result = await handlerFor()({ account: 'BHD Nomina', name: 'BHD Nomina' });
+    const result = await handlerFor()({ account: 'Main Checking', name: 'Main Checking' });
 
     expect(result.isError).toBeFalsy();
     expect(result.content[0].text).toContain('already called that');
-    expect((await stateOf(onBudget)).name).toBe('BHD Nomina');
+    expect((await stateOf(onBudget)).name).toBe('Main Checking');
   }, 60_000);
 
   it('refuses an empty name instead of leaving the account unnamed', async () => {
@@ -126,63 +126,63 @@ describe.skipIf(skip)('update_account', () => {
     await budget('acct-empty');
 
     for (const name of ['', '   ']) {
-      const result = await handlerFor()({ account: 'BHD Nomina', name });
+      const result = await handlerFor()({ account: 'Main Checking', name });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('empty name');
-      expect((await stateOf(onBudget)).name).toBe('BHD Nomina');
+      expect((await stateOf(onBudget)).name).toBe('Main Checking');
     }
   }, 60_000);
 
   it('refuses a name another account already has', async () => {
     // Actual allows two accounts to share a name, and then neither can be
-    // resolved by it. Measured: a second account called "Ahorro" was created
+    // resolved by it. Measured: a second account called "Savings" was created
     // without complaint.
     await budget('acct-clash');
 
-    const result = await handlerFor()({ account: 'BHD Nomina', name: 'Inversion' });
+    const result = await handlerFor()({ account: 'Main Checking', name: 'Investments' });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('already called "Inversion"');
-    expect((await stateOf(onBudget)).name).toBe('BHD Nomina');
-    expect((await stateOf(offBudget)).name).toBe('Inversion');
+    expect(result.content[0].text).toContain('already called "Investments"');
+    expect((await stateOf(onBudget)).name).toBe('Main Checking');
+    expect((await stateOf(offBudget)).name).toBe('Investments');
   }, 60_000);
 
   it('refuses a clashing name in a different case too', async () => {
     // `matchByName` lowercases both sides, in the exact branch and the
-    // substring one, so "INVERSION" and "Inversion" are the same account to
+    // substring one, so "INVESTMENTS" and "Investments" are the same account to
     // anything resolving by name. Letting them coexist produces exactly the
     // ambiguity the clash guard exists to prevent, so a case-sensitive
     // comparison here would be a hole rather than a stricter rule.
     await budget('acct-clash-case');
 
-    const result = await handlerFor()({ account: 'BHD Nomina', name: 'INVERSION' });
+    const result = await handlerFor()({ account: 'Main Checking', name: 'INVESTMENTS' });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain('already called "Inversion"');
-    expect((await stateOf(onBudget)).name).toBe('BHD Nomina');
+    expect(result.content[0].text).toContain('already called "Investments"');
+    expect((await stateOf(onBudget)).name).toBe('Main Checking');
   }, 60_000);
 
   it('refuses an ambiguous account instead of picking one', async () => {
     await createFreshBudget(async () => {
-      await api.createAccount({ name: 'BHD Nomina', offbudget: false } as never, 0);
-      await api.createAccount({ name: 'BHD Nomina USD', offbudget: false } as never, 0);
+      await api.createAccount({ name: 'Main Checking', offbudget: false } as never, 0);
+      await api.createAccount({ name: 'Main Checking USD', offbudget: false } as never, 0);
     }, 'acct-ambiguous');
 
-    const result = await handlerFor()({ account: 'BHD', name: 'Otra cosa' });
+    const result = await handlerFor()({ account: 'Main', name: 'Something Else' });
 
     expect(result.isError).toBe(true);
     const text = result.content[0].text;
     expect(text.toLowerCase()).toContain('ambiguous');
     // And neither was renamed.
     const names = (await api.getAccounts()).map((a) => a.name).sort();
-    expect(names).toEqual(['BHD Nomina', 'BHD Nomina USD']);
+    expect(names).toEqual(['Main Checking', 'Main Checking USD']);
   }, 60_000);
 
   it('trims the name it is given', async () => {
     await budget('acct-trim');
 
-    await handlerFor()({ account: 'BHD Nomina', name: '  Nomina Principal  ' });
+    await handlerFor()({ account: 'Main Checking', name: '  Everyday Account  ' });
 
-    expect((await stateOf(onBudget)).name).toBe('Nomina Principal');
+    expect((await stateOf(onBudget)).name).toBe('Everyday Account');
   }, 60_000);
 });

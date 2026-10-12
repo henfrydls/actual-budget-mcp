@@ -53,7 +53,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
   beforeAll(async () => {
     await initTestEngine();
     await createFreshBudget(async () => {
-      onBudget = await api.createAccount({ name: 'BanReservas', offbudget: false } as never, 0);
+      onBudget = await api.createAccount({ name: 'Savings', offbudget: false } as never, 0);
       offBudget = await api.createAccount({ name: 'Prestamo', offbudget: true } as never, 0);
       const g = await api.createCategoryGroup({ name: 'Gastos' } as never);
       comida = await api.createCategory({ name: 'Comida', group_id: g } as never);

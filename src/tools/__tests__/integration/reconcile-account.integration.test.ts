@@ -55,8 +55,8 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     let main = '';
     let other = '';
     await createFreshBudget(async () => {
-      main = await api.createAccount({ name: 'BHD Nomina', type: 'checking' } as never, 0);
-      other = await api.createAccount({ name: 'APAP', type: 'checking' } as never, 0);
+      main = await api.createAccount({ name: 'Main Checking', type: 'checking' } as never, 0);
+      other = await api.createAccount({ name: 'Store Card', type: 'checking' } as never, 0);
       if (rows.length) await api.addTransactions(main, rows as never);
       if (otherRows.length) await api.addTransactions(other, otherRows as never);
     }, name);
@@ -76,7 +76,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
   it('says so when the two figures agree', async () => {
     await budgetWithRows('rec-agree', ordinary);
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: ordinaryTotal / 100,
       as_of: '2026-09-25',
     });
@@ -100,7 +100,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
 
     // The bank never saw the second one, so it is higher by that amount.
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (total + 317840) / 100,
       as_of: '2026-09-25',
     });
@@ -117,7 +117,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     await budgetWithRows('rec-weak-round', ordinary);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal - 4500000) / 100,
       as_of: '2026-09-25',
     });
@@ -137,7 +137,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     await budgetWithRows('rec-weak-odd', ordinary);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal + 9925) / 100,
       as_of: '2026-09-25',
     });
@@ -155,7 +155,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     await budgetWithRows('rec-window-hint', ordinary);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal + 9925) / 100,
       as_of: '2026-09-25',
     });
@@ -178,13 +178,13 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
 
     const total = ordinaryTotal - 88800;
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (total + 88800) / 100,
       as_of: '2026-09-25',
     });
 
     const text = result.content[0].text;
-    const rare = text.indexOf('this amount is on APAP');
+    const rare = text.indexOf('this amount is on Store Card');
     const weak = text.indexOf('same amount as the difference');
     expect(rare).toBeGreaterThan(-1);
     expect(weak).toBeGreaterThan(-1);
@@ -199,13 +199,13 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     ]);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal - 88800) / 100,
       as_of: '2026-09-25',
     });
 
     const text = result.content[0].text;
-    expect(text).toContain('this amount is on APAP');
+    expect(text).toContain('this amount is on Store Card');
     expect(text).toContain('Seguro');
   }, 60_000);
 
@@ -217,7 +217,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
 
     // The bank counts it; the balance to the cutoff does not.
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal - 55500) / 100,
       as_of: '2026-09-25',
     });
@@ -234,7 +234,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     await budgetWithRows('rec-nothing', ordinary);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal - 13742) / 100,
       as_of: '2026-09-25',
     });
@@ -257,7 +257,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     ]);
 
     const both = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: -30,
       as_of: '2026-09-25',
     });
@@ -265,7 +265,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     expect(both.content[0].text).toContain('These agree.');
 
     const clearedOnly = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: -30,
       as_of: '2026-09-25',
       balance_counts: 'cleared_only',
@@ -287,13 +287,13 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     ]);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal + 77700 + 77700) / 100,
       as_of: '2026-09-25',
     });
 
     const text = result.content[0].text;
-    expect(text).not.toContain('this amount is on BHD Nomina');
+    expect(text).not.toContain('this amount is on Main Checking');
   }, 60_000);
 
   it('does not call a recurring payment a duplicate', async () => {
@@ -308,7 +308,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     ]);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (-2500000 * 3 + 2500000) / 100,
       as_of: '2026-09-25',
     });
@@ -333,7 +333,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     ]);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: -1000,
       as_of: day(5),
     });
@@ -352,7 +352,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     ]);
 
     const result = await handlerFor()({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: ordinaryTotal / 100,
       as_of: '2026-09-25',
     });
@@ -367,14 +367,14 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     const handler = handlerFor();
 
     const bankHigher = await handler({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal + 50000) / 100,
       as_of: '2026-09-25',
     });
     expect(bankHigher.content[0].text).toContain('The bank is higher by 500.00');
 
     const bankLower = await handler({
-      account: 'BHD Nomina',
+      account: 'Main Checking',
       expected_balance: (ordinaryTotal - 50000) / 100,
       as_of: '2026-09-25',
     });

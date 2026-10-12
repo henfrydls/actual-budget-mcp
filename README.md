@@ -699,7 +699,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `get_budget_summary` | Executive budget overview | "Give me a budget summary for February" |
 | `get_categories` | All category groups and categories | "What categories do I have?" |
 | `get_payees` | All payees in the budget | "List all my payees" |
-| `reconcile_account` | Compare an account against a bank figure and explain the gap | "My BHD statement says 45,230.18, what am I missing?" |
+| `reconcile_account` | Compare an account against a bank figure and explain the gap | "My checking statement says 12,500.00, what am I missing?" |
 | `get_rules` | All transaction rules | "Show me my rules" |
 | `balance_history` | Account balance over time | "Show balance history for my checking account" |
 
@@ -847,7 +847,7 @@ Writes are enabled by default. Read-only is opt-in.
 |------|-------------|----------------|
 | `create_account` | Create an on- or off-budget account | "Create an off-budget account called Family Investment with 10,000" |
 | `delete_account` | Delete an account and its history | "Delete the ZZ Test account" |
-| `update_account` | Rename an account | "Rename BHD Nomina to BHD Nomina DOP" |
+| `update_account` | Rename an account | "Rename Main Checking to Everyday Account" |
 
 > **`delete_account` needs two keys.** It destroys the account's entire transaction
 > history, so a single call never deletes. The first call only *previews* what
@@ -942,7 +942,7 @@ Here are real prompts you can use:
 
 "Am I over budget on anything?"
 
-"I spent 1,200 on electricity from my BHD account yesterday"
+"I spent 1,200 on electricity from my checking account yesterday"
 
 "What's my savings rate this month?"
 
@@ -1009,7 +1009,7 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
 - Set `ACTUAL_ENCRYPTION_PASSWORD` with your encryption password
 
 **"Ambiguous name: matches X, Y"**
-- Be more specific. Instead of "BHD", try "BHD Nomina" or "BHD Mi Pais"
+- Be more specific. Instead of "Main", try "Main Checking" or "Main Savings"
 
 ### Node.js Requirement
 

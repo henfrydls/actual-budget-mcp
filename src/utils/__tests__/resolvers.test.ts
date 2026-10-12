@@ -22,9 +22,9 @@ import { resolveAccountId, resolveCategoryId, resolveCategoryGroupId, resolvePay
 describe('resolveAccountId', () => {
   beforeEach(() => {
     vi.mocked(api.getAccounts).mockResolvedValue([
-      { id: 'acc-1', name: 'BHD Nómina', closed: false, offbudget: false },
-      { id: 'acc-2', name: 'BHD Mi Pais (Pesos)', closed: false, offbudget: false },
-      { id: 'acc-3', name: 'BHD Mi Pais (Dolares)', closed: false, offbudget: false },
+      { id: 'acc-1', name: 'Crédito Personal', closed: false, offbudget: false },
+      { id: 'acc-2', name: 'Travel Card (local)', closed: false, offbudget: false },
+      { id: 'acc-3', name: 'Travel Card (foreign)', closed: false, offbudget: false },
       { id: 'acc-4', name: 'Closed Account', closed: true, offbudget: false },
     ] as any);
   });
@@ -34,7 +34,7 @@ describe('resolveAccountId', () => {
   });
 
   it('resolves by partial name (case-insensitive)', async () => {
-    expect(await resolveAccountId('nómina')).toBe('acc-1');
+    expect(await resolveAccountId('crédito')).toBe('acc-1');
   });
 
   it('throws on no match', async () => {
@@ -42,7 +42,7 @@ describe('resolveAccountId', () => {
   });
 
   it('throws on ambiguous match', async () => {
-    await expect(resolveAccountId('BHD Mi Pais')).rejects.toThrow('Ambiguous account name');
+    await expect(resolveAccountId('Travel Card')).rejects.toThrow('Ambiguous account name');
   });
 
   // #27: exact name match must win over substring matches
@@ -70,7 +70,7 @@ describe('resolveAccountId', () => {
     try {
       await resolveAccountId('xyz');
     } catch (e: any) {
-      expect(e.message).toContain('BHD Nómina');
+      expect(e.message).toContain('Crédito Personal');
     }
   });
 });
@@ -165,7 +165,7 @@ describe('resolvePayeeId', () => {
     vi.mocked(api.getPayees).mockResolvedValue([
       { id: 'pay-1', name: 'Sirena' },
       { id: 'pay-2', name: 'DGII' },
-      { id: 'pay-3', name: 'Transfer: BHD Nómina' },
+      { id: 'pay-3', name: 'Transfer: Crédito Personal' },
       { id: 'pay-4', name: '' },
     ] as any);
   });
