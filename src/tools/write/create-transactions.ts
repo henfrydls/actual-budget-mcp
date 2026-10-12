@@ -432,46 +432,78 @@ export async function createTransactions(input: {
       // records both sides, so it is the row that can go.
       const transfers = resolved.filter((r) => r.transfer);
       if (transfers.length > 0) {
-        // One to one, nearest date first.
+        // The best pairing, not the first one that fits.
         //
-        // Matching each ordinary row against the first transfer that fits
-        // refuses more than it should: one transfer rejected two separate
-        // credits of the same amount, and with two of each the pairs came out
-        // crossed, so a row was told it repeated a transfer two days away
-        // while its own twin sat on the same date. A transfer writes one
-        // counterpart, so it can only account for one row.
-        const pairs: Array<{ transfer: ResolvedRow; ordinary: ResolvedRow; apart: number }> = [];
+        // A transfer writes one counterpart, so it can account for one row,
+        // and taking the nearest pair as it comes leaves rows unreported that
+        // a different arrangement would have caught. Measured on a batch of
+        // two transfers and two credits, where the card posts a day late:
+        // taking the exact-date pair first used up the transfer the second
+        // credit needed, so that credit was left out of the message and
+        // counted among the rows that "were fine". Nothing is written either
+        // way, since the batch is all or nothing, but the person sends the
+        // list again without the row they were told about and the other one
+        // collides on the second attempt, having read something false in
+        // between.
+        //
+        // So this takes the arrangement that pairs the most rows, by trying
+        // each unpaired row against its candidates and letting it displace a
+        // pairing that has somewhere else to go. Candidates are ordered by
+        // distance, so an exact date is preferred where the choice is free,
+        // and rows are processed in the order they were sent, so the same
+        // batch always reads the same way.
+        const byIndex = new Map(resolved.map((row) => [row.index, row]));
+        const options = new Map<number, number[]>();
         for (const ordinary of resolved) {
           if (ordinary.transfer) continue;
-          for (const t of transfers) {
-            if (t.transfer!.targetId !== ordinary.accountId) continue;
-            if (t.amountCents !== -ordinary.amountCents) continue;
-            const apart = Math.abs(dayNumber(t.date) - dayNumber(ordinary.date));
-            if (apart > COUNTERPART_WINDOW_DAYS) continue;
-            pairs.push({ transfer: t, ordinary, apart });
-          }
+          const fits = transfers
+            .filter(
+              (t) =>
+                t.transfer!.targetId === ordinary.accountId &&
+                t.amountCents === -ordinary.amountCents &&
+                withinDays(t.date, ordinary.date, COUNTERPART_WINDOW_DAYS),
+            )
+            .map((t) => ({
+              index: t.index,
+              apart: Math.abs(dayNumber(t.date) - dayNumber(ordinary.date)),
+            }))
+            .sort((a, b) => a.apart - b.apart || a.index - b.index)
+            .map((t) => t.index);
+          if (fits.length > 0) options.set(ordinary.index, fits);
         }
-        // Same date first, then nearest, then in the order they were sent, so
-        // two equally close candidates resolve the same way every time.
-        pairs.sort(
-          (x, y) => x.apart - y.apart || x.transfer.index - y.transfer.index || x.ordinary.index - y.ordinary.index,
-        );
 
-        const takenTransfer = new Set<number>();
-        const takenOrdinary = new Set<number>();
-        for (const pair of pairs) {
-          if (takenTransfer.has(pair.transfer.index)) continue;
-          if (takenOrdinary.has(pair.ordinary.index)) continue;
-          takenTransfer.add(pair.transfer.index);
-          takenOrdinary.add(pair.ordinary.index);
+        /** Which ordinary row each transfer is currently paired with. */
+        const pairedWith = new Map<number, number>();
+
+        const assign = (ordinaryIndex: number, tried: Set<number>): boolean => {
+          for (const transferIndex of options.get(ordinaryIndex) ?? []) {
+            if (tried.has(transferIndex)) continue;
+            tried.add(transferIndex);
+            const holder = pairedWith.get(transferIndex);
+            if (holder === undefined || assign(holder, tried)) {
+              pairedWith.set(transferIndex, ordinaryIndex);
+              return true;
+            }
+          }
+          return false;
+        };
+
+        for (const ordinaryIndex of [...options.keys()].sort((a, b) => a - b)) {
+          assign(ordinaryIndex, new Set<number>());
+        }
+
+        for (const [transferIndex, ordinaryIndex] of [...pairedWith.entries()].sort(
+          (a, b) => a[1] - b[1],
+        )) {
+          const transfer = byIndex.get(transferIndex)!;
+          const ordinary = byIndex.get(ordinaryIndex)!;
           complain(
-            pair.ordinary.index,
-            `is the other side of the transfer in row ${pair.transfer.index + 1}: that row ` +
-              `moves ${formatMoney(Math.abs(pair.transfer.amountCents))} on ` +
-              `${pair.transfer.date} and writes the matching row in ` +
-              `${pair.ordinary.accountName} itself, and this one records the same money on ` +
-              `${pair.ordinary.date}. Keeping both puts it in twice. Drop this row, or pass ` +
-              `allow_duplicate if they really are two movements.`,
+            ordinary.index,
+            `is the other side of the transfer in row ${transfer.index + 1}: that row moves ` +
+              `${formatMoney(Math.abs(transfer.amountCents))} on ${transfer.date} and writes ` +
+              `the matching row in ${ordinary.accountName} itself, and this one records the ` +
+              `same money on ${ordinary.date}. Keeping both puts it in twice. Drop this row, ` +
+              `or pass allow_duplicate if they really are two movements.`,
           );
         }
       }

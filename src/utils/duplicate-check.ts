@@ -252,18 +252,29 @@ export function describeCounterpartClash(
   // From the dates themselves. Same day, a day either side, or a mix of the
   // two when more than one row matched.
   const dates = [...new Set(existing.map((t) => t.date))];
-  const when =
-    newRowDate === undefined
-      ? 'for the same amount'
-      : dates.every((d) => d === newRowDate)
-        ? `for the same amount on the same day, ${newRowDate}`
-        : `for the same amount, dated ${dates.join(' and ')} against this row's ${newRowDate}`;
+  const sameDay = newRowDate !== undefined && dates.every((d) => d === newRowDate);
+  const many = existing.length > 1;
 
+  lines.push('', `A transfer would create a second row in ${targetAccountName}.`);
+  if (newRowDate === undefined) {
+    lines.push('It is for the same amount.');
+  } else if (sameDay) {
+    lines.push(`It is for the same amount, on the same day: ${newRowDate}.`);
+  } else {
+    // Each date on its own line rather than one long sentence: the dates are
+    // what the reader has to compare, and a window of a day means they differ.
+    lines.push(
+      `It is for the same amount, and the dates are a day apart:`,
+      `  already there: ${dates.join(', ')}`,
+      `  this row:      ${newRowDate}`,
+    );
+  }
   lines.push(
-    '',
-    `A transfer would create a second row in ${targetAccountName} ${when}. If the row above`,
-    'is this same payment, already imported from the bank, you do not need the transfer. If',
-    'it is a different movement that happens to match, call again with allow_duplicate: true.',
+    many
+      ? 'If the rows above are this same payment, already imported from the bank, you do not'
+      : 'If the row above is this same payment, already imported from the bank, you do not',
+    'need the transfer. If it is a different movement that happens to match, call again with',
+    'allow_duplicate: true.',
   );
   return lines;
 }

@@ -389,6 +389,51 @@ describe.skipIf(skip)('a payment that arrives from both sides', () => {
       expect(text).toContain('row 5  Card');
     }, 60_000);
 
+    it('pairs every row it can, not the nearest one first', async () => {
+      // Two transfers and two credits, with the card posting a day late.
+      // Taking the exact-date pair first uses up the transfer the second
+      // credit needs, and that credit is then left out of the message and
+      // counted among the rows that were fine. The person sends the list
+      // again without the row they were told about, and the other one
+      // collides on the second attempt.
+      await budget('batch-max-pairing');
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-26' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-26' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT TWO', date: '2026-09-27' },
+        ],
+      });
+      const text = lines.join('\n');
+
+      expect(text.match(/is the other side of the transfer/g)).toHaveLength(2);
+      expect(text).toContain('row 3  Card');
+      expect(text).toContain('row 4  Card');
+      expect(text, 'a row that collides was counted among the ones that were fine').not.toMatch(
+        /other 3 rows were fine/,
+      );
+    }, 60_000);
+
+    it('pairs every row it can with the transfers sent the other way round', async () => {
+      await budget('batch-max-pairing-reversed');
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-26' },
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-27' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT TWO', date: '2026-09-26' },
+        ],
+      });
+      const text = lines.join('\n');
+
+      expect(text.match(/is the other side of the transfer/g)).toHaveLength(2);
+      expect(text).toContain('row 3  Card');
+      expect(text).toContain('row 4  Card');
+    }, 60_000);
+
     it('pairs each transfer with the row on its own date', async () => {
       // Two of each, one pair on the 25th and one on the 26th. Taking the
       // first transfer that fits crossed them, so a row was told it repeated
@@ -469,7 +514,7 @@ describe.skipIf(skip)('a payment that arrives from both sides', () => {
           // The dates, from the dates: "the same day" when they are, and both
           // of them when they are not.
           if (c.imported === c.transfer) {
-            expect(text).toContain(`on the same day, ${c.transfer}`);
+            expect(text).toContain(`on the same day: ${c.transfer}`);
           } else {
             expect(text).toContain(c.imported);
             expect(text).toContain(c.transfer);
@@ -480,6 +525,56 @@ describe.skipIf(skip)('a payment that arrives from both sides', () => {
         }
       }, 60_000);
     }
+
+    it('lays the two dates out instead of running them into a sentence', async () => {
+      // The dates are what the reader has to compare, and a window of a day
+      // means they differ.
+      await budget('transfer-date-layout', async () => {
+        const accounts = await api.getAccounts();
+        await api.addTransactions(
+          accounts.find((a) => a.name === 'Card')!.id,
+          [{ date: '2026-09-26', amount: 80000, payee_name: 'PAYMENT RECEIVED' }] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+
+      const result = await (await transferHandler())({
+        from_account: 'Bank',
+        to_account: 'Card',
+        amount: 800,
+        date: '2026-09-25',
+      });
+      const text = result.content[0].text;
+
+      expect(text).toContain('already there: 2026-09-26');
+      expect(text).toContain('this row:      2026-09-25');
+    }, 60_000);
+
+    it('says rows in the plural when it found more than one', async () => {
+      await budget('transfer-plural', async () => {
+        const accounts = await api.getAccounts();
+        await api.addTransactions(
+          accounts.find((a) => a.name === 'Card')!.id,
+          [
+            { date: '2026-09-25', amount: 80000, payee_name: 'PAYMENT ONE' },
+            { date: '2026-09-26', amount: 80000, payee_name: 'PAYMENT TWO' },
+          ] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+
+      const result = await (await transferHandler())({
+        from_account: 'Bank',
+        to_account: 'Card',
+        amount: 800,
+        date: '2026-09-25',
+      });
+      const text = result.content[0].text;
+
+      expect(text).toMatch(/2 rows that could be the other side/);
+      expect(text).toContain('If the rows above are this same payment');
+      expect(text, 'spoke of one row while naming two').not.toContain('If the row above is');
+    }, 60_000);
 
     it('writes it when the caller says it is a different movement', async () => {
       await budget('transfer-allowed', async () => {
