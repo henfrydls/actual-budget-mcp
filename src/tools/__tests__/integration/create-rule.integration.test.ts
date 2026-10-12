@@ -166,16 +166,22 @@ describe.skipIf(skip)('create_rule with a payee', () => {
     ).rejects.toThrow(/No payee found matching "Checking"/);
   });
 
-  it('leaves a payee "contains" value as text, since it is not a payee', async () => {
-    const lines = await createRuleFromInput({
-      condition_field: 'payee',
-      condition_op: 'contains',
-      condition_value: 'Amaz',
-      action_field: 'category',
-      action_value: 'Groceries',
-    });
-    const rule = await storedRule(idFrom(lines));
-    expect(rule?.conditions[0].value).toBe('Amaz');
+  it('refuses a payee "contains" rule, which compares against the id (#169)', async () => {
+    // This used to be left as text and created. The engine compares
+    // `contains` on `payee` against the payee's id, so the rule fires on
+    // whatever happens to have those characters in its UUID and never on the
+    // payee that was meant.
+    const before = (await api.getRules()).length;
+    await expect(
+      createRuleFromInput({
+        condition_field: 'payee',
+        condition_op: 'contains',
+        condition_value: 'Amaz',
+        action_field: 'category',
+        action_value: 'Groceries',
+      }),
+    ).rejects.toThrow(/cannot use `contains` on `payee`[\s\S]*imported_payee/);
+    expect((await api.getRules()).length).toBe(before);
   });
 
   it('stores a payee action as the payee id, not its name', async () => {
@@ -265,4 +271,212 @@ describe.skipIf(skip)('create_rule with a payee', () => {
     expect((await api.getRules()).length).toBe(rulesBefore);
     expect((await api.getPayees()).length).toBe(payeesBefore);
   });
+});
+
+/**
+ * Text operators on the fields Actual stores by id (#169).
+ *
+ * `payee contains "Netfl"` never matches Netflix and `payee contains "-"`
+ * matches nearly everything, because a UUID is mostly hyphens. The engine
+ * accepts the rule, lists it like any other, and it quietly recategorises
+ * transactions that have nothing to do with what was asked for.
+ */
+describe.skipIf(skip)('a text operator on a field stored by id', () => {
+  let fun = '';
+  let acct = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+    await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      await api.createPayee({ name: 'Netflix' } as never);
+      const group = await api.createCategoryGroup({ name: 'Spending' } as never);
+      fun = await api.createCategory({ name: 'Fun', group_id: group } as never);
+    }, 'rule-text-ops');
+    void fun;
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  const FIELDS = ['payee', 'category', 'category_group', 'account'] as const;
+  const OPS = ['contains', 'doesNotContain', 'matches'] as const;
+
+  for (const field of FIELDS) {
+    for (const op of OPS) {
+      it(`refuses ${op} on ${field}, and saves nothing`, async () => {
+        const before = (await api.getRules()).length;
+
+        await expect(
+          createRuleFromInput({
+            condition_field: field,
+            condition_op: op,
+            condition_value: 'Fun',
+            action_field: 'notes',
+            action_value: 'marked',
+          }),
+        ).rejects.toThrow(new RegExp(`cannot use \`${op}\` on \`${field}\``));
+
+        expect((await api.getRules()).length, 'a rule was created anyway').toBe(before);
+      }, 60_000);
+    }
+  }
+
+  it('is the field the engine itself calls an id, not a list someone typed', async () => {
+    // `category_group` was missing from the first version of this, because the
+    // issue named three fields and nobody checked the fourth. Measured: a
+    // rule `category_group doesNotContain "Spending"` fires on a transaction
+    // in Spending, which is the same damage as the others.
+    const before = (await api.getRules()).length;
+
+    await expect(
+      createRuleFromInput({
+        condition_field: 'category_group',
+        condition_op: 'doesNotContain',
+        condition_value: 'Spending',
+        action_field: 'notes',
+        action_value: 'marked',
+      }),
+    ).rejects.toThrow(/cannot use `doesNotContain` on `category_group`/);
+    expect((await api.getRules()).length).toBe(before);
+  }, 60_000);
+
+  it('names both text fields for a payee, and promises neither', async () => {
+    // An earlier version said `payee_name` worked whether the transaction came
+    // from a bank or was entered here. It does not: the engine fills that
+    // field in only when the payee already exists, so the first charge under
+    // a name nobody has seen is exactly the one it misses. Advice that is
+    // wrong in the case someone cares about is worse than no advice.
+    const message = await createRuleFromInput({
+      condition_field: 'payee',
+      condition_op: 'contains',
+      condition_value: 'Netfl',
+      action_field: 'notes',
+      action_value: 'marked',
+    }).catch((e: Error) => e.message);
+
+    expect(message).toMatch(/imported_payee/);
+    expect(message).toMatch(/payee_name/);
+    expect(message).toMatch(/only once that payee exists/);
+    expect(message, 'promised one of them works everywhere').not.toMatch(
+      /whether the transaction came from|works on any/,
+    );
+  }, 60_000);
+
+  it('does not offer oneOf, which does not work through this tool yet', async () => {
+    // Sending `oneOf` from here fails outright: the engine wants an array and
+    // a single string goes out. Advice that cannot be followed is worse than
+    // no advice, because it costs a round trip to find out.
+    for (const field of FIELDS) {
+      const message = await createRuleFromInput({
+        condition_field: field,
+        condition_op: 'contains',
+        condition_value: 'whatever',
+        action_field: 'notes',
+        action_value: 'marked',
+      }).catch((e: Error) => e.message);
+
+      expect(message, `${field} was told to use oneOf`).not.toMatch(/oneOf/);
+    }
+  }, 60_000);
+
+  it('points account and category_group at an id, since a name is not resolved there yet', async () => {
+    // Measured: `account is "Checking"` is stored as the name and never
+    // fires, while `account is <id>` does. Telling someone to use a name
+    // would hand them a rule that does nothing.
+    for (const field of ['account', 'category_group'] as const) {
+      const message = await createRuleFromInput({
+        condition_field: field,
+        condition_op: 'contains',
+        condition_value: 'whatever',
+        action_field: 'notes',
+        action_value: 'marked',
+      }).catch((e: Error) => e.message);
+
+      expect(message).toMatch(new RegExp(`Use \`is\` with the ${field} id`));
+    }
+  }, 60_000);
+
+  it('still allows a text operator on imported_payee, which holds text', async () => {
+    // The field someone reaching for `payee contains` usually wants.
+    const lines = await createRuleFromInput({
+      condition_field: 'imported_payee',
+      condition_op: 'contains',
+      condition_value: 'NETFL',
+      action_field: 'category',
+      action_value: 'Fun',
+    });
+    const rules = await api.getRules();
+    const stored = rules.find((r) => r.id === lines.find((l) => l.includes('ID:'))!.split('ID:')[1].trim());
+    expect((stored as { conditions: Array<{ value: unknown }> }).conditions[0].value).toBe('NETFL');
+  }, 60_000);
+
+  it('still allows `is` on those fields, which is what they are for', async () => {
+    const lines = await createRuleFromInput({
+      condition_field: 'category',
+      condition_op: 'is',
+      condition_value: 'Fun',
+      action_field: 'notes',
+      action_value: 'marked',
+    });
+    const rules = await api.getRules();
+    const stored = rules.find((r) => r.id === lines.find((l) => l.includes('ID:'))!.split('ID:')[1].trim());
+    expect((stored as { conditions: Array<{ value: unknown }> }).conditions[0].value).toBe(fun);
+    void acct;
+  }, 60_000);
+});
+
+/**
+ * Why a text rule on a payee name is not the whole answer (#169, round 3).
+ *
+ * The engine fills `payee_name` in from the transaction's payee, and a payee
+ * that does not exist yet is created after the rules have run. So the first
+ * charge from a shop, under whatever name the bank writes, is the one a text
+ * rule on the name misses, which is the case someone writing the rule cares
+ * most about.
+ */
+describe.skipIf(skip)('a text rule on a payee that does not exist yet', () => {
+  let acct = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+    await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      // One payee exists from the start, the other does not.
+      await api.createPayee({ name: 'Netflix' } as never);
+    }, 'rule-new-payee');
+
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'payee_name', op: 'contains', value: 'Netfl' }],
+      actions: [{ op: 'set', field: 'notes', value: 'FIRED' }],
+    } as never);
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  const importOne = async (date: string, payeeName: string) => {
+    await api.importTransactions(acct, [
+      { date, amount: -2500, payee_name: payeeName },
+    ] as never);
+    for (let i = 0; i < 4; i += 1) await api.getCategories();
+    const rows = (await api.getTransactions(acct, date, date)) as Array<Record<string, unknown>>;
+    return rows[0];
+  };
+
+  it('fires when the payee already exists', async () => {
+    const row = await importOne('2026-09-01', 'Netflix');
+    expect(row?.notes).toBe('FIRED');
+  }, 60_000);
+
+  it('does not fire on the first charge under a name nobody has seen', async () => {
+    // Which is why the refusal names this limit instead of selling the field
+    // as the answer.
+    const row = await importOne('2026-09-02', 'Netflix Intl');
+    expect(row?.notes ?? null).toBeNull();
+  }, 60_000);
 });

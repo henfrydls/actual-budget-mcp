@@ -823,7 +823,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `create_payee` | Create a new payee | "Create a payee called Netflix" |
 | `update_payee` | Rename a payee | "Rename Netflix to Netflix Premium" |
 | `delete_payee` | Delete a payee (previews first, see [Safety](#safety)) | "Delete the Netflix Premium payee" |
-| `create_rule` | Create a transaction rule | "Create a rule: when payee contains Amazon, set category to Shopping" |
+| `create_rule` | Create a transaction rule | "Create a rule: when the payee is Amazon, set category to Shopping" |
 | `delete_rule` | Delete a rule (previews first, see [Safety](#safety)) | "Delete that rule" |
 
 <details>
@@ -835,7 +835,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **delete_payee** - `payee` (required): name or ID | `confirm` + `confirm_name` (required to delete)
 
-**create_rule** - `condition_field` (required): payee, category, amount, notes | `condition_op` (required): is, contains, oneOf, gt, lt, etc. | `condition_value` (required): for payee or category, a name or ID | `action_field` (required): category, payee, notes | `action_value` (required): for payee or category, a name or ID that already exists | `stage` (optional)
+**create_rule** - `condition_field` (required): payee, payee_name, category, category_group, account, amount, notes, imported_payee | `condition_op` (required): is, isNot, contains, gt, lt, etc. | `condition_value` (required): for payee or category, a name or ID | `action_field` (required): category, payee, notes | `action_value` (required): for payee or category, a name or ID that already exists | `stage` (optional). `contains`, `doesNotContain` and `matches` are refused on payee, category, category_group and account: Actual stores those as ids, so the comparison runs against the id and the rule fires on the wrong transactions. For text, `imported_payee` holds the text the row arrived with, from your bank or from whoever created it here, and `payee_name` compares against the payee's current name but only once that payee exists, so it misses the first charge under a name you have not seen before. `get_rules` marks any rule already saved the other way.
 
 **delete_rule** - `rule_id` (required) | `confirm` (required to delete)
 

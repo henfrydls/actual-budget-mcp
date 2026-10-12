@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolveCategoryId, resolvePayeeIn } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
+import { isTextOpOnIdField, refuseTextOpOnIdField } from '../../utils/rule-fields.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
 export interface CreateRuleInput {
@@ -60,6 +61,13 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
   const stage = input.stage ?? 'null';
 
   await ensureConnection();
+
+  // Refused before anything is resolved or created (#169). The engine accepts
+  // these and the rule then fires on the wrong transactions, with nothing
+  // saying so: a rule is stored, so this is the one chance to stop it.
+  if (isTextOpOnIdField(condition_field, condition_op)) {
+    throw new Error(refuseTextOpOnIdField(condition_field, condition_op));
+  }
 
   // Resolve category and payee names to IDs if needed
   let resolvedCondValue: any = condition_value;
@@ -128,8 +136,21 @@ export function registerCreateRule(server: McpServer): void {
     'create_rule',
     'Create a transaction rule. When a transaction matches the condition, the action is applied automatically.',
     {
-      condition_field: z.string().describe('Field to match: payee, category, amount, notes, imported_payee'),
-      condition_op: z.string().describe('Operator: is, contains, oneOf, isNot, doesNotContain, matches, gt, lt, gte, lte'),
+      condition_field: z
+        .string()
+        .describe(
+          'Field to match: payee, payee_name, category, category_group, account, amount, ' +
+            'notes, imported_payee',
+        ),
+      condition_op: z
+        .string()
+        .describe(
+          'Operator: is, isNot, contains, doesNotContain, matches, gt, lt, gte, lte. ' +
+            'contains, doesNotContain and matches are refused on payee, category, ' +
+            'category_group and account, which Actual stores as ids: they would compare ' +
+            'against the id. For text on a payee, imported_payee holds what the row arrived with, ' +
+            'and payee_name the payee name, once that payee exists.',
+        ),
       condition_value: z
         .string()
         .describe('Value to match against. For category, a name or ID; for payee, a name (part of one is fine if only one payee matches) or an ID.'),
