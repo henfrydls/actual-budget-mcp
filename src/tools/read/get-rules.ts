@@ -47,10 +47,17 @@ export function registerGetRules(server: McpServer): void {
          */
         const readable = (field: string, value: unknown): string => {
           const one = (v: unknown) => {
+            // Nothing, said as nothing. `category is null` is a real rule that
+            // matches transactions with no category, and printing it as the
+            // word "null" reads like a value someone typed by mistake.
+            if (v === null || v === undefined || v === '') return '(none)';
             const text = String(v);
             return ID_FIELDS.has(field) ? (names.get(text) ?? text) : text;
           };
-          return Array.isArray(value) ? value.map(one).join(', ') : one(value);
+          if (Array.isArray(value)) {
+            return value.length === 0 ? '(empty list)' : value.map(one).join(', ');
+          }
+          return one(value);
         };
 
         /**
@@ -64,10 +71,22 @@ export function registerGetRules(server: McpServer): void {
         const brokenValues = (field: string, value: unknown): string[] => {
           if (!ID_FIELDS.has(field)) return [];
           const list = Array.isArray(value) ? value : [value];
-          return list
-            .map((v) => String(v))
-            .filter((text) => text !== '' && !names.has(text));
+          return (
+            list
+              // Nothing is not a broken id. `category is null` matches
+              // transactions with no category and fires: measured, a row
+              // imported without one comes back marked by exactly that rule.
+              // Calling it broken invites deleting a rule that works and that
+              // `create_rule` cannot write back.
+              .filter((v) => v !== null && v !== undefined && v !== '')
+              .map((v) => String(v))
+              .filter((text) => !names.has(text))
+          );
         };
+
+        /** An empty list matches nothing, whatever the field. */
+        const isEmptyList = (value: unknown): boolean =>
+          Array.isArray(value) && value.length === 0;
 
         const describeBroken = (field: string, bad: string[]): string => {
           const asNames = bad.filter((v) => !looksLikeAnId(v));
@@ -78,9 +97,34 @@ export function registerGetRules(server: McpServer): void {
               `it never fires. Recreate the rule with create_rule, which resolves the name.`
             );
           }
+          // An id that is right but for its case. Measured: the engine
+          // compares ids exactly, so the rule really does not fire, and
+          // saying "no longer exists" would send someone looking for
+          // something that is sitting there.
+          const wrongCase = bad.filter((v) => names.has(v.toLowerCase()));
+          if (wrongCase.length > 0) {
+            return (
+              `warning: this id is written in a different case from the one in your budget ` +
+              `(${wrongCase.map((v) => names.get(v.toLowerCase())).join(', ')}), and the ` +
+              `engine compares ids exactly, so it never fires. Recreate the rule.`
+            );
+          }
+          if (field === 'account') {
+            // A closed account is unreachable from the API: measured, it is
+            // returned by neither `getAccounts()`, with or without options,
+            // nor a query, filtered on `closed` or not. So this cannot tell a
+            // closed account from a deleted one, and must not advise deleting
+            // a rule whose account the person could simply reopen.
+            return (
+              `warning: this points at an account that is not in the budget. It may have been ` +
+              `deleted, or closed, which hides it from everything here. Reopen the account if ` +
+              `that is it, or recreate the rule.`
+            );
+          }
           return (
-            `warning: this points at ${bad.length === 1 ? 'an id' : 'ids'} that no longer ` +
-            `exist in the budget, so it never fires. Recreate the rule or delete it.`
+            `warning: this points at ${bad.length === 1 ? 'an id' : 'ids'} that ` +
+            `${bad.length === 1 ? 'is' : 'are'} no longer in the budget, so it never fires. ` +
+            `Recreate the rule or delete it.`
           );
         };
 
@@ -112,6 +156,11 @@ export function registerGetRules(server: McpServer): void {
               lines.push(`      warning: ${warnTextOpOnIdField(cond.field, cond.op)}`);
               continue;
             }
+            if (isEmptyList(cond.value)) {
+              flagged += 1;
+              lines.push('      warning: an empty list matches nothing, so this never fires.');
+              continue;
+            }
             const bad = brokenValues(cond.field, cond.value);
             if (bad.length > 0) {
               flagged += 1;
@@ -122,6 +171,11 @@ export function registerGetRules(server: McpServer): void {
           for (const action of actions) {
             const field = action.field || action.op;
             lines.push(`  THEN ${action.op} ${field} = "${readable(field, action.value)}"`);
+            if (isEmptyList(action.value)) {
+              flagged += 1;
+              lines.push('      warning: an empty list sets nothing.');
+              continue;
+            }
             const bad = brokenValues(field, action.value);
             if (bad.length > 0) {
               flagged += 1;
