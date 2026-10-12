@@ -3,6 +3,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
+import { isTextOpOnIdField, warnTextOpOnIdField } from '../../utils/rule-fields.js';
 
 export function registerGetRules(server: McpServer): void {
   server.tool(
@@ -26,6 +27,12 @@ export function registerGetRules(server: McpServer): void {
 
         const lines: string[] = [sectionHeader(`Rules (${rules.length})`), ''];
 
+        // Rules created before this was refused are still here and still
+        // firing (#169). Nothing in the listing shows what is wrong with
+        // them: the condition reads like any other, and the damage is that it
+        // is compared against an id.
+        let flagged = 0;
+
         for (const rule of rules) {
           const conditions = (rule as any).conditions || [];
           const actions = (rule as any).actions || [];
@@ -40,6 +47,10 @@ export function registerGetRules(server: McpServer): void {
             if (cond.field === 'category' && categoryMap.has(value)) value = categoryMap.get(value);
             if (cond.field === 'payee' && payeeMap.has(value)) value = payeeMap.get(value);
             lines.push(`  IF ${cond.field} ${cond.op} "${value}"`);
+            if (isTextOpOnIdField(cond.field, cond.op)) {
+              flagged += 1;
+              lines.push(`      warning: ${warnTextOpOnIdField(cond.field, cond.op)}`);
+            }
           }
 
           for (const action of actions) {
@@ -51,6 +62,17 @@ export function registerGetRules(server: McpServer): void {
           }
 
           lines.push('');
+        }
+
+        if (flagged > 0) {
+          // At the end as well as beside each one: a long list scrolls, and
+          // this is the part worth acting on.
+          lines.push(
+            `${flagged} condition${flagged === 1 ? '' : 's'} above compare${flagged === 1 ? 's' : ''} ` +
+              `text against an internal id and may be firing on the wrong transactions. ` +
+              `create_rule refuses these now; the ones already saved have to be rewritten or ` +
+              `deleted by hand.`,
+          );
         }
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };

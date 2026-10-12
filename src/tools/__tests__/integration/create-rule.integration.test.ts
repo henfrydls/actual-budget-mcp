@@ -166,16 +166,22 @@ describe.skipIf(skip)('create_rule with a payee', () => {
     ).rejects.toThrow(/No payee found matching "Checking"/);
   });
 
-  it('leaves a payee "contains" value as text, since it is not a payee', async () => {
-    const lines = await createRuleFromInput({
-      condition_field: 'payee',
-      condition_op: 'contains',
-      condition_value: 'Amaz',
-      action_field: 'category',
-      action_value: 'Groceries',
-    });
-    const rule = await storedRule(idFrom(lines));
-    expect(rule?.conditions[0].value).toBe('Amaz');
+  it('refuses a payee "contains" rule, which compares against the id (#169)', async () => {
+    // This used to be left as text and created. The engine compares
+    // `contains` on `payee` against the payee's id, so the rule fires on
+    // whatever happens to have those characters in its UUID and never on the
+    // payee that was meant.
+    const before = (await api.getRules()).length;
+    await expect(
+      createRuleFromInput({
+        condition_field: 'payee',
+        condition_op: 'contains',
+        condition_value: 'Amaz',
+        action_field: 'category',
+        action_value: 'Groceries',
+      }),
+    ).rejects.toThrow(/cannot use `contains` on `payee`[\s\S]*imported_payee/);
+    expect((await api.getRules()).length).toBe(before);
   });
 
   it('stores a payee action as the payee id, not its name', async () => {
@@ -265,4 +271,82 @@ describe.skipIf(skip)('create_rule with a payee', () => {
     expect((await api.getRules()).length).toBe(rulesBefore);
     expect((await api.getPayees()).length).toBe(payeesBefore);
   });
+});
+
+/**
+ * Text operators on the fields Actual stores by id (#169).
+ *
+ * `payee contains "Netfl"` never matches Netflix and `payee contains "-"`
+ * matches nearly everything, because a UUID is mostly hyphens. The engine
+ * accepts the rule, lists it like any other, and it quietly recategorises
+ * transactions that have nothing to do with what was asked for.
+ */
+describe.skipIf(skip)('a text operator on a field stored by id', () => {
+  let fun = '';
+  let acct = '';
+
+  beforeAll(async () => {
+    await initTestEngine();
+    await createFreshBudget(async () => {
+      acct = await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      await api.createPayee({ name: 'Netflix' } as never);
+      const group = await api.createCategoryGroup({ name: 'Spending' } as never);
+      fun = await api.createCategory({ name: 'Fun', group_id: group } as never);
+    }, 'rule-text-ops');
+  }, 60_000);
+
+  afterAll(async () => {
+    await shutdownTestEngine();
+  });
+
+  const FIELDS = ['payee', 'category', 'account'] as const;
+  const OPS = ['contains', 'doesNotContain', 'matches'] as const;
+
+  for (const field of FIELDS) {
+    for (const op of OPS) {
+      it(`refuses ${op} on ${field}, and saves nothing`, async () => {
+        const before = (await api.getRules()).length;
+
+        await expect(
+          createRuleFromInput({
+            condition_field: field,
+            condition_op: op,
+            condition_value: 'Fun',
+            action_field: 'notes',
+            action_value: 'marked',
+          }),
+        ).rejects.toThrow(new RegExp(`cannot use \`${op}\` on \`${field}\``));
+
+        expect((await api.getRules()).length, 'a rule was created anyway').toBe(before);
+      }, 60_000);
+    }
+  }
+
+  it('still allows a text operator on imported_payee, which holds text', async () => {
+    // The field someone reaching for `payee contains` usually wants.
+    const lines = await createRuleFromInput({
+      condition_field: 'imported_payee',
+      condition_op: 'contains',
+      condition_value: 'NETFL',
+      action_field: 'category',
+      action_value: 'Fun',
+    });
+    const rules = await api.getRules();
+    const stored = rules.find((r) => r.id === lines.find((l) => l.includes('ID:'))!.split('ID:')[1].trim());
+    expect((stored as { conditions: Array<{ value: unknown }> }).conditions[0].value).toBe('NETFL');
+  }, 60_000);
+
+  it('still allows `is` on those fields, which is what they are for', async () => {
+    const lines = await createRuleFromInput({
+      condition_field: 'category',
+      condition_op: 'is',
+      condition_value: 'Fun',
+      action_field: 'notes',
+      action_value: 'marked',
+    });
+    const rules = await api.getRules();
+    const stored = rules.find((r) => r.id === lines.find((l) => l.includes('ID:'))!.split('ID:')[1].trim());
+    expect((stored as { conditions: Array<{ value: unknown }> }).conditions[0].value).toBe(fun);
+    void acct;
+  }, 60_000);
 });
