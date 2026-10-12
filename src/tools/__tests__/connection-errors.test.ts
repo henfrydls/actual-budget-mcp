@@ -91,7 +91,7 @@ describe('connection errors point at the real cause', () => {
  * errors with `code`, not `reason`, and the message it puts on an unreachable
  * server opens with the words "Authentication failed" — so an error that is
  * purely about connectivity reads as a rejected password unless we reclassify
- * it. Henfry hit exactly this on macOS with the SSH tunnel closed.
+ * it. Reported on macOS with the SSH tunnel closed.
  */
 const sdkOffline = () =>
   Object.assign(new Error('Authentication failed: server offline or unreachable'), {

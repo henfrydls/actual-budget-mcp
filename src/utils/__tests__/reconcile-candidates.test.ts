@@ -6,8 +6,8 @@ vi.mock('@actual-app/api', () => ({
   runQuery: vi.fn(),
   getPayees: vi.fn().mockResolvedValue([{ id: 'p1', name: 'Colmado' }]),
   getAccounts: vi.fn().mockResolvedValue([
-    { id: 'acc-1', name: 'BHD Nomina' },
-    { id: 'acc-2', name: 'APAP' },
+    { id: 'acc-1', name: 'Main Checking' },
+    { id: 'acc-2', name: 'Store Card' },
   ]),
   q: (table: string) => fakeQ(table),
   utils: {

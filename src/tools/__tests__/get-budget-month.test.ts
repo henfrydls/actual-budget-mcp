@@ -56,7 +56,7 @@ const budget = (spent: number) => ({
 beforeEach(() => {
   getBudgetMonth.mockReset().mockResolvedValue(budget(0));
   getAccounts.mockReset().mockResolvedValue([
-    { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
+    { id: 'acc-1', name: 'Main Checking', offbudget: false, closed: false },
   ]);
   getTransactions.mockReset().mockResolvedValue([]);
 });
@@ -112,8 +112,8 @@ describe('get_budget_month', () => {
 
   it('reads every on-budget account, not just the first', async () => {
     getAccounts.mockResolvedValue([
-      { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
-      { id: 'acc-2', name: 'APAP', offbudget: false, closed: false },
+      { id: 'acc-1', name: 'Main Checking', offbudget: false, closed: false },
+      { id: 'acc-2', name: 'Store Card', offbudget: false, closed: false },
     ]);
     getBudgetMonth.mockResolvedValue(budget(-3000));
     getTransactions.mockResolvedValue([

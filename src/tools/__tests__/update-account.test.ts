@@ -49,14 +49,14 @@ describe('update_account read-back', () => {
   it('does not report a rename the account does not show', async () => {
     // `updateAccount` resolves either way, so a reply that trusted it would
     // say the account was renamed while it still answers to the old name.
-    vi.mocked(api.getAccounts).mockResolvedValue([account('BHD Nomina')] as never);
+    vi.mocked(api.getAccounts).mockResolvedValue([account('Main Checking')] as never);
 
-    const result = await handlerFor()({ account: 'BHD Nomina', name: 'Nomina DOP' });
+    const result = await handlerFor()({ account: 'Main Checking', name: 'Everyday Account' });
 
     expect(result.isError).toBe(true);
     const text = result.content[0].text;
-    expect(text).toContain('does not read back as "Nomina DOP"');
-    expect(text).toContain('It is currently "BHD Nomina"');
+    expect(text).toContain('does not read back as "Everyday Account"');
+    expect(text).toContain('It is currently "Main Checking"');
     expect(text).not.toContain('Renamed');
   });
 
@@ -64,14 +64,14 @@ describe('update_account read-back', () => {
     // Three reads: `resolveAccountId` makes one of its own, then the tool
     // reads the current name, then it reads back after writing.
     vi.mocked(api.getAccounts)
-      .mockResolvedValueOnce([account('BHD Nomina')] as never)
-      .mockResolvedValueOnce([account('BHD Nomina')] as never)
-      .mockResolvedValueOnce([account('Nomina DOP')] as never);
+      .mockResolvedValueOnce([account('Main Checking')] as never)
+      .mockResolvedValueOnce([account('Main Checking')] as never)
+      .mockResolvedValueOnce([account('Everyday Account')] as never);
 
-    const result = await handlerFor()({ account: 'BHD Nomina', name: 'Nomina DOP' });
+    const result = await handlerFor()({ account: 'Main Checking', name: 'Everyday Account' });
 
     expect(result.isError).toBeFalsy();
-    expect(result.content[0].text).toContain('Renamed "BHD Nomina" to "Nomina DOP"');
+    expect(result.content[0].text).toContain('Renamed "Main Checking" to "Everyday Account"');
   });
 
   it('syncs after writing, before reading back', async () => {
@@ -82,7 +82,7 @@ describe('update_account read-back', () => {
     vi.mocked(api.getAccounts).mockImplementation(async () => {
       order.push('read');
       reads += 1;
-      return [account(reads <= 2 ? 'BHD Nomina' : 'Nomina DOP')] as never;
+      return [account(reads <= 2 ? 'Main Checking' : 'Everyday Account')] as never;
     });
     vi.mocked(api.updateAccount).mockImplementation(async () => {
       order.push('write');
@@ -91,7 +91,7 @@ describe('update_account read-back', () => {
       order.push('sync');
     });
 
-    await handlerFor()({ account: 'BHD Nomina', name: 'Nomina DOP' });
+    await handlerFor()({ account: 'Main Checking', name: 'Everyday Account' });
 
     expect(order).toEqual(['read', 'read', 'write', 'sync', 'read']);
   });

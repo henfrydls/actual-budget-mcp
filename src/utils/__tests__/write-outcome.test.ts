@@ -7,7 +7,7 @@ import { mayHaveBeenApplied, verifyFailedWrite } from '../write-outcome.js';
  */
 const context = (rows: Array<{ id: string }> | null) => ({
   action: 'The transaction',
-  whereToLook: 'BHD on 2026-09-21',
+  whereToLook: 'Main Checking on 2026-09-21',
   probe: {
     marker: 'marker-1',
     find: async () => rows,
@@ -37,7 +37,7 @@ describe('which failures can have landed anyway', () => {
     // Checking the budget after every validation error would be noise, and
     // noise is what stops a warning being read.
     expect(mayHaveBeenApplied(new Error('Category "Food" does not exist'))).toBe(false);
-    expect(mayHaveBeenApplied(new Error('No account found matching "BHD"'))).toBe(false);
+    expect(mayHaveBeenApplied(new Error('No account found matching "Main Checking"'))).toBe(false);
   });
 });
 
@@ -82,7 +82,7 @@ describe('reporting what really happened to a failed write', () => {
   it('names where to look in every outcome', async () => {
     for (const rows of [present, absent, null]) {
       const { message } = await verifyFailedWrite(failure, context(rows));
-      expect(message).toContain('BHD on 2026-09-21');
+      expect(message).toContain('Main Checking on 2026-09-21');
     }
   });
 
@@ -191,7 +191,7 @@ describe('the message and the verdict stay consistent', () => {
   it('treats a read that answers nothing as unknown, not as an empty account', async () => {
     const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
       action: 'The transaction',
-      whereToLook: 'BHD around 2026-09-21',
+      whereToLook: 'Main Checking around 2026-09-21',
       probe: { marker: 'm', find: async () => null },
     });
 
@@ -266,7 +266,7 @@ describe('the verdicts that must not be guessed', () => {
       new Error('We had an unknown problem opening "x"'),
       {
         action: 'The transaction',
-        whereToLook: 'BHD on 2026-09-21',
+        whereToLook: 'Main Checking on 2026-09-21',
         probe: {
           marker: 'm',
           find: async () => [{ id: 'm' }, { id: 'm' }],
@@ -286,7 +286,7 @@ describe('the verdicts that must not be guessed', () => {
     // the mistake this whole change exists to stop.
     const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
       action: 'The transaction',
-      whereToLook: 'BHD on 2026-09-21',
+      whereToLook: 'Main Checking on 2026-09-21',
       probe: {
         marker: 'm',
         find: async () => [],
@@ -300,7 +300,7 @@ describe('the verdicts that must not be guessed', () => {
   it('believes the second look when it finds what the first missed', async () => {
     const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
       action: 'The split transaction',
-      whereToLook: 'BHD on 2026-09-21',
+      whereToLook: 'Main Checking on 2026-09-21',
       probe: {
         marker: 'm',
         find: async () => [],
@@ -314,7 +314,7 @@ describe('the verdicts that must not be guessed', () => {
   it('says not saved only when both looks agree', async () => {
     const { verdict } = await verifyFailedWrite(new Error('out-of-sync'), {
       action: 'The transaction',
-      whereToLook: 'BHD on 2026-09-21',
+      whereToLook: 'Main Checking on 2026-09-21',
       probe: {
         marker: 'm',
         find: async () => [],

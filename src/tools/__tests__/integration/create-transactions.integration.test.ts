@@ -551,12 +551,13 @@ describe.skipIf(skip)('create_transactions', () => {
 
   it('refuses an ambiguous account rather than guessing', async () => {
     await createFreshBudget(async () => {
-      await api.createAccount({ name: 'BHD Nomina', type: 'checking' } as never, 0);
-      await api.createAccount({ name: 'BHD Nomina USD', type: 'checking' } as never, 0);
+      await api.createAccount({ name: 'Main Checking', type: 'checking' } as never, 0);
+      await api.createAccount({ name: 'Main Checking USD', type: 'checking' } as never, 0);
     }, 'batch-ambiguous');
 
     const lines = await createTransactions({
-      transactions: [{ account: 'BHD', amount: -10, date: '2026-09-01' }],
+      // The short form, which is a prefix of both and so names neither.
+      transactions: [{ account: 'Main', amount: -10, date: '2026-09-01' }],
     });
 
     expect(lines.join('\n').toLowerCase()).toContain('ambiguous');

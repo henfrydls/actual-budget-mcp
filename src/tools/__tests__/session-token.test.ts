@@ -109,11 +109,11 @@ describe('session token authentication (OIDC servers)', () => {
 });
 
 /**
- * The failure Henfry hit on macOS with the Desktop Extension. He left the
- * optional session token field empty and filled in his password; Claude Desktop
- * still set ACTUAL_SESSION_TOKEN, to the literal placeholder from the manifest.
- * The server sent it as a token, the token lost to nothing, and the error told
- * him to renew a token he had never created.
+ * The failure reported on macOS with the Desktop Extension: the optional
+ * session token field was left empty and a password filled in instead, and
+ * Claude Desktop still set ACTUAL_SESSION_TOKEN, to the literal placeholder
+ * from the manifest. The server sent it as a token, the token lost to nothing,
+ * and the error said to renew a token that had never been created.
  */
 describe('an optional field the host left unsubstituted', () => {
   const PLACEHOLDER = '${user_config.session_token}';

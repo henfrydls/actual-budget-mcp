@@ -247,25 +247,25 @@ describe.skipIf(skip)('a month of records in one batch', () => {
   beforeAll(async () => {
     await initTestEngine();
     await createFreshBudget(async () => {
-      id.Nomina = await api.createAccount({ name: 'Nomina', offbudget: false } as never, 0);
-      id.Tarjeta = await api.createAccount({ name: 'Tarjeta', offbudget: false } as never, 0);
+      id.Bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
+      id.Card = await api.createAccount({ name: 'Card', offbudget: false } as never, 0);
       // The asset the monthly contribution builds up. Off budget, because the
       // money is still his and should not read as spending.
-      id.Inversion = await api.createAccount({ name: 'Inversion Familiar', offbudget: true } as never, 0);
+      id.Fund = await api.createAccount({ name: 'Family Fund', offbudget: true } as never, 0);
       const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
       await api.createCategory({ name: 'Supermercado', group_id: group } as never);
-      inversion = await api.createCategory({ name: 'Inversion Familiar', group_id: group } as never);
+      inversion = await api.createCategory({ name: 'Family Fund', group_id: group } as never);
     }, 'batch-real-month');
 
     const lines = await createTransactions({
       transactions: [
-        { account: 'Tarjeta', amount: -4280.5, payee: 'Supermercado Nacional', category: 'Supermercado', date: '2026-09-03' },
-        { account: 'Tarjeta', amount: -1950, payee: 'Supermercado Bravo', category: 'Supermercado', date: '2026-09-11' },
+        { account: 'Card', amount: -4280.5, payee: 'Supermercado Nacional', category: 'Supermercado', date: '2026-09-03' },
+        { account: 'Card', amount: -1950, payee: 'Supermercado Bravo', category: 'Supermercado', date: '2026-09-11' },
         // Paying the card off: money moving between two budgeted accounts, so
         // it is not spending and must not be counted twice.
-        { account: 'Nomina', amount: -6230.5, payee: 'Tarjeta', date: '2026-09-25' },
+        { account: 'Bank', amount: -6230.5, payee: 'Card', date: '2026-09-25' },
         // The contribution, which leaves the budget and is categorised.
-        { account: 'Nomina', amount: -5000, payee: 'Inversion Familiar', category: 'Inversion Familiar', date: '2026-09-10' },
+        { account: 'Bank', amount: -5000, payee: 'Family Fund', category: 'Family Fund', date: '2026-09-10' },
       ],
     });
     reply = lines.join('\n');
@@ -281,7 +281,7 @@ describe.skipIf(skip)('a month of records in one batch', () => {
   });
 
   it('pays the card off without calling it spending', async () => {
-    const rows = (await api.getTransactions(id.Nomina, '1900-01-01', '2999-12-31')) as Array<
+    const rows = (await api.getTransactions(id.Bank, '1900-01-01', '2999-12-31')) as Array<
       Record<string, unknown>
     >;
     const payment = rows.find((r) => r.date === '2026-09-25');
@@ -291,7 +291,7 @@ describe.skipIf(skip)('a month of records in one batch', () => {
   });
 
   it('keeps the contribution out of the budget, with its category', async () => {
-    const rows = (await api.getTransactions(id.Nomina, '1900-01-01', '2999-12-31')) as Array<
+    const rows = (await api.getTransactions(id.Bank, '1900-01-01', '2999-12-31')) as Array<
       Record<string, unknown>
     >;
     const contribution = rows.find((r) => r.date === '2026-09-10');
@@ -299,7 +299,7 @@ describe.skipIf(skip)('a month of records in one batch', () => {
     // On budget on this side, so the category counts here.
     expect(contribution!.category).toBe(inversion);
 
-    const asset = (await api.getTransactions(id.Inversion, '1900-01-01', '2999-12-31')) as Array<
+    const asset = (await api.getTransactions(id.Fund, '1900-01-01', '2999-12-31')) as Array<
       Record<string, unknown>
     >;
     expect(asset).toHaveLength(1);
@@ -308,7 +308,7 @@ describe.skipIf(skip)('a month of records in one batch', () => {
   });
 
   it('leaves the two card purchases alone', async () => {
-    const rows = (await api.getTransactions(id.Tarjeta, '1900-01-01', '2999-12-31')) as Array<
+    const rows = (await api.getTransactions(id.Card, '1900-01-01', '2999-12-31')) as Array<
       Record<string, unknown>
     >;
     const purchases = rows.filter((r) => r.date === '2026-09-03' || r.date === '2026-09-11');
@@ -322,12 +322,12 @@ describe.skipIf(skip)('a month of records in one batch', () => {
   it('counts the account that only received a counterpart', () => {
     // The asset account is never written to directly; its row arrives as the
     // other leg. Leaving it out of the table hid half of what the call did.
-    expect(reply).toMatch(/Inversion Familiar: 0 -> 1/);
+    expect(reply).toMatch(/Family Fund: 0 -> 1/);
   });
 
   it('names both movements between accounts, and only those', () => {
-    expect(reply).toContain('row 3  Nomina -> Tarjeta');
-    expect(reply).toContain('row 4  Nomina -> Inversion Familiar');
+    expect(reply).toContain('row 3  Bank -> Card');
+    expect(reply).toContain('row 4  Bank -> Family Fund');
     expect(reply).not.toContain('row 1  ');
     expect(reply).not.toContain('row 2  ');
   });
@@ -455,7 +455,7 @@ describe.skipIf(skip)('a transfer row is still checked like any other', () => {
   }, 60_000);
 
   it('refuses a transfer whose counterpart is already imported in the other account', async () => {
-    // Henfry's month: the card payment is already in the card account,
+    // The monthly case: the card payment is already in the card account,
     // imported from the bank as an ordinary row. A transfer from the bank
     // account writes its own leg there too, and the card shows the money
     // arriving twice. Nothing used to look at the other account.
@@ -574,13 +574,15 @@ describe.skipIf(skip)('a payee that nearly names an account', () => {
     // came back first, which nobody can see from the reply.
     await createFreshBudget(async () => {
       bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
-      await api.createAccount({ name: 'Tarjeta', offbudget: false } as never, 0);
-      await api.createAccount({ name: 'tarjeta', offbudget: true } as never, 0);
+      // Two names that differ only in case, which is what makes the payee
+      // below name neither of them.
+      await api.createAccount({ name: 'Card', offbudget: false } as never, 0);
+      await api.createAccount({ name: 'card', offbudget: true } as never, 0);
     }, 'batch-ambiguous-payee');
     const before = await count(bank);
 
     const lines = await createTransactions({
-      transactions: [{ account: 'Bank', amount: -200, payee: 'TARJETA', date: '2026-09-02' }],
+      transactions: [{ account: 'Bank', amount: -200, payee: 'CARD', date: '2026-09-02' }],
     });
 
     expect(await count(bank)).toBe(before);
@@ -594,11 +596,18 @@ describe.skipIf(skip)('a payee that nearly names an account', () => {
     let padded = '';
     await createFreshBudget(async () => {
       bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
-      padded = await api.createAccount({ name: '  Ahorro  ', offbudget: false } as never, 0);
+      padded = await api.createAccount({ name: '  Reserve  ', offbudget: false } as never, 0);
     }, 'batch-padded-account');
 
+    // The fixture is the test: the account has spaces and the payee does not,
+    // and without that the trim on the account side is not needed to match.
+    // Checked here because Actual could start trimming names itself, and then
+    // this would pass while testing nothing.
+    const stored = (await api.getAccounts()).find((a) => a.id === padded);
+    expect(stored!.name, 'the engine trimmed the name, so the case is gone').toBe('  Reserve  ');
+
     await createTransactions({
-      transactions: [{ account: 'Bank', amount: -300, payee: 'Ahorro', date: '2026-09-02' }],
+      transactions: [{ account: 'Bank', amount: -300, payee: 'Reserve', date: '2026-09-02' }],
     });
     for (let i = 0; i < 6; i += 1) await api.getCategories();
 
@@ -627,17 +636,17 @@ describe.skipIf(skip)('a payee that nearly names an account', () => {
   }, 60_000);
 
   it('recognises an account name with spaces around it', async () => {
-    // Untrimmed, this became an ordinary payee called "Tarjeta" and the row
+    // Untrimmed, this became an ordinary payee called "Card" and the row
     // went in with no counterpart: in the app it reads as a transfer with
     // nothing on the other side.
     let card = '';
     await createFreshBudget(async () => {
       bank = await api.createAccount({ name: 'Bank', offbudget: false } as never, 0);
-      card = await api.createAccount({ name: 'Tarjeta', offbudget: false } as never, 0);
+      card = await api.createAccount({ name: 'Card', offbudget: false } as never, 0);
     }, 'batch-padded-payee');
 
     const lines = await createTransactions({
-      transactions: [{ account: 'Bank', amount: -200, payee: '  Tarjeta  ', date: '2026-09-02' }],
+      transactions: [{ account: 'Bank', amount: -200, payee: '  Card  ', date: '2026-09-02' }],
     });
     for (let i = 0; i < 6; i += 1) await api.getCategories();
 
@@ -646,6 +655,6 @@ describe.skipIf(skip)('a payee that nearly names an account', () => {
     >;
     expect(onCard, 'no counterpart was created').toHaveLength(1);
     expect(onCard[0].amount).toBe(20000);
-    expect(lines.join('\n')).toContain('Bank -> Tarjeta');
+    expect(lines.join('\n')).toContain('Bank -> Card');
   }, 60_000);
 });

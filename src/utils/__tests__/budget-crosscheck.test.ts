@@ -28,7 +28,7 @@ const groups = (spent: number): BudgetMonthGroup[] =>
 
 beforeEach(() => {
   getAccounts.mockReset().mockResolvedValue([
-    { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
+    { id: 'acc-1', name: 'Main Checking', offbudget: false, closed: false },
   ]);
   getTransactions.mockReset();
 });
@@ -114,7 +114,7 @@ describe('cross-checking a month against its own transactions', () => {
 
   it('ignores off-budget accounts, which do not touch a budget category', async () => {
     getAccounts.mockResolvedValue([
-      { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
+      { id: 'acc-1', name: 'Main Checking', offbudget: false, closed: false },
       { id: 'acc-2', name: 'Inversión', offbudget: true, closed: false },
     ]);
     // One query returns every account's rows, so the filtering happens here.
@@ -131,9 +131,9 @@ describe('cross-checking a month against its own transactions', () => {
     // made the check scale with the number of accounts: 312 ms against 34 ms
     // on a real budget with 14 of them.
     getAccounts.mockResolvedValue([
-      { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
-      { id: 'acc-2', name: 'APAP', offbudget: false, closed: false },
-      { id: 'acc-3', name: 'BanReservas', offbudget: false, closed: false },
+      { id: 'acc-1', name: 'Main Checking', offbudget: false, closed: false },
+      { id: 'acc-2', name: 'Store Card', offbudget: false, closed: false },
+      { id: 'acc-3', name: 'Savings', offbudget: false, closed: false },
     ]);
     getTransactions.mockResolvedValue([]);
 
@@ -159,7 +159,7 @@ describe('cross-checking a month against its own transactions', () => {
     // accounts would count these and invent divergences, then tell the reader
     // to trust the side that is wrong.
     getAccounts.mockResolvedValue([
-      { id: 'acc-1', name: 'BHD', offbudget: false, closed: false },
+      { id: 'acc-1', name: 'Main Checking', offbudget: false, closed: false },
     ]);
     getTransactions.mockResolvedValue([
       { id: 't1', account: 'acc-1', category: 'cat-1', amount: -1000 },
