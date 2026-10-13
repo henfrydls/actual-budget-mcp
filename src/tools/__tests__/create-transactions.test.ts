@@ -25,6 +25,10 @@ vi.mock('../../utils/duplicate-check.js', () => ({
   findPossibleDuplicates: vi.fn().mockResolvedValue([]),
   findUnlinkedCounterpart: vi.fn().mockResolvedValue([]),
   pullBeforeReading: vi.fn().mockResolvedValue(undefined),
+  // The real value, not a stand-in: the window is what the batch reasons
+  // about, and a mock that quietly answered `undefined` would turn every
+  // comparison into one against NaN.
+  COUNTERPART_WINDOW_DAYS: 1,
 }));
 
 import * as api from '@actual-app/api';

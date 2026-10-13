@@ -1,5 +1,5 @@
 import * as api from '@actual-app/api';
-import { transactionsQuery } from './transaction-query.js';
+import { transactionsQuery, dateBetween } from './transaction-query.js';
 import { formatMoney } from './money.js';
 import { syncNow } from './sync-clock.js';
 
@@ -99,11 +99,27 @@ export async function findPossibleDuplicates(
   // the default. Nothing another client writes in between would be seen
   // anyway, because the rows are checked in one pass. The default is
   // unchanged, so a single-row caller still pulls.
-  options: { alreadyPulled?: boolean } = {},
+  options: {
+    alreadyPulled?: boolean;
+    /**
+     * How many days either side of `date` to look, for a caller comparing
+     * against something a different bank posted (#161). Zero, the default,
+     * is the exact date and is what a duplicate of a row means.
+     */
+    withinDays?: number;
+  } = {},
 ): Promise<ExistingTransaction[]> {
   if (!options.alreadyPulled) {
     await pullBeforeReading('checking whether this transaction already exists');
   }
+
+  const within = options.withinDays ?? 0;
+  // `dateBetween` rather than a range written here. The obvious form drops
+  // one of its bounds without saying so, and the note beside the helper has
+  // the measurement; writing it twice is how the same mistake reached
+  // `reconcile_account` and went unnoticed for four releases (#179).
+  const dateFilter =
+    within === 0 ? { date } : dateBetween(shiftDate(date, -within), shiftDate(date, within));
 
   const result = await api.runQuery(
     transactionsQuery('all')
@@ -119,7 +135,7 @@ export async function findPossibleDuplicates(
       // matching the -40 share of a -70 supermarket split, under the name
       // "Super". The parent is still matched, at the full amount, which is the
       // row a duplicate would actually collide with.
-      .filter({ account: accountId, date, amount: amountCents, is_child: false })
+      .filter({ account: accountId, ...dateFilter, amount: amountCents, is_child: false })
       .select(['id', 'date', 'amount', 'notes', 'payee', 'transfer_id']),
   );
   const rows = (result as { data?: Array<Record<string, unknown>> } | undefined)?.data;
@@ -165,8 +181,36 @@ export async function findUnlinkedCounterpart(
   amountCents: number,
   options: { alreadyPulled?: boolean } = {},
 ): Promise<ExistingTransaction[]> {
-  const rows = await findPossibleDuplicates(targetAccountId, date, -amountCents, options);
+  const rows = await findPossibleDuplicates(targetAccountId, date, -amountCents, {
+    ...options,
+    withinDays: COUNTERPART_WINDOW_DAYS,
+  });
   return rows.filter((row) => !row.isTransfer);
+}
+
+/**
+ * How far apart the two sides of one movement can be dated.
+ *
+ * One day either side, fixed. A payment leaving a current account on the 10th
+ * and arriving on the card on the 11th is the ordinary case when the two
+ * statements come from different banks, and the exact date was the only thing
+ * being compared.
+ *
+ * It is a trade, not a free improvement: two genuine movements of the same
+ * size a day apart now collide, and a second card payment of the same amount
+ * does happen. The way out is `allow_duplicate`, and the message says which
+ * row it collided with and on what date, so the person can tell which of the
+ * two cases they are in rather than being stopped without a reason.
+ */
+export const COUNTERPART_WINDOW_DAYS = 1;
+
+/** A date shifted by whole days, in the same `YYYY-MM-DD` form. */
+function shiftDate(date: string, days: number): string {
+  const at = new Date(`${date}T00:00:00`);
+  at.setDate(at.getDate() + days);
+  const month = String(at.getMonth() + 1).padStart(2, '0');
+  const day = String(at.getDate()).padStart(2, '0');
+  return `${at.getFullYear()}-${month}-${day}`;
 }
 
 /**
@@ -179,6 +223,15 @@ export async function findUnlinkedCounterpart(
 export function describeCounterpartClash(
   existing: ExistingTransaction[],
   targetAccountName: string,
+  /**
+   * The date of the row that was about to be written.
+   *
+   * Needed because the two sides can be a day apart, and the sentence used to
+   * say "on the same day" regardless: a row from the 25th was described as
+   * being on the same day as a transfer dated the 26th, which reads as though
+   * the tool had found something that is not there.
+   */
+  newRowDate?: string,
 ): string[] {
   const lines = [
     existing.length === 1
@@ -196,12 +249,33 @@ export function describeCounterpartClash(
     lines.push(`    id: ${t.id}`);
   }
 
+  // From the dates themselves. Same day, a day either side, or a mix of the
+  // two when more than one row matched.
+  const dates = [...new Set(existing.map((t) => t.date))];
+  const sameDay = newRowDate !== undefined && dates.every((d) => d === newRowDate);
+  const many = existing.length > 1;
+
+  lines.push('', `A transfer would create a second row in ${targetAccountName}.`);
+  if (newRowDate === undefined) {
+    lines.push('It is for the same amount.');
+  } else if (sameDay) {
+    lines.push(`It is for the same amount, on the same day: ${newRowDate}.`);
+  } else {
+    // The dates laid out rather than summarised. Saying "a day apart" was
+    // false as soon as two rows matched and one of them was on the same day,
+    // and which of them it is cannot be read off a single sentence anyway.
+    lines.push(
+      'It is for the same amount, on these dates:',
+      `  already there: ${dates.join(', ')}`,
+      `  this row:      ${newRowDate}`,
+    );
+  }
   lines.push(
-    '',
-    `A transfer would create a second row in ${targetAccountName} for the same amount on the`,
-    'same day. If the row above is this same payment, already imported from the bank, you do',
-    'not need the transfer. If it is a different movement that happens to match, call again',
-    'with allow_duplicate: true.',
+    many
+      ? 'If the rows above are this same payment, already imported from the bank, you do not'
+      : 'If the row above is this same payment, already imported from the bank, you do not',
+    'need the transfer. If it is a different movement that happens to match, call again with',
+    'allow_duplicate: true.',
   );
   return lines;
 }

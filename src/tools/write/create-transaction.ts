@@ -128,7 +128,7 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     if (target) {
       const counterpart = await findUnlinkedCounterpart(target.id, txnDate, amountCents);
       if (counterpart.length > 0) {
-        return describeCounterpartClash(counterpart, target.name);
+        return describeCounterpartClash(counterpart, target.name, txnDate);
       }
     }
 
