@@ -3,8 +3,11 @@ import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolvePayeeIn, resolveByWholeName } from '../../utils/resolvers.js';
+import { amountToCents, formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
 import {
+  AMOUNT_OPS,
+  refuseOpOnAmount,
   ID_FIELDS,
   LIST_FIELDS,
   isTextOpOnIdField,
@@ -53,6 +56,89 @@ async function resolveRulePayee(value: string): Promise<{ id: string; name: stri
   const payees = await api.getPayees();
   const id = resolvePayeeIn(payees, value);
   return { id, name: payees.find((p) => p.id === id)?.name ?? value };
+}
+
+/**
+ * The fields that hold an amount, which Actual keeps as an integer.
+ *
+ * One of them: the engine's own field table has a single numeric field,
+ * `amount`. A value typed as a human writes it has to become that integer
+ * before it is saved, and what happens when it does not was measured both
+ * ways:
+ *
+ *   condition `amount is "-45.50"`   the engine refuses the rule outright,
+ *                                    "Value must be a number or between",
+ *                                    and the tool answered with a bare
+ *                                    "Failed creating a new rule". So no rule
+ *                                    about an amount could be made here at all.
+ *
+ *   action `set amount = "-45.50"`   saved without complaint, and then every
+ *                                    import that matched it died on
+ *                                    `Can't convert to integer: "-45.50"`.
+ *                                    The rule sits there breaking imports.
+ *
+ * The amount is read the way every other amount this server takes is read, in
+ * the budget's own units: 45.50, not 4550.
+ */
+const AMOUNT_FIELDS: ReadonlySet<string> = new Set(['amount']);
+
+function amountForRule(field: string, value: string, role: 'condition' | 'action'): number {
+  // Trimmed before anything else, so the emptiness check below sees a value
+  // of spaces for what it is.
+  const text = value.trim();
+
+  // Empty first, and on its own, because `Number("")` and `Number("   ")` are
+  // both 0 and 0 passes every check after this one. Measured: an action
+  // `set amount = ""` was saved, and then each import that matched it moved a
+  // row of -100 to 0. A figure nobody typed, losing data quietly, every time.
+  if (text === '') {
+    // What a zero would do differs by where it is, and saying the wrong one
+    // sends the reader looking for the wrong thing.
+    throw new Error(
+      role === 'action'
+        ? `\`${field}\` needs a figure. An empty value would be saved as 0, which sets ` +
+            `every matching transaction to nothing.`
+        : `\`${field}\` needs a figure. An empty value would be saved as 0, so the rule ` +
+            `would match transactions of exactly zero.`,
+    );
+  }
+
+  // A plain decimal, and nothing else. `Number` is far more generous than
+  // anyone writing an amount means it to be: "0x10" is 16, "1e3" is 1000, and
+  // "1e20" is past the point where an integer is exact.
+  if (!/^[-+]?\d+(\.\d+)?$/.test(text)) {
+    throw new Error(
+      `\`${field}\` takes a figure like 45.50 or -45.50, and "${value}" is not one. ` +
+        `Write it the way you would say it, not in cents and not in any other notation.`,
+    );
+  }
+
+  // How many decimals fit is the conversion's own answer: `amountToCents(1)`
+  // is 100 where there are two of them and 1 where the currency has none, so
+  // this follows the budget without repeating the table.
+  const places = String(amountToCents(1)).length - 1;
+  const written = (text.split('.')[1] ?? '').length;
+  if (written > places) {
+    throw new Error(
+      places === 0
+        ? `\`${field}\` takes a whole figure in this budget's currency, and "${value}" has ` +
+            `decimals.`
+        : `\`${field}\` takes at most ${places} decimal${places === 1 ? '' : 's'} in this ` +
+            `budget's currency, and "${value}" has ${written}. Rounding it here would save a ` +
+            `figure you did not write.`,
+    );
+  }
+
+  const cents = amountToCents(Number(text));
+  // A figure so large that the integer is no longer exact: "100000000000000000000"
+  // is a plain decimal and converts to 1e+22, which is not a figure anybody
+  // can be stored or compared against meaningfully.
+  if (!Number.isSafeInteger(cents)) {
+    throw new Error(
+      `\`${field}\` cannot hold ${text}: it is past the largest figure that stays exact.`,
+    );
+  }
+  return cents;
 }
 
 /**
@@ -106,7 +192,8 @@ async function resolveRuleValue(
   field: string,
   op: string,
   value: string | string[],
-): Promise<{ stored: string | string[]; matched: string[] }> {
+  role: 'condition' | 'action' = 'condition',
+): Promise<{ stored: string | string[] | number; matched: string[] }> {
   const list = Array.isArray(value) ? value : [value];
 
   // Refused here rather than by the engine, which answers a list on the wrong
@@ -125,6 +212,23 @@ async function resolveRuleValue(
   }
   if (list.length === 0) {
     throw new Error(`\`${op}\` needs at least one value.`);
+  }
+
+  // After the list checks, which already say the useful thing about `oneOf`
+  // on a field that cannot take one (#171), and before anything is saved.
+  if (AMOUNT_FIELDS.has(field)) {
+    // Refused here rather than by the engine, which answers an operator it
+    // does not take on a number with the same bare "Failed creating a new
+    // rule" this tool exists to stop handing over. Measured: `isNot` is one
+    // of them, and it was being offered in this tool's own advice.
+    if (!AMOUNT_OPS.has(op)) {
+      throw new Error(refuseOpOnAmount(field, op));
+    }
+    const cents = amountForRule(field, list[0], role);
+    // Said back, because the reading is the thing that was wrong: 45.50 is
+    // forty five and a half, not forty five cents, and a rule runs until
+    // somebody deletes it.
+    return { stored: cents, matched: [`${formatMoney(cents)}, stored as ${cents}`] };
   }
 
   if (!ID_FIELDS.has(field)) {
@@ -166,7 +270,7 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
   const condition = await resolveRuleValue(condition_field, condition_op, condition_value);
   const resolvedCondValue: unknown = condition.stored;
 
-  const action = await resolveRuleValue(action_field, 'is', action_value);
+  const action = await resolveRuleValue(action_field, 'is', action_value, 'action');
   const resolvedActionValue: unknown = action.stored;
 
   const rule = {
@@ -247,14 +351,17 @@ export function registerCreateRule(server: McpServer): void {
             'are refused on payee, category, category_group and account, which Actual stores ' +
             'as ids: they would compare against the id. For text on a payee, imported_payee ' +
             'holds what the row arrived with, and payee_name the payee name, once that payee ' +
-            'exists.',
+            'exists. On amount the operators are is, isapprox, gt, gte, lt and lte; isNot is ' +
+            'not one of them.',
         ),
       condition_value: z
         .union([z.string(), z.array(z.string())])
         .describe(
           'Value to match against. For payee, category, category_group and account, a whole ' +
-            'name or an ID. Pass a list for oneOf and notOneOf; a single value for every ' +
-            'other operator.',
+            'name or an ID. For amount, the figure as you would say it (45.50, or -45.50 for ' +
+            'money going out), not in cents. Spending is negative, so "more than 45.50 spent" ' +
+            'is lt -45.50: gt -45.50 would also catch every deposit and every zero. Pass a ' +
+            'list for oneOf and notOneOf; a single value for every other operator.',
         ),
       action_field: z
         .string()
@@ -267,9 +374,9 @@ export function registerCreateRule(server: McpServer): void {
       action_value: z
         .string()
         .describe(
-          'Value to set (category name/ID, payee name/ID, account name/ID, or note text). ' +
-            'A payee, category or account must already exist; use create_payee or ' +
-            'create_category for a new one.',
+          'Value to set (category name/ID, payee name/ID, account name/ID, note text, or an ' +
+            'amount as you would say it). A payee, category or account must already exist; ' +
+            'use create_payee or create_category for a new one.',
         ),
       stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
     },
