@@ -253,18 +253,58 @@ describe('amounts in a currency with no decimal places', () => {
     expect(amountToCents(100)).toBe(100);
   });
 
-  it('asks both stores before giving up on the read', async () => {
-    // One store missing is not a failed read: the value lives in whichever
-    // of them has it, so a budget whose currency was cleared is still
-    // recognised when only the other one answers.
+  it('keeps the count when only the store that knows is unreachable', async () => {
+    // The shape this takes on a real budget, and the reason "either store
+    // answered" is not a reading. Measured on an open budget in JPY:
+    //
+    //   preferences/get   {"defaultCurrencyCode":"JPY"}
+    //   load-prefs        {"id":"...","budgetName":"..."}
+    //
+    // `load-prefs` never carries a currency, so when `preferences/get` is the
+    // one that fails, counting the other as an answer says "no currency set"
+    // about a budget in yen, and the next write is a hundred times too large.
+    send.mockResolvedValue({ defaultCurrencyCode: 'JPY' });
+    await refreshBudgetDecimalPlaces();
+    expect(budgetDecimalPlaces()).toBe(0);
+
     send.mockImplementation(async (method: string) => {
       if (method === 'preferences/get') throw new Error('unavailable');
-      return {};
+      return { id: 'budget-1', budgetName: 'Household' };
     });
+    expect(await refreshBudgetDecimalPlaces()).toBe(0);
+    expect(amountToCents(100)).toBe(100);
+  });
+
+  it('keeps the count when the budget is closed', async () => {
+    // Measured with the budget closed: `preferences/get` throws and
+    // `load-prefs` answers `null` without throwing. Neither said anything
+    // about a currency, so neither can move the count.
+    send.mockResolvedValue({ defaultCurrencyCode: 'KRW' });
+    await refreshBudgetDecimalPlaces();
+    expect(budgetDecimalPlaces()).toBe(0);
+
+    send.mockImplementation(async (method: string) => {
+      if (method === 'preferences/get') throw new Error("Cannot read properties of null");
+      return null;
+    });
+    expect(await refreshBudgetDecimalPlaces()).toBe(0);
+  });
+
+  it('still asks both stores, in that order', async () => {
+    // The fallback is kept: some tooling writes with `save-prefs`, and a
+    // value from there is still a value. What changed is that an answer
+    // without one does not count as a reading.
+    send.mockResolvedValue({});
     send.mockClear();
     await refreshBudgetDecimalPlaces();
-    expect(budgetDecimalPlaces()).toBe(DEFAULT_DECIMAL_PLACES);
     expect(send.mock.calls.map((c) => c[0])).toEqual(['preferences/get', 'load-prefs']);
+  });
+
+  it('takes a currency from the metadata store when that is where it is', async () => {
+    send.mockImplementation(async (method: string) =>
+      method === 'preferences/get' ? {} : { defaultCurrencyCode: 'JPY' },
+    );
+    expect(await refreshBudgetDecimalPlaces()).toBe(0);
   });
 });
 

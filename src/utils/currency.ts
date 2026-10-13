@@ -49,20 +49,47 @@ export async function budgetCurrencyCode(): Promise<string | undefined> {
  * because the value lives in whichever of them has it.
  */
 export async function budgetCurrencyOutcome(): Promise<{ read: boolean; code?: string }> {
-  let read = false;
-  for (const method of ['preferences/get', 'load-prefs']) {
-    try {
-      const prefs = (await getInternal().send(method as never)) as
-        | { defaultCurrencyCode?: unknown }
-        | undefined;
-      read = true;
-      const code = prefs?.defaultCurrencyCode;
-      if (typeof code === 'string' && code.length > 0) return { read, code };
-    } catch {
-      // Either store may be unavailable; the other one is still worth asking.
-    }
+  // `preferences/get` is the store that holds it, and the only one whose
+  // silence means anything: if it answers without a currency, this budget has
+  // none. `load-prefs` is still asked, because some tooling writes with
+  // `save-prefs`, but only a value from it counts.
+  //
+  // Measured, which is what this distinction is built on. On an open budget
+  // with JPY set:
+  //
+  //   preferences/get   {"defaultCurrencyCode":"JPY"}
+  //   load-prefs        {"id":"...","budgetName":"..."}      no currency, ever
+  //
+  // and on a closed one, `preferences/get` throws while `load-prefs` answers
+  // `null` without throwing. So "either store answered" is not a reading:
+  // `load-prefs` answers in both of those, and treating that as "no currency
+  // set" put a budget in yen back on hundredths at exactly the moment the
+  // store that knows was unreachable, writing 10,000 where 100 was asked for.
+  let synced = false;
+  try {
+    const prefs = (await getInternal().send('preferences/get' as never)) as
+      | { defaultCurrencyCode?: unknown }
+      | undefined;
+    synced = true;
+    const code = prefs?.defaultCurrencyCode;
+    if (typeof code === 'string' && code.length > 0) return { read: true, code };
+  } catch {
+    // It said nothing at all, which is not the same as saying "none".
   }
-  return { read };
+
+  try {
+    const prefs = (await getInternal().send('load-prefs' as never)) as
+      | { defaultCurrencyCode?: unknown }
+      | undefined;
+    const code = prefs?.defaultCurrencyCode;
+    if (typeof code === 'string' && code.length > 0) return { read: true, code };
+  } catch {
+    // Either store may be unavailable; a value from either is what counts.
+  }
+
+  // Nothing carried a currency. That is an answer only if the store that
+  // keeps it answered.
+  return { read: synced };
 }
 
 /**
