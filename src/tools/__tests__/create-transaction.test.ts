@@ -84,7 +84,7 @@ describe('createTransaction (#26 explicit category must win)', () => {
     expect(api.updateTransaction).not.toHaveBeenCalled();
   });
 
-  it('looks the row up only when a category has to be enforced', async () => {
+  it('looks the row up once, and writes nothing when there is no category to enforce', async () => {
     // Recorded inside the mock, per call. Reading `lastQuery` after the fact
     // only ever describes whichever query happened to run last, so it would
     // stop meaning anything the moment another query were added after this
@@ -98,9 +98,13 @@ describe('createTransaction (#26 explicit category must win)', () => {
     await createTransaction({ account: 'Checking', amount: -50, date: '2026-06-05' });
 
     expect(api.addTransactions).toHaveBeenCalledOnce();
-    // The duplicate check queries before writing; what must not happen is the
-    // marker lookup, which only runs when a category has to be enforced.
-    expect(byId).toHaveLength(0);
+    // This used to require no marker lookup at all, on the grounds that
+    // nothing had to be enforced. The lookup earns its keep now: it is how
+    // the reply can say that a rule chose the category, which the caller
+    // otherwise discovers in a report weeks later. One lookup, not two, and
+    // it is local.
+    expect(byId).toHaveLength(1);
+    // What must not happen is still the write.
     expect(api.updateTransaction).not.toHaveBeenCalled();
   });
 

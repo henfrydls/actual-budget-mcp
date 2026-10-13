@@ -159,6 +159,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
+  // What a rule did to the row, for the reply. Both are about a transaction
+  // that is not what the caller described, which is the part worth saying.
+  let categoryFromRule: string | undefined;
+  let splitByRule = false;
+
   try {
     await api.addTransactions(accountId, [transaction as any], {
       learnCategories: false,
@@ -169,6 +174,40 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // its marker rather than by "new rows around this date". The old diff could
     // reach another process's row and give it this transaction's category:
     // silent, on the success path, and invisible in a reconciliation.
+    if (!categoryId) {
+      // Nobody asked for a category, so anything the row ended up with was put
+      // there by a rule, and the reply said nothing about it: the transaction
+      // came back looking uncategorised and the category turned up later in a
+      // report. Measured against the engine, a rule's category is on the row
+      // in the first read after the write, so this costs one local query and
+      // no waiting.
+      //
+      // In its own try, and this is the whole point of the block: the write
+      // has already happened. `findByMarker` swallows its own failures but
+      // `getCategories` does not, and a throw from here lands in the catch
+      // below, which decides the write may not have happened, reports an
+      // error and skips the sync. Measured with `getCategories` rejecting:
+      // the row was in the budget, with its category, and the reply said
+      // Error. Nothing this block learns is worth telling someone their
+      // transaction failed when it did not.
+      try {
+        const ours = await findByMarker(marker);
+        const row = (ours ?? [])[0];
+        if (row?.is_parent === true) {
+          // A rule can split the row instead. The parent holds no category in
+          // that case, so "uncategorised" would be the wrong word for it too.
+          splitByRule = true;
+        } else if (row?.category) {
+          const categories = await api.getCategories();
+          categoryFromRule =
+            categories.find((c) => c.id === row.category)?.name ?? undefined;
+        }
+      } catch {
+        // The reply says nothing about a category rather than nothing about
+        // the transaction.
+      }
+    }
+
     if (categoryId) {
       const ours = await findByMarker(marker);
       // A rule can turn what we sent into a split. Actual ignores the category
@@ -240,7 +279,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   } else if (input.payee) {
     lines.push(`  Payee:    ${input.payee}`);
   }
-  if (input.category) lines.push(`  Category: ${input.category}`);
+  if (input.category) {
+    lines.push(`  Category: ${input.category}`);
+  } else if (categoryFromRule) {
+    // Named as a rule's doing, not presented as if it had been asked for: one
+    // of them is a choice the caller made and the other is something that
+    // happened to the transaction, and a rule can be wrong.
+    lines.push(`  Category: ${categoryFromRule} (set by one of your rules)`);
+  } else if (splitByRule) {
+    lines.push('  A rule split this into parts, so its category lives on them.');
+  }
   if (transferPayeeId) {
     // Said out loud, because the caller asked for a payee and got a transfer,
     // and in #137 the person did not find out until they went looking for the
@@ -304,6 +352,29 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         lines.push(
           `The category stays on the row in ${acctName}, but an off-budget account is ` +
             `outside your budget, so it does not count there. To make this ` +
+            `${arrived ? 'income' : 'spending'} count, set a category on the row in ` +
+            `${otherName}.`,
+        );
+      } else if (categoryFromRule && categoryCounts) {
+        // A rule put one there, so asking for a category asks for something
+        // that is done. Where it counts is the part still worth saying.
+        lines.push(
+          `It counts in ${acctName}, under ${categoryFromRule} (set by one of your rules).`,
+        );
+      } else if (categoryFromRule) {
+        // The rule's category is on the row that does not count, so the
+        // request stands, and saying only "give it a category" would read as
+        // if the row had none.
+        //
+        // Not reachable with the engine as it is, and kept deliberately.
+        // Measured both directions of a transfer with an off-budget side and
+        // a rule keyed on notes: Actual leaves the off-budget row with no
+        // category, so `categoryFromRule` is empty whenever `categoryCounts`
+        // is false. The branch is here for the day that changes, which is why
+        // no test covers it: there is no way to ask for it today.
+        lines.push(
+          `A rule set ${categoryFromRule} on the row in ${acctName}, but an off-budget ` +
+            `account is outside your budget, so it does not count there. To make this ` +
             `${arrived ? 'income' : 'spending'} count, set a category on the row in ` +
             `${otherName}.`,
         );

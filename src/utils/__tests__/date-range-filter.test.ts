@@ -66,7 +66,14 @@ describe('a date range in a query', () => {
       offenders,
       'only the first of them is applied: use dateBetween, which wraps the two in $and',
     ).toEqual([]);
-  });
+    // Thirty seconds, not the default five. This parses every source file in
+    // the repository with the TypeScript compiler, which takes a couple of
+    // seconds on an idle machine and more than five under a loaded one: it
+    // timed out in a full run while passing on its own, and every file added
+    // to src brings it closer. A guard that fails for being slow trains
+    // people to re-run the suite until it is green, which is the opposite of
+    // what a guard is for.
+  }, 30_000);
 
   it('finds the form that does work, so this is not passing over nothing', () => {
     // A guard that parses correctly and matches nothing reports agreement
