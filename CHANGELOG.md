@@ -1,5 +1,132 @@
 # Changelog
 
+## 0.10.4
+
+Rules are most of this release. Four bugs with one shape: the rule was
+reported as created, it appeared in `get_rules` like any other, and it never
+fired. A rule that does nothing leaves no trace of itself, so if you wrote
+rules through this server before now, the section on what to look for is the
+part worth reading.
+
+### A rule on a payee now runs (#167)
+
+Actual stores a payee in a rule by its id. `create_rule` saved the name as
+typed, so `IF payee is "Amazon" THEN set category = "Groceries"` was created,
+listed, and matched nothing. An action that set a payee was worse: it left the
+transactions it touched pointing at a payee that does not exist.
+
+Names are resolved to ids before the rule is saved, in conditions and in
+actions. An exact name wins, whatever the case; part of a name works when only
+one payee fits; a name that fits more than one is refused and the reply lists
+them, rather than quietly putting the rule on "Amazon Prime". A name that
+matches nothing is refused as well, in an action too, so a typo does not become
+a new payee that the rule then moves transactions to. The hidden payee Actual
+keeps for each account, for transfers, is not matched by name, so a rule on
+"Checking" does not catch every transfer into that account.
+
+Found and fixed by @bubbletroubles in #168, who reported #169 along the way.
+
+### The other three fields a rule keeps by id (#170, #171)
+
+`account` and `category_group` had the same bug, and are resolved the same way
+now, in conditions and in actions. All four fields match by id or by a whole
+name, because a name matched loosely in one field and strictly in another is a
+difference nobody sees until a rule does something nobody asked for.
+
+`oneOf` and `notOneOf` had never worked from here. The engine wants a list and
+a single string went out, so it answered "Failed creating a new rule" and said
+nothing about which part was wrong. They take a list now, each element resolved
+on its own, and one unusable element refuses the whole rule rather than saving
+half a list. `oneOf` on a field that cannot take a list is refused here, with
+the field named, instead of by the engine.
+
+Setting an account in an action now says what it does: it moves the
+transaction to that account, which is not what everyone expects from a rule.
+
+A closed account cannot go in a rule at all. It comes back from neither
+`getAccounts()` nor a query, so naming it fails and so does its id, and the
+message says to reopen the account rather than leaving you to guess.
+
+### A text operator on a field stored by id is refused (#169)
+
+`payee contains "Netfl"` never matched Netflix, and `payee contains "-"`
+matched nearly every transaction, because what the engine compares against is
+the id, and a UUID is mostly hyphens. Measured on a fresh budget: a rule keyed
+on a category's name did not fire, one keyed on the first characters of its id
+did, and `doesNotContain` on the name fired on everything, which is the same
+fact from the side that does damage unnoticed.
+
+`contains`, `doesNotContain` and `matches` are refused on all four fields the
+engine keeps by id, and the message names the way out instead of only the
+refusal. For matching a payee as text there are two fields, and neither is the
+one that always works: `imported_payee` holds the text the row arrived with,
+which is what someone reaching for `payee contains` usually wants and the only
+one that fires on the first charge from a shop you have never seen;
+`payee_name` compares against the payee's current name, once that payee
+exists.
+
+### What to look for in the rules you already have
+
+Rules written before this release are still there, and the broken ones cannot
+be spotted by reading them: the condition looks ordinary and what makes it
+wrong is invisible. `get_rules` now does that reading for you.
+
+- It reads all four id fields back as names, in lists and in actions, so a
+  rule no longer comes back as a row of UUIDs.
+- It marks a condition that holds a name where an id belongs, which is a rule
+  that has never matched anything, and tells that apart from an id that
+  resolves to nothing, which was pointing at something since deleted.
+- It marks a text operator on an id field, says what it compares against and
+  what to use instead, and counts them at the end, which is the part worth
+  acting on in a long list.
+
+It also stopped calling working rules broken. `category is null` fires on
+transactions with no category and is shown as "(none)" rather than as the word
+null; a rule on a closed account says the account can be reopened and no
+longer suggests deleting anything; an id written in a different case gets its
+own line with the name, because the engine compares ids exactly; and an empty
+list, which matches nothing, used to print as an empty string with no warning.
+
+### One payment, two banks, two dates (#161)
+
+A card payment appears on both statements, as money leaving one account and
+arriving at the other. 0.10.3 recognised the two sides when they were dated
+the same day and the other side was already in the budget. A monthly import
+produces two cases it did not cover, and both wrote the payment twice:
+
+- The other side arrives in the same batch as an ordinary row, because the
+  card statement calls it "PAYMENT RECEIVED" rather than naming an account.
+- The two banks post it on different days, which is the normal case.
+
+Both are recognised now, within a day either side, and the reply says which
+rows it took to be the same movement and on which dates, so you can tell it is
+wrong. Rows are paired one to one: three payments of the same amount in one
+week stay three payments. `create_transfer` makes the same check before
+writing.
+
+### reconcile_account stays inside the window it names (#179)
+
+A date range written as one object drops its upper bound in AQL, with no
+error. Measured over five consecutive days, asking for the 24th to the 26th
+returned the 27th as well.
+
+`reconcile_account` used that form in both of its searches, so transactions
+dated after the cutoff were offered as explanations for a difference the
+compared balance does not count, and a row on another account eleven days past
+the cutoff was offered first, as the most telling. The closing line counted
+them too. The correct form now lives in one place, with a test over the syntax
+tree that fails on the wrong shape anywhere in the source.
+
+### Known, and not fixed here
+
+- In a currency with no decimal places (JPY, KRW, IRR), amounts are out by a
+  factor of a hundred in both directions: asking to spend 100 records 10,000,
+  and a real 1,000 is reported as 10.00. Budgets in any other currency are
+  unaffected. (#141)
+- `allow_duplicate` in a batch is still all or nothing. To let one legitimate
+  repeat through, it switches off the approximate checks for every row in the
+  call. The `imported_id` checks stay on. (#175)
+
 ## 0.10.3
 
 ### Your reads now see what the Actual app sees (#126)
