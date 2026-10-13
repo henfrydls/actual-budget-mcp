@@ -416,6 +416,40 @@ describe.skipIf(skip)('a payment that arrives from both sides', () => {
       );
     }, 60_000);
 
+    it('does not let a repeated row take a transfer with it', async () => {
+      // The batch holds the same credit twice. The repeat is reported as a
+      // repeat, and if it still takes a transfer, its twin is never named and
+      // the reply counts it among the rows that were fine, so the person
+      // sends it again and hits the collision on the second attempt.
+      await budget('batch-repeat-takes-transfer');
+
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-24' },
+          { account: 'Bank', amount: -800, payee: 'Card', date: '2026-09-25' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-24' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT ONE', date: '2026-09-24' },
+          { account: 'Card', amount: 800, payee: 'PAYMENT TWO', date: '2026-09-25' },
+        ],
+      });
+      const rows = lines.join('\n').split('\n');
+
+      const third = rows.findIndex((l) => l.includes('row 3  Card'));
+      const fourth = rows.findIndex((l) => l.includes('row 4  Card'));
+      const fifth = rows.findIndex((l) => l.includes('row 5  Card'));
+
+      // Row 3 pairs with the transfer on its own date, row 5 with the other,
+      // and row 4 is only the repeat.
+      expect(rows[third + 1]).toContain('transfer in row 1');
+      expect(rows[fourth + 1]).toContain('repeats row 3');
+      expect(fifth, 'the row that collides was left out of the message').toBeGreaterThan(-1);
+      expect(rows[fifth + 1]).toContain('transfer in row 2');
+      // Three of the five collide, and the two that are counted as fine are
+      // the transfers, which do. Before this, row 5 was among them.
+      expect(lines[0]).toContain('3 of 5 rows could not be used');
+      expect(lines.join('\n')).toContain('The other 2 rows were fine');
+    }, 60_000);
+
     it('pairs every row it can with the transfers sent the other way round', async () => {
       await budget('batch-max-pairing-reversed');
 
@@ -548,6 +582,35 @@ describe.skipIf(skip)('a payment that arrives from both sides', () => {
 
       expect(text).toContain('already there: 2026-09-26');
       expect(text).toContain('this row:      2026-09-25');
+    }, 60_000);
+
+    it('does not call two dates a day apart when one of them is not', async () => {
+      // Two rows match, one on the transfer's own date and one the day
+      // before. Summarising that as "a day apart" is false for half of it.
+      await budget('transfer-mixed-dates', async () => {
+        const accounts = await api.getAccounts();
+        await api.addTransactions(
+          accounts.find((a) => a.name === 'Card')!.id,
+          [
+            { date: '2026-09-25', amount: 80000, payee_name: 'PAYMENT ONE' },
+            { date: '2026-09-24', amount: 80000, payee_name: 'PAYMENT TWO' },
+          ] as never,
+          { learnCategories: false, runTransfers: false },
+        );
+      });
+
+      const result = await (await transferHandler())({
+        from_account: 'Bank',
+        to_account: 'Card',
+        amount: 800,
+        date: '2026-09-25',
+      });
+      const text = result.content[0].text;
+
+      expect(text, 'summarised two different relationships as one').not.toContain('a day apart');
+      expect(text).toContain('on these dates:');
+      expect(text).toContain('2026-09-25');
+      expect(text).toContain('2026-09-24');
     }, 60_000);
 
     it('says rows in the plural when it found more than one', async () => {

@@ -261,10 +261,11 @@ export function describeCounterpartClash(
   } else if (sameDay) {
     lines.push(`It is for the same amount, on the same day: ${newRowDate}.`);
   } else {
-    // Each date on its own line rather than one long sentence: the dates are
-    // what the reader has to compare, and a window of a day means they differ.
+    // The dates laid out rather than summarised. Saying "a day apart" was
+    // false as soon as two rows matched and one of them was on the same day,
+    // and which of them it is cannot be read off a single sentence anyway.
     lines.push(
-      `It is for the same amount, and the dates are a day apart:`,
+      'It is for the same amount, on these dates:',
       `  already there: ${dates.join(', ')}`,
       `  this row:      ${newRowDate}`,
     );

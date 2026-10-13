@@ -24,6 +24,7 @@ import {
   transferPairKey,
   type TransferEffect,
 } from '../../utils/transfer-rule.js';
+import { pairCounterparts } from '../../utils/counterpart-pairing.js';
 
 /**
  * Create many transactions in one call.
@@ -141,28 +142,6 @@ interface ResolvedRow {
 interface Problem {
   index: number;
   reason: string;
-}
-
-/**
- * Whether two `YYYY-MM-DD` dates are at most `days` apart, counted in days.
- *
- * In days and not in hours. The first version parsed both as local midnight
- * and compared milliseconds against 24 hours, which is wrong on the day a
- * clock goes back: that day is 25 hours long, so two consecutive dates are
- * more than 24 hours apart and the pair stopped being recognised. Measured
- * with TZ=America/New_York on 1 and 2 November: the batch wrote both rows and
- * the card ended up with the money twice, while the same batch in a zone
- * without daylight saving refused it.
- *
- * `Date.UTC` has no offsets to change, so the subtraction is exact everywhere.
- */
-function dayNumber(date: string): number {
-  const [year, month, day] = date.split('-').map(Number);
-  return Date.UTC(year, month - 1, day) / 86_400_000;
-}
-
-function withinDays(a: string, b: string, days: number): boolean {
-  return Math.abs(dayNumber(a) - dayNumber(b)) <= days;
 }
 
 function describeRow(row: BatchInput, index: number): string {
@@ -430,82 +409,31 @@ export async function createTransactions(input: {
       //
       // The ordinary row is the one refused, not the transfer: the transfer
       // records both sides, so it is the row that can go.
-      const transfers = resolved.filter((r) => r.transfer);
-      if (transfers.length > 0) {
-        // The best pairing, not the first one that fits.
-        //
-        // A transfer writes one counterpart, so it can account for one row,
-        // and taking the nearest pair as it comes leaves rows unreported that
-        // a different arrangement would have caught. Measured on a batch of
-        // two transfers and two credits, where the card posts a day late:
-        // taking the exact-date pair first used up the transfer the second
-        // credit needed, so that credit was left out of the message and
-        // counted among the rows that "were fine". Nothing is written either
-        // way, since the batch is all or nothing, but the person sends the
-        // list again without the row they were told about and the other one
-        // collides on the second attempt, having read something false in
-        // between.
-        //
-        // So this takes the arrangement that pairs the most rows, by trying
-        // each unpaired row against its candidates and letting it displace a
-        // pairing that has somewhere else to go. Candidates are ordered by
-        // distance, so an exact date is preferred where the choice is free,
-        // and rows are processed in the order they were sent, so the same
-        // batch always reads the same way.
-        const byIndex = new Map(resolved.map((row) => [row.index, row]));
-        const options = new Map<number, number[]>();
-        for (const ordinary of resolved) {
-          if (ordinary.transfer) continue;
-          const fits = transfers
-            .filter(
-              (t) =>
-                t.transfer!.targetId === ordinary.accountId &&
-                t.amountCents === -ordinary.amountCents &&
-                withinDays(t.date, ordinary.date, COUNTERPART_WINDOW_DAYS),
-            )
-            .map((t) => ({
-              index: t.index,
-              apart: Math.abs(dayNumber(t.date) - dayNumber(ordinary.date)),
-            }))
-            .sort((a, b) => a.apart - b.apart || a.index - b.index)
-            .map((t) => t.index);
-          if (fits.length > 0) options.set(ordinary.index, fits);
-        }
-
-        /** Which ordinary row each transfer is currently paired with. */
-        const pairedWith = new Map<number, number>();
-
-        const assign = (ordinaryIndex: number, tried: Set<number>): boolean => {
-          for (const transferIndex of options.get(ordinaryIndex) ?? []) {
-            if (tried.has(transferIndex)) continue;
-            tried.add(transferIndex);
-            const holder = pairedWith.get(transferIndex);
-            if (holder === undefined || assign(holder, tried)) {
-              pairedWith.set(transferIndex, ordinaryIndex);
-              return true;
-            }
-          }
-          return false;
-        };
-
-        for (const ordinaryIndex of [...options.keys()].sort((a, b) => a - b)) {
-          assign(ordinaryIndex, new Set<number>());
-        }
-
-        for (const [transferIndex, ordinaryIndex] of [...pairedWith.entries()].sort(
-          (a, b) => a[1] - b[1],
-        )) {
-          const transfer = byIndex.get(transferIndex)!;
-          const ordinary = byIndex.get(ordinaryIndex)!;
-          complain(
-            ordinary.index,
-            `is the other side of the transfer in row ${transfer.index + 1}: that row moves ` +
-              `${formatMoney(Math.abs(transfer.amountCents))} on ${transfer.date} and writes ` +
-              `the matching row in ${ordinary.accountName} itself, and this one records the ` +
-              `same money on ${ordinary.date}. Keeping both puts it in twice. Drop this row, ` +
-              `or pass allow_duplicate if they really are two movements.`,
-          );
-        }
+      // Rows already reported are left out: one of them taking a transfer
+      // with it is how a row that does collide ends up counted among the ones
+      // that were fine. Measured on a batch holding the same credit twice.
+      const byIndex = new Map(resolved.map((row) => [row.index, row]));
+      for (const pair of pairCounterparts(
+        resolved.map((row) => ({
+          index: row.index,
+          accountId: row.accountId,
+          amountCents: row.amountCents,
+          date: row.date,
+          transferTargetId: row.transfer?.targetId,
+        })),
+        COUNTERPART_WINDOW_DAYS,
+        flagged,
+      )) {
+        const transfer = byIndex.get(pair.transfer)!;
+        const ordinary = byIndex.get(pair.ordinary)!;
+        complain(
+          ordinary.index,
+          `is the other side of the transfer in row ${transfer.index + 1}: that row moves ` +
+            `${formatMoney(Math.abs(transfer.amountCents))} on ${transfer.date} and writes ` +
+            `the matching row in ${ordinary.accountName} itself, and this one records the ` +
+            `same money on ${ordinary.date}. Keeping both puts it in twice. Drop this row, ` +
+            `or pass allow_duplicate if they really are two movements.`,
+        );
       }
 
       for (const row of resolved) {
