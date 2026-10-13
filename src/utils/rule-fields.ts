@@ -137,11 +137,58 @@ export const LIST_FIELDS = new Set([
   'imported_payee',
 ]);
 
+/**
+ * The operators the engine takes on a numeric field.
+ *
+ * Measured, one rule per operator, on `amount`: `is`, `isapprox`, `gt`,
+ * `gte`, `lt` and `lte` are accepted, and `isNot`, `contains` and `oneOf` come
+ * back as `Invalid condition operator`, which reaches the caller as a bare
+ * "Failed creating a new rule". So advice that offers `isNot` on an amount
+ * sends someone into exactly the message this is meant to replace.
+ *
+ * `isbetween` is accepted by the engine too, and is left out because it takes
+ * two figures in one value and this server has no way to write that yet.
+ */
+export const AMOUNT_OPS: ReadonlySet<string> = new Set([
+  'is',
+  'isapprox',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+]);
+
+/**
+ * The fields Actual stores as a number, which is where an amount lives.
+ *
+ * One field today, and it is money, which both of its uses depend on: a value
+ * read from one is formatted as money rather than printed as the integer the
+ * engine keeps (#182), and a value written to one is converted from the
+ * figure someone typed (#183). `FIELD_INFO` is not exported, so the list is
+ * written out by hand like `ID_FIELDS`, and the same test holds it to the
+ * installed engine: a later version with a numeric field that is not money
+ * would otherwise be formatted as currency, and parsed as an amount, without
+ * anyone noticing.
+ */
+export const NUMBER_FIELDS: ReadonlySet<string> = new Set(['amount']);
+
 export function refuseListOnField(field: string, op: string): string {
+  const alternatives = NUMBER_FIELDS.has(field)
+    ? `Use ${[...AMOUNT_OPS].map((o) => `\`${o}\``).join(', ')} for one figure`
+    : 'Use `is` or `isNot` for one value';
   return (
     `A rule cannot use \`${op}\` on \`${field}\`. Actual takes a list only on ` +
-    `${[...LIST_FIELDS].join(', ')}. Use \`is\` or \`isNot\` for one value, or one of ` +
+    `${[...LIST_FIELDS].join(', ')}. ${alternatives}, or one of ` +
     `those fields to match several.`
+  );
+}
+
+/** What to say when an operator is not one a numeric field takes. */
+export function refuseOpOnAmount(field: string, op: string): string {
+  return (
+    `A rule cannot use \`${op}\` on \`${field}\`, which holds a figure. Actual takes ` +
+    `${[...AMOUNT_OPS].map((o) => `\`${o}\``).join(', ')} there. For "not this amount", ` +
+    `match the amounts you do want instead.`
   );
 }
 
@@ -157,14 +204,3 @@ export function looksLikeAnId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
 }
 
-/**
- * The fields Actual stores as a number, which is where an amount lives.
- *
- * One field today, and it is money, so a value on it is formatted as money
- * rather than printed as the integer the engine keeps. Written out by hand
- * for the same reason as `ID_FIELDS`, `FIELD_INFO` is not exported, and
- * checked against the installed engine by the same test: a later version with
- * a numeric field that is not money would otherwise be formatted as currency
- * without anyone noticing.
- */
-export const NUMBER_FIELDS: ReadonlySet<string> = new Set(['amount']);

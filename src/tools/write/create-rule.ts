@@ -6,6 +6,8 @@ import { resolvePayeeIn, resolveByWholeName } from '../../utils/resolvers.js';
 import { amountToCents, formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
 import {
+  AMOUNT_OPS,
+  refuseOpOnAmount,
   ID_FIELDS,
   LIST_FIELDS,
   isTextOpOnIdField,
@@ -80,18 +82,49 @@ async function resolveRulePayee(value: string): Promise<{ id: string; name: stri
  */
 const AMOUNT_FIELDS: ReadonlySet<string> = new Set(['amount']);
 
-function amountForRule(field: string, value: string | string[]): number {
-  if (Array.isArray(value)) {
-    throw new Error(`\`${field}\` takes one amount, not a list.`);
-  }
-  const amount = Number(String(value).trim());
-  if (!Number.isFinite(amount)) {
+function amountForRule(field: string, value: string): number {
+  // Trimmed before anything else, so the emptiness check below sees a value
+  // of spaces for what it is.
+  const text = value.trim();
+
+  // Empty first, and on its own, because `Number("")` and `Number("   ")` are
+  // both 0 and 0 passes every check after this one. Measured: an action
+  // `set amount = ""` was saved, and then each import that matched it moved a
+  // row of -100 to 0. A figure nobody typed, losing data quietly, every time.
+  if (text === '') {
     throw new Error(
-      `\`${field}\` takes an amount, like 45.50 or -45.50, and "${value}" is not one. ` +
-        `Write it the way you would say it, not in cents.`,
+      `\`${field}\` needs a figure. An empty value would be saved as 0, which sets ` +
+        `matching transactions to nothing.`,
     );
   }
-  return amountToCents(amount);
+
+  // A plain decimal, and nothing else. `Number` is far more generous than
+  // anyone writing an amount means it to be: "0x10" is 16, "1e3" is 1000, and
+  // "1e20" is past the point where an integer is exact.
+  if (!/^[-+]?\d+(\.\d+)?$/.test(text)) {
+    throw new Error(
+      `\`${field}\` takes a figure like 45.50 or -45.50, and "${value}" is not one. ` +
+        `Write it the way you would say it, not in cents and not in any other notation.`,
+    );
+  }
+
+  // How many decimals fit is the conversion's own answer: `amountToCents(1)`
+  // is 100 where there are two of them and 1 where the currency has none, so
+  // this follows the budget without repeating the table.
+  const places = String(amountToCents(1)).length - 1;
+  const written = (text.split('.')[1] ?? '').length;
+  if (written > places) {
+    throw new Error(
+      places === 0
+        ? `\`${field}\` takes a whole figure in this budget's currency, and "${value}" has ` +
+            `decimals.`
+        : `\`${field}\` takes at most ${places} decimal${places === 1 ? '' : 's'} in this ` +
+            `budget's currency, and "${value}" has ${written}. Rounding it here would save a ` +
+            `figure you did not write.`,
+    );
+  }
+
+  return amountToCents(Number(text));
 }
 
 /**
@@ -169,7 +202,14 @@ async function resolveRuleValue(
   // After the list checks, which already say the useful thing about `oneOf`
   // on a field that cannot take one (#171), and before anything is saved.
   if (AMOUNT_FIELDS.has(field)) {
-    const cents = amountForRule(field, value);
+    // Refused here rather than by the engine, which answers an operator it
+    // does not take on a number with the same bare "Failed creating a new
+    // rule" this tool exists to stop handing over. Measured: `isNot` is one
+    // of them, and it was being offered in this tool's own advice.
+    if (!AMOUNT_OPS.has(op)) {
+      throw new Error(refuseOpOnAmount(field, op));
+    }
+    const cents = amountForRule(field, list[0]);
     // Said back, because the reading is the thing that was wrong: 45.50 is
     // forty five and a half, not forty five cents, and a rule runs until
     // somebody deletes it.
@@ -296,15 +336,17 @@ export function registerCreateRule(server: McpServer): void {
             'are refused on payee, category, category_group and account, which Actual stores ' +
             'as ids: they would compare against the id. For text on a payee, imported_payee ' +
             'holds what the row arrived with, and payee_name the payee name, once that payee ' +
-            'exists.',
+            'exists. On amount the operators are is, isapprox, gt, gte, lt and lte; isNot is ' +
+            'not one of them.',
         ),
       condition_value: z
         .union([z.string(), z.array(z.string())])
         .describe(
           'Value to match against. For payee, category, category_group and account, a whole ' +
             'name or an ID. For amount, the figure as you would say it (45.50, or -45.50 for ' +
-            'money going out), not in cents. Pass a list for oneOf and notOneOf; a single ' +
-            'value for every other operator.',
+            'money going out), not in cents. Spending is negative, so "more than 45.50 spent" ' +
+            'is lt -45.50: gt -45.50 would also catch every deposit and every zero. Pass a ' +
+            'list for oneOf and notOneOf; a single value for every other operator.',
         ),
       action_field: z
         .string()

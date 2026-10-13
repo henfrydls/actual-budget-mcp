@@ -117,6 +117,101 @@ describe.skipIf(skip)('rules about an amount (#183)', () => {
     ).rejects.toThrow(/amount/i);
   });
 
+  it('refuses an empty figure instead of saving a zero', async () => {
+    // `Number("")` and `Number("   ")` are both 0, and 0 passes every check
+    // after that. Measured before the fix: an action `set amount = ""` was
+    // saved, and the next import that matched it moved a row of -100 to 0.
+    // Quiet data loss, on every future import.
+    for (const empty of ['', '   ']) {
+      await expect(
+        createRuleFromInput({
+          condition_field: 'notes',
+          condition_op: 'is',
+          condition_value: 'empty-amount',
+          action_field: 'amount',
+          action_value: empty,
+        } as never),
+        `action with "${empty}"`,
+      ).rejects.toThrow(/needs a figure/);
+
+      await expect(
+        createRuleFromInput({
+          condition_field: 'amount',
+          condition_op: 'is',
+          condition_value: empty,
+          action_field: 'category',
+          action_value: 'Fun',
+        } as never),
+        `condition with "${empty}"`,
+      ).rejects.toThrow(/needs a figure/);
+    }
+  });
+
+  it('refuses the notations nobody means when writing an amount', async () => {
+    // `Number` reads "0x10" as 16 and "1e3" as 1000, and past 1e20 an integer
+    // is not exact any more. None of those is a figure someone typed meaning
+    // money.
+    for (const odd of ['0x10', '1e3', '1e20', '4,550', 'forty']) {
+      await expect(
+        createRuleFromInput({
+          condition_field: 'amount',
+          condition_op: 'is',
+          condition_value: odd,
+          action_field: 'category',
+          action_value: 'Fun',
+        } as never),
+        odd,
+      ).rejects.toThrow(/takes a figure/);
+    }
+  });
+
+  it('refuses more decimals than the currency has, rather than rounding them', async () => {
+    // Rounding saves a figure nobody wrote, and the rounding here is not even
+    // symmetric: "45.505" gives 4551 and "-45.505" gives -4550.
+    await expect(
+      createRuleFromInput({
+        condition_field: 'amount',
+        condition_op: 'is',
+        condition_value: '45.505',
+        action_field: 'category',
+        action_value: 'Fun',
+      } as never),
+    ).rejects.toThrow(/decimal/);
+  });
+
+  it('refuses an operator the engine does not take on a figure', async () => {
+    // Measured, one rule per operator: `is`, `isapprox`, `gt`, `gte`, `lt`
+    // and `lte` are accepted on amount, and `isNot` comes back as "Invalid
+    // condition operator", which reaches the caller as the bare message this
+    // tool exists to replace. It was in this tool's own advice.
+    const message = await createRuleFromInput({
+      condition_field: 'amount',
+      condition_op: 'isNot',
+      condition_value: '-45.50',
+      action_field: 'category',
+      action_value: 'Fun',
+    } as never).catch((e: Error) => e.message);
+
+    expect(message).toContain('isNot');
+    expect(message, 'it has to name the ones that do work').toContain('isapprox');
+    expect(message).not.toContain('Failed creating a new rule');
+  });
+
+  it('names the figure operators when a list is tried on an amount', async () => {
+    // The list refusal used to send everyone to `is` or `isNot`, and `isNot`
+    // is one of the ones that does not work here.
+    const message = await createRuleFromInput({
+      condition_field: 'amount',
+      condition_op: 'oneOf',
+      condition_value: ['-45.50', '-10.00'],
+      action_field: 'category',
+      action_value: 'Fun',
+    } as never).catch((e: Error) => e.message);
+
+    expect(message).toContain('gte');
+    expect(message).not.toContain('isNot');
+  });
+
   it('converts it in an action too, where a bad value broke the next import', async () => {
     await createRuleFromInput({
       condition_field: 'notes',
