@@ -365,6 +365,13 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         // The rule's category is on the row that does not count, so the
         // request stands, and saying only "give it a category" would read as
         // if the row had none.
+        //
+        // Not reachable with the engine as it is, and kept deliberately.
+        // Measured both directions of a transfer with an off-budget side and
+        // a rule keyed on notes: Actual leaves the off-budget row with no
+        // category, so `categoryFromRule` is empty whenever `categoryCounts`
+        // is false. The branch is here for the day that changes, which is why
+        // no test covers it: there is no way to ask for it today.
         lines.push(
           `A rule set ${categoryFromRule} on the row in ${acctName}, but an off-budget ` +
             `account is outside your budget, so it does not count there. To make this ` +

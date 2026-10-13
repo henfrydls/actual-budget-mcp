@@ -150,6 +150,7 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
     // the reply said Error, skipped the sync, and the row was sitting in the
     // budget with its category the whole time. Measured that way before the
     // fix, with the read rejecting.
+    vi.mocked(api.sync).mockClear();
     const real = api.getCategories;
     (api as { getCategories: unknown }).getCategories = async () => {
       throw new Error('database is locked');
@@ -163,11 +164,19 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
       } as never);
       const text = lines.join('\n');
 
-      expect(text, 'the transaction was recorded, so the reply must say so').toMatch(
-        /Transaction created|Checking/,
+      // The line itself. The other half of what this used to accept,
+      // "Checking", is the account from the input and comes back in
+      // `Account: Checking` whatever happened, so that alternative passed on
+      // its own and the assertion could not fail.
+      expect(text, 'the transaction was recorded, so the reply must say so').toContain(
+        'Transaction created:',
       );
       // And it keeps quiet about the category rather than guessing.
       expect(text).not.toMatch(/set by one of your rules/);
+
+      // The sync is the other thing the old path skipped, and it is not
+      // visible in the reply at all.
+      expect(vi.mocked(api.sync), 'the write was not synced').toHaveBeenCalled();
     } finally {
       (api as { getCategories: unknown }).getCategories = real;
     }
