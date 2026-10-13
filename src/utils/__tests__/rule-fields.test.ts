@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { ID_FIELDS, TEXT_OPS, LIST_FIELDS, isTextOpOnIdField, looksLikeAnId } from '../rule-fields.js';
+import {
+  ID_FIELDS,
+  NUMBER_FIELDS,
+  TEXT_OPS,
+  LIST_FIELDS,
+  isTextOpOnIdField,
+  looksLikeAnId,
+} from '../rule-fields.js';
 
 /**
  * The list of id fields, against the engine's own.
@@ -59,6 +66,29 @@ describe('the fields Actual stores by id', () => {
 
   it('lists exactly the id fields the engine does', () => {
     expect([...ID_FIELDS].sort()).toEqual(idFieldsFromEngine().sort());
+  });
+
+  /** The `name: { type: "number" ... }` entries, the same way. */
+  function numberFieldsFromEngine(): string[] {
+    const start = bundle.indexOf('FIELD_INFO = {');
+    const block = bundle.slice(start, start + 2000);
+    const end = block.indexOf('\n};');
+    const fields: string[] = [];
+    const entry = /(\w+):\s*\{\s*(?:\/\*[^*]*\*\/\s*)?type:\s*"(\w+)"/g;
+    let match: RegExpExecArray | null;
+    while ((match = entry.exec(block.slice(0, end))) !== null) {
+      if (match[2] === 'number') fields.push(match[1]);
+    }
+    return fields;
+  }
+
+  it('lists exactly the numeric fields the engine does', () => {
+    // These are formatted as money (#182), so a numeric field that is not an
+    // amount would start being printed as currency. One field today, and the
+    // comparison is what keeps that true.
+    const found = numberFieldsFromEngine();
+    expect(found.length, 'the parse found no numeric field at all').toBeGreaterThan(0);
+    expect([...NUMBER_FIELDS].sort()).toEqual(found.sort());
   });
 
   it('leaves the string fields alone', () => {

@@ -156,3 +156,15 @@ export function refuseListOnField(field: string, op: string): string {
 export function looksLikeAnId(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
 }
+
+/**
+ * The fields Actual stores as a number, which is where an amount lives.
+ *
+ * One field today, and it is money, so a value on it is formatted as money
+ * rather than printed as the integer the engine keeps. Written out by hand
+ * for the same reason as `ID_FIELDS`, `FIELD_INFO` is not exported, and
+ * checked against the installed engine by the same test: a later version with
+ * a numeric field that is not money would otherwise be formatted as currency
+ * without anyone noticing.
+ */
+export const NUMBER_FIELDS: ReadonlySet<string> = new Set(['amount']);

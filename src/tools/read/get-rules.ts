@@ -5,10 +5,13 @@ import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import {
   ID_FIELDS,
+  NUMBER_FIELDS,
   isTextOpOnIdField,
   warnTextOpOnIdField,
   looksLikeAnId,
 } from '../../utils/rule-fields.js';
+import { describeRecurrence } from '../../utils/schedule-recurrence.js';
+import { formatMoney } from '../../utils/money.js';
 
 export function registerGetRules(server: McpServer): void {
   server.tool(
@@ -39,6 +42,23 @@ export function registerGetRules(server: McpServer): void {
           ...accounts.map((a) => [a.id, a.name] as const),
         ]);
 
+        // A rule Actual writes for a schedule ends in `link-schedule` holding
+        // the schedule's id, and the id is the one thing the person reading
+        // the list cannot look up anywhere (#182).
+        const scheduleNames = new Map<string, string>();
+        try {
+          const schedules = (await api.getSchedules()) as { id?: unknown; name?: unknown }[];
+          for (const schedule of schedules ?? []) {
+            if (typeof schedule.id === 'string' && typeof schedule.name === 'string') {
+              scheduleNames.set(schedule.id, schedule.name);
+            }
+          }
+        } catch {
+          // The rules are the answer; the schedule names are an improvement on
+          // one line of it. A listing that loses them is still worth printing,
+          // and a budget with no schedules reaches here with nothing to lose.
+        }
+
         /**
          * A stored value, as the person who wrote the rule would recognise it.
          *
@@ -51,6 +71,34 @@ export function registerGetRules(server: McpServer): void {
             // matches transactions with no category, and printing it as the
             // word "null" reads like a value someone typed by mistake.
             if (v === null || v === undefined || v === '') return '(none)';
+
+            // An amount is stored the way every amount is stored, as an
+            // integer in the smallest unit, and it was printed raw: a rule on
+            // a rent of 4,500 read `IF amount is "-450000"`. The engine's own
+            // field table has exactly one numeric field, and a test holds that
+            // list to it.
+            if (NUMBER_FIELDS.has(field)) {
+              if (typeof v === 'number') return formatMoney(v);
+              // `isbetween` holds the two bounds in one value.
+              const range = v as { num1?: unknown; num2?: unknown };
+              if (typeof range?.num1 === 'number' && typeof range?.num2 === 'number') {
+                return `${formatMoney(range.num1)} and ${formatMoney(range.num2)}`;
+              }
+            }
+
+            // The date of a schedule is a recurrence, and `String()` on it
+            // gives `[object Object]`. A plain date is a string and comes
+            // back undefined here, which prints it as it is.
+            const recurrence = describeRecurrence(v);
+            if (recurrence !== undefined) return recurrence;
+
+            // Whatever is left that is an object, written out rather than
+            // stringified: `String({})` is `[object Object]`, which is what
+            // this tool was reported for. A recurrence it will not describe,
+            // because one part of it means nothing to it, lands here, and the
+            // stored config is at least true.
+            if (typeof v === 'object') return JSON.stringify(v);
+
             const text = String(v);
             return ID_FIELDS.has(field) ? (names.get(text) ?? text) : text;
           };
@@ -146,7 +194,19 @@ export function registerGetRules(server: McpServer): void {
           lines.push(`  Stage: ${stage} | Conditions: ${condOp}`);
 
           for (const cond of conditions) {
-            lines.push(`  IF ${cond.field} ${cond.op} "${readable(cond.field, cond.value)}"`);
+            // `inflow` and `outflow` decide which direction the amount is
+            // compared in, and the value is stored positive either way: a
+            // rule for spending of 4,500 or more is `gte 450000` with
+            // `outflow`. Printed without it, and now with the figure
+            // formatted as money, it reads as a rule about income (#182).
+            const flow = cond.options?.outflow
+              ? ' (outflow)'
+              : cond.options?.inflow
+                ? ' (inflow)'
+                : '';
+            lines.push(
+              `  IF ${cond.field}${flow} ${cond.op} "${readable(cond.field, cond.value)}"`,
+            );
             // One complaint per line. A text operator on an id field holds
             // text on purpose, so the check below would call the same
             // condition broken for a second reason and send the reader
@@ -169,6 +229,15 @@ export function registerGetRules(server: McpServer): void {
           }
 
           for (const action of actions) {
+            // `link-schedule` carries no field, and `field || op` printed the
+            // operation twice: `THEN link-schedule link-schedule = "<id>"`.
+            // Its value is a schedule, so it is named like one.
+            if (!action.field && action.op === 'link-schedule') {
+              const id = String(action.value ?? '');
+              const named = scheduleNames.get(id);
+              lines.push(`  THEN link-schedule = "${named ?? id}"`);
+              continue;
+            }
             const field = action.field || action.op;
             lines.push(`  THEN ${action.op} ${field} = "${readable(field, action.value)}"`);
             if (isEmptyList(action.value)) {
