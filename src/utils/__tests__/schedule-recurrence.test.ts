@@ -244,6 +244,90 @@ describe('describing a schedule recurrence', () => {
     );
   });
 
+  it('says nothing when a day is one it cannot name', () => {
+    // The engine counts negatives back from the end of the month, and only
+    // -1 has a name here. Measured, `[{day, -2}, {day, 3}]` falls on 30 Oct,
+    // 3 Nov, 29 Nov, 3 Dec: the day before last happens, and dropping it left
+    // "on the 3rd", a sentence missing half of what the schedule does.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: -2 },
+          { type: 'day', value: 3 },
+        ],
+      }),
+    ).toBeUndefined();
+
+    // Outside the range the engine takes at all: it refuses 0 and 32
+    // ("byDayOfMonth" values must be `num !== 0 && num <= 31 && num >= -31`)
+    // and gives up looking on a fractional day.
+    for (const day of [0, 32, 1.5, -40]) {
+      expect(
+        describeRecurrence({ ...monthly, patterns: [{ type: 'day', value: day }] }),
+        `day ${day}`,
+      ).toBeUndefined();
+    }
+
+    // And 31 is a real day, even though February has none: measured, it
+    // falls on 31 Oct, 31 Dec, 31 Jan, 31 Mar, skipping the months without.
+    expect(describeRecurrence({ ...monthly, patterns: [{ type: 'day', value: 31 }] })).toBe(
+      'every month on the 31st, from 2026-11-01',
+    );
+  });
+
+  it('counts the same weekday twice as once', () => {
+    // Measured: `[{MO, 1}, {MO, 1}]` falls on the first Monday, once.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'MO', value: 1 },
+          { type: 'MO', value: 1 },
+        ],
+      }),
+    ).toBe('every month on the first Monday, from 2026-11-01');
+  });
+
+  it('writes the awkward ordinals the way English does', () => {
+    // 11, 12 and 13 are the ones a naive rule gets wrong, and they are real
+    // days of the month.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: 11 },
+          { type: 'day', value: 12 },
+          { type: 'day', value: 13 },
+        ],
+      }),
+    ).toBe('every month on the 11th, 12th and 13th, from 2026-11-01');
+
+    // Against the ones that follow the simple rule, so the test cannot pass
+    // by everything being "th".
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: 21 },
+          { type: 'day', value: 22 },
+          { type: 'day', value: 23 },
+        ],
+      }),
+    ).toBe('every month on the 21st, 22nd and 23rd, from 2026-11-01');
+  });
+
+  it('says nothing when a pattern is not even an object', () => {
+    // It used to throw on the first property read, which takes the whole
+    // listing with it rather than one line of it.
+    expect(() =>
+      describeRecurrence({ ...monthly, patterns: [null, { type: 'day', value: 3 }] }),
+    ).not.toThrow();
+    expect(
+      describeRecurrence({ ...monthly, patterns: [null, { type: 'day', value: 3 }] }),
+    ).toBeUndefined();
+  });
+
   it('says nothing at all when one pattern means nothing to it', () => {
     // Rather than describing the half it understands. A sentence that leaves
     // out one of the days a schedule fires on is worse than the stored

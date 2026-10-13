@@ -137,6 +137,25 @@ function describeWeekdayPattern(pattern: Pattern): string | undefined {
   return which ? `the ${which} ${weekday}` : undefined;
 }
 
+/**
+ * Whether this can name the day a pattern asks for.
+ *
+ * The engine takes any whole number from -31 to 31 except zero, and the
+ * negatives count back from the end of the month: measured,
+ * `[{day, -2}, {day, 3}]` falls on 30 October, 3 November, 29 November,
+ * 3 December, so -2 is the day before last and it happens. Only -1 has a name
+ * here, so the rest invalidate the sentence rather than being dropped from it,
+ * which is what made `[{day, -2}, {day, 3}]` read as "on the 3rd".
+ *
+ * Outside that range the engine refuses the config ("byDayOfMonth" values must
+ * be `num !== 0 && num <= 31 && num >= -31`), and a fractional day makes it
+ * give up looking. Neither is a schedule doing something this could describe.
+ */
+function canNameDay(value: unknown): value is number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return false;
+  return value === -1 || (value >= 1 && value <= 31);
+}
+
 /** 1st, 2nd, 3rd, 4th, 11th, 21st. */
 function ordinal(day: number): string {
   const inHundred = day % 100;
@@ -191,18 +210,26 @@ export function describeRecurrence(value: unknown): string | undefined {
 
   if (value.frequency === 'monthly') {
     const patterns = Array.isArray(value.patterns) ? (value.patterns as Pattern[]) : [];
+    // An entry that is not an object at all, which would otherwise throw on
+    // the first property read and take the whole listing with it.
+    if (patterns.some((p) => typeof p !== 'object' || p === null)) return undefined;
+
     const dayPatterns = patterns.filter((p) => p.type === 'day');
-    // A day pattern whose value is not a number is not a day this can name.
-    if (dayPatterns.some((p) => typeof p.value !== 'number')) return undefined;
+    if (!dayPatterns.every((p) => canNameDay(p.value))) return undefined;
     const days = describeDayPatterns(dayPatterns.map((p) => p.value as number));
 
     const weekdays: string[] = [];
+    const seen = new Set<string>();
     for (const pattern of patterns.filter((p) => p.type !== 'day')) {
       const described = describeWeekdayPattern(pattern);
       // One pattern nobody can read makes the whole sentence a lie by
       // omission: the schedule does something this line would not mention.
       // The caller prints the stored config instead, which is true.
       if (described === undefined) return undefined;
+      // The same weekday twice is the same weekday: measured,
+      // `[{MO, 1}, {MO, 1}]` falls on the first Monday, once.
+      if (seen.has(described)) continue;
+      seen.add(described);
       weekdays.push(described);
     }
 
