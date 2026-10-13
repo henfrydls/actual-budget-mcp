@@ -79,6 +79,11 @@ const NTH: Readonly<Record<number, string>> = {
   2: 'second',
   3: 'third',
   4: 'fourth',
+  // The app's picker allows a fifth, and the months without one are simply
+  // skipped: measured, `[{MO, 5}]` from October 2026 falls on 30 Nov 2026,
+  // 29 Mar 2027, 31 May 2027. Missing it described that as "every month on
+  // Monday", which is wrong about the month and about the Monday.
+  5: 'fifth',
   [-1]: 'last',
 };
 
@@ -114,12 +119,38 @@ function howOften(frequency: string, interval: unknown): string {
   return every === 1 ? `every ${unit[0]}` : `every ${every} ${unit[1]}`;
 }
 
-/** "the last Friday", for the patterns that name a weekday. */
+/**
+ * "the last Friday", for the patterns that name a weekday.
+ *
+ * Nothing when the ordinal is not one it knows. Returning the weekday on its
+ * own would say "on Monday" about a rule that fires on one Monday a month,
+ * and an ordinal outside the picker's range is not a schedule that quietly
+ * does something else: measured, `{MO, 9}` makes the engine give up looking
+ * ("Failed to find a matching occurrence in 50 iterations") and `{MO, 0}` is
+ * refused outright. Describing those from the half that parses is the mistake
+ * this module was corrected for once already.
+ */
 function describeWeekdayPattern(pattern: Pattern): string | undefined {
   const weekday = typeof pattern.type === 'string' ? WEEKDAYS[pattern.type] : undefined;
   if (!weekday) return undefined;
   const which = typeof pattern.value === 'number' ? NTH[pattern.value] : undefined;
-  return which ? `the ${which} ${weekday}` : weekday;
+  return which ? `the ${which} ${weekday}` : undefined;
+}
+
+/** 1st, 2nd, 3rd, 4th, 11th, 21st. */
+function ordinal(day: number): string {
+  const inHundred = day % 100;
+  if (inHundred >= 11 && inHundred <= 13) return `${day}th`;
+  switch (day % 10) {
+    case 1:
+      return `${day}st`;
+    case 2:
+      return `${day}nd`;
+    case 3:
+      return `${day}rd`;
+    default:
+      return `${day}th`;
+  }
 }
 
 /**
@@ -131,15 +162,16 @@ function describeWeekdayPattern(pattern: Pattern): string | undefined {
  */
 function describeDayPatterns(days: number[]): string | undefined {
   if (days.length === 0) return undefined;
-  const numbered = days.filter((d) => d > 0).sort((a, b) => a - b);
-  const hasLast = days.some((d) => d === -1);
-  const parts = [...numbered.map(String), ...(hasLast ? ['the last day'] : [])];
+  // The same day twice changes nothing: measured, `[{day, 5}, {day, 5}]`
+  // falls on the 5th of each month, once.
+  const unique = [...new Set(days)];
+  const numbered = unique.filter((d) => d > 0).sort((a, b) => a - b);
+  const hasLast = unique.some((d) => d === -1);
+  const parts = [...numbered.map(ordinal), ...(hasLast ? ['last day'] : [])];
 
-  if (parts.length === 1) {
-    return hasLast && numbered.length === 0 ? 'the last day' : `day ${parts[0]}`;
-  }
+  if (parts.length === 1) return `the ${parts[0]}`;
   const head = parts.slice(0, -1).join(', ');
-  return `days ${head} and ${parts[parts.length - 1]}`;
+  return `the ${head} and ${parts[parts.length - 1]}`;
 }
 
 /**
@@ -159,15 +191,21 @@ export function describeRecurrence(value: unknown): string | undefined {
 
   if (value.frequency === 'monthly') {
     const patterns = Array.isArray(value.patterns) ? (value.patterns as Pattern[]) : [];
-    const days = describeDayPatterns(
-      patterns
-        .filter((p) => p.type === 'day' && typeof p.value === 'number')
-        .map((p) => p.value as number),
-    );
-    const weekdays = patterns
-      .filter((p) => p.type !== 'day')
-      .map(describeWeekdayPattern)
-      .filter((p): p is string => p !== undefined);
+    const dayPatterns = patterns.filter((p) => p.type === 'day');
+    // A day pattern whose value is not a number is not a day this can name.
+    if (dayPatterns.some((p) => typeof p.value !== 'number')) return undefined;
+    const days = describeDayPatterns(dayPatterns.map((p) => p.value as number));
+
+    const weekdays: string[] = [];
+    for (const pattern of patterns.filter((p) => p.type !== 'day')) {
+      const described = describeWeekdayPattern(pattern);
+      // One pattern nobody can read makes the whole sentence a lie by
+      // omission: the schedule does something this line would not mention.
+      // The caller prints the stored config instead, which is true.
+      if (described === undefined) return undefined;
+      weekdays.push(described);
+    }
+
     const both = [...(days ? [days] : []), ...weekdays];
     if (both.length > 0) on = both.join(' and ');
   } else if (value.frequency === 'weekly') {

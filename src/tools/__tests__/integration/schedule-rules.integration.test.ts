@@ -165,7 +165,7 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
 
   it('reads the patterns of a monthly, in the order they happen', async () => {
     const text = await listing();
-    expect(text).toContain('every month on days 15 and the last day, from 2026-11-01');
+    expect(text).toContain('every month on the 15th and last day, from 2026-11-01');
   });
 
   it('says which direction an amount is compared in', async () => {

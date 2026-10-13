@@ -92,6 +92,13 @@ export function registerGetRules(server: McpServer): void {
             const recurrence = describeRecurrence(v);
             if (recurrence !== undefined) return recurrence;
 
+            // Whatever is left that is an object, written out rather than
+            // stringified: `String({})` is `[object Object]`, which is what
+            // this tool was reported for. A recurrence it will not describe,
+            // because one part of it means nothing to it, lands here, and the
+            // stored config is at least true.
+            if (typeof v === 'object') return JSON.stringify(v);
+
             const text = String(v);
             return ID_FIELDS.has(field) ? (names.get(text) ?? text) : text;
           };

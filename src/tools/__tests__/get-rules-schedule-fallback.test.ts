@@ -1,16 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getSchedules = vi.fn();
+const getRules = vi.fn();
 vi.mock('@actual-app/api', () => ({
-  getRules: vi.fn().mockResolvedValue([
-    {
-      id: 'rule-1',
-      stage: null,
-      conditionsOp: 'and',
-      conditions: [{ op: 'is', field: 'account', value: 'acc-1', type: 'id' }],
-      actions: [{ op: 'link-schedule', field: null, value: 'sched-1', type: 'id' }],
-    },
-  ]),
+  getRules: (...a: unknown[]) => getRules(...a),
   getCategories: vi.fn().mockResolvedValue([]),
   getCategoryGroups: vi.fn().mockResolvedValue([]),
   getPayees: vi.fn().mockResolvedValue([]),
@@ -44,16 +37,29 @@ function handler(): Handler {
 }
 
 /**
- * The schedule names are an improvement on one line, not the answer (#182).
+ * A listing that stays readable when part of it cannot be worked out (#182).
  *
- * `get_rules` exists to let someone read their rules. Looking up the name of
- * the schedule a rule links to is worth doing and worth losing: rethrowing
- * from that catch leaves the whole suite green, because every other test has
- * schedules that can be read.
+ * Two of those parts. The schedule names are an improvement on one line, not
+ * the answer: rethrowing from that catch leaves the whole suite green,
+ * because every other test has schedules that can be read. And a recurrence
+ * with a pattern nothing can name is printed as the config it is, rather than
+ * described from the half that parses or stringified into `[object Object]`.
+ *
+ * Both are built from rows here instead of through the engine, because
+ * neither can be produced by asking Actual for it.
  */
-describe('listing rules when the schedules cannot be read', () => {
+describe('listing rules with a part that cannot be worked out', () => {
+  const scheduleRule = {
+    id: 'rule-1',
+    stage: null,
+    conditionsOp: 'and',
+    conditions: [{ op: 'is', field: 'account', value: 'acc-1', type: 'id' }],
+    actions: [{ op: 'link-schedule', field: null, value: 'sched-1', type: 'id' }],
+  };
+
   beforeEach(() => {
     getSchedules.mockReset();
+    getRules.mockReset().mockResolvedValue([scheduleRule]);
   });
 
   it('still lists the rules, with the id in place of the name', async () => {
@@ -65,6 +71,46 @@ describe('listing rules when the schedules cannot be read', () => {
     expect(reply.isError, 'losing a name is not an error').toBeFalsy();
     expect(text).toContain('IF account is "Checking"');
     expect(text).toContain('THEN link-schedule = "sched-1"');
+  });
+
+  it('prints a recurrence it will not describe as the config it is', async () => {
+    // One pattern it cannot name makes the sentence untrue by omission, so
+    // the stored config goes out instead. What must not come back is
+    // `[object Object]`, which is what this tool was reported for.
+    //
+    // Built here rather than through the engine on purpose: `schedule/create`
+    // computes the first date and throws on this config ("Failed to find a
+    // matching occurrence in 50 iterations"), so a schedule like it cannot be
+    // made from the app. A rule holding one arrived some other way, which is
+    // exactly when a listing has to stay readable.
+    getSchedules.mockResolvedValue([]);
+    getRules.mockResolvedValue([
+      {
+        ...scheduleRule,
+        conditions: [
+          {
+            op: 'isapprox',
+            field: 'date',
+            type: 'date',
+            value: {
+              start: '2026-11-01',
+              frequency: 'monthly',
+              patterns: [{ type: 'MO', value: 9 }],
+              skipWeekend: false,
+              weekendSolveMode: 'after',
+              endMode: 'never',
+              endOccurrences: 1,
+              endDate: '2026-11-01',
+            },
+          },
+        ],
+      },
+    ]);
+
+    const text = (await handler()()).content[0].text;
+    expect(text).not.toContain('[object Object]');
+    expect(text).toContain('"frequency":"monthly"');
+    expect(text).toContain('"value":9');
   });
 
   it('names the schedule when they can be read', async () => {

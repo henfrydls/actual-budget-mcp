@@ -97,6 +97,30 @@ describe('describing a schedule recurrence', () => {
     expect(describeRecurrence({ ...monthly, patterns: [{ type: 'day', value: -1 }] })).toBe(
       'every month on the last day, from 2026-11-01',
     );
+
+    // Measured: `[{day, -1}, {day, 10}]` falls on 31 Oct, 10 Nov, 30 Nov,
+    // 10 Dec, so both days count and the order is not the stored one.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: -1 },
+          { type: 'day', value: 10 },
+        ],
+      }),
+    ).toBe('every month on the 10th and last day, from 2026-11-01');
+
+    // The same day twice is the same day: measured, `[{day, 5}, {day, 5}]`
+    // falls on the 5th, once.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: 5 },
+          { type: 'day', value: 5 },
+        ],
+      }),
+    ).toBe('every month on the 5th, from 2026-11-01');
   });
 
   it('puts the days of the month in the order they happen', () => {
@@ -112,12 +136,12 @@ describe('describing a schedule recurrence', () => {
           { type: 'day', value: -1 },
         ],
       }),
-    ).toBe('every month on days 1, 15 and the last day, from 2026-11-01');
+    ).toBe('every month on the 1st, 15th and last day, from 2026-11-01');
   });
 
   it('names the day of the month', () => {
     expect(describeRecurrence({ ...monthly, patterns: [{ type: 'day', value: 15 }] })).toBe(
-      'every month on day 15, from 2026-11-01',
+      'every month on the 15th, from 2026-11-01',
     );
   });
 
@@ -139,7 +163,7 @@ describe('describing a schedule recurrence', () => {
           { type: 'day', value: 15 },
         ],
       }),
-    ).toBe('every month on days 1 and 15, from 2026-11-01');
+    ).toBe('every month on the 1st and 15th, from 2026-11-01');
   });
 
   it('joins a day and a weekday', () => {
@@ -151,7 +175,7 @@ describe('describing a schedule recurrence', () => {
           { type: 'FR', value: -1 },
         ],
       }),
-    ).toBe('every month on day 1 and the last Friday, from 2026-11-01');
+    ).toBe('every month on the 1st and the last Friday, from 2026-11-01');
   });
 
   it('says when it stops, in whichever way it stops', () => {
@@ -210,15 +234,35 @@ describe('describing a schedule recurrence', () => {
     );
   });
 
-  it('skips a pattern it cannot read, keeping the rest of the line', () => {
+  it('names the fifth weekday of the month, which the picker allows', () => {
+    // Measured from October 2026: `[{MO, 5}]` falls on 30 Nov 2026, 29 Mar
+    // 2027, 31 May 2027. The months without a fifth Monday are skipped, so
+    // it is neither every month nor any Monday, and leaving the ordinal out
+    // said both.
+    expect(describeRecurrence({ ...monthly, patterns: [{ type: 'MO', value: 5 }] })).toBe(
+      'every month on the fifth Monday, from 2026-11-01',
+    );
+  });
+
+  it('says nothing at all when one pattern means nothing to it', () => {
+    // Rather than describing the half it understands. A sentence that leaves
+    // out one of the days a schedule fires on is worse than the stored
+    // config, which the caller prints instead and which is at least true.
+    //
+    // Measured on the ordinals outside the picker's range: `{MO, 9}` makes
+    // the engine give up ("Failed to find a matching occurrence in 50
+    // iterations") and `{MO, 0}` is refused by its own validation. Neither is
+    // a schedule quietly doing something else.
     expect(
       describeRecurrence({
         ...monthly,
         patterns: [{ type: 'ZZ', value: 1 }, { type: 'day', value: 3 }],
       }),
-    ).toBe('every month on day 3, from 2026-11-01');
-    expect(describeRecurrence({ ...monthly, patterns: [{ type: 'ZZ', value: 1 }] })).toBe(
-      'every month, from 2026-11-01',
-    );
+    ).toBeUndefined();
+    expect(describeRecurrence({ ...monthly, patterns: [{ type: 'MO', value: 9 }] })).toBeUndefined();
+    expect(describeRecurrence({ ...monthly, patterns: [{ type: 'MO', value: 0 }] })).toBeUndefined();
+    expect(
+      describeRecurrence({ ...monthly, patterns: [{ type: 'day', value: 'tenth' }] }),
+    ).toBeUndefined();
   });
 });
