@@ -192,6 +192,32 @@ export function registerGetRules(server: McpServer): void {
           );
         };
 
+        /**
+         * An action on a figure holding nothing at all (#183).
+         *
+         * Not the same fault as the text of a figure, and not the same cost.
+         * Measured, with a rule `set amount = null` and a batch of two: the
+         * import goes through, the neighbour arrives, and the matching row
+         * lands at 0. Money quietly set to nothing, on every import, with the
+         * listing showing `set amount = "(none)"`.
+         *
+         * An action saved with no value key at all behaves the same way, so
+         * both are read as nothing rather than only `null`.
+         */
+        const nothingWhereActionFigureBelongs = (
+          field: string,
+          value: unknown,
+          options: unknown,
+        ): string | null => {
+          if (!NUMBER_FIELDS.has(field) || value !== null) return null;
+          if (hasOwnTemplate(options)) return null;
+          return (
+            `warning: this holds nothing where Actual keeps a figure, so it sets every ` +
+            `transaction it matches to zero. The import goes through, which is what makes ` +
+            `it hard to notice. Recreate the rule with create_rule.`
+          );
+        };
+
         const wordWhereActionBooleanBelongs = (
           field: string,
           value: unknown,
@@ -267,6 +293,9 @@ export function registerGetRules(server: McpServer): void {
         // them: the condition reads like any other, and the damage is that it
         // is compared against an id.
         let flagged = 0;
+        // What was marked, not what this tool is able to mark. The closing
+        // paragraph is built from these.
+        const kinds = new Set<string>();
 
         for (const rule of rules) {
           const conditions = (rule as any).conditions || [];
@@ -297,11 +326,13 @@ export function registerGetRules(server: McpServer): void {
             // looking for two fixes.
             if (isTextOpOnIdField(cond.field, cond.op)) {
               flagged += 1;
+              kinds.add('wrong-rows');
               lines.push(`      warning: ${warnTextOpOnIdField(cond.field, cond.op)}`);
               continue;
             }
             if (isEmptyList(cond.value)) {
               flagged += 1;
+              kinds.add('never-fires');
               lines.push('      warning: an empty list matches nothing, so this never fires.');
               continue;
             }
@@ -311,6 +342,7 @@ export function registerGetRules(server: McpServer): void {
             // and has never fired.
             if (!MATCHABLE_FIELDS.has(cond.field)) {
               flagged += 1;
+              kinds.add('never-alone');
               lines.push(
                 `      warning: Actual never runs this rule on its own. It looks ` +
                   `${cond.field} up on the transaction and it is not there, so the rule does ` +
@@ -328,6 +360,7 @@ export function registerGetRules(server: McpServer): void {
             const bad = brokenValues(cond.field, cond.value);
             if (bad.length > 0) {
               flagged += 1;
+              kinds.add('never-fires');
               lines.push(`      ${describeBroken(cond.field, bad)}`);
             }
           }
@@ -346,6 +379,7 @@ export function registerGetRules(server: McpServer): void {
             lines.push(`  THEN ${action.op} ${field} = "${readable(field, action.value)}"`);
             if (isEmptyList(action.value)) {
               flagged += 1;
+              kinds.add('nothing');
               lines.push('      warning: an empty list sets nothing.');
               continue;
             }
@@ -355,6 +389,7 @@ export function registerGetRules(server: McpServer): void {
             // traceable back to the rule from anywhere else.
             if (action.op === 'set' && !SETTABLE_FIELDS.has(field)) {
               flagged += 1;
+              kinds.add(field === 'category_group' ? 'nothing' : 'import');
               lines.push(
                 field === 'category_group'
                   ? `      warning: a rule cannot file a transaction under a group, and ` +
@@ -372,18 +407,32 @@ export function registerGetRules(server: McpServer): void {
             );
             if (actionAsFigure !== null) {
               flagged += 1;
+              kinds.add('import');
               lines.push(`      ${actionAsFigure}`);
+              continue;
+            }
+            const actionAsNothing = nothingWhereActionFigureBelongs(
+              field,
+              action.value ?? null,
+              action.options,
+            );
+            if (actionAsNothing !== null) {
+              flagged += 1;
+              kinds.add('zero');
+              lines.push(`      ${actionAsNothing}`);
               continue;
             }
             const actionAsWord = wordWhereActionBooleanBelongs(field, action.value, action.options);
             if (actionAsWord !== null) {
               flagged += 1;
+              kinds.add('opposite');
               lines.push(`      ${actionAsWord}`);
               continue;
             }
             const bad = brokenValues(field, action.value);
             if (bad.length > 0) {
               flagged += 1;
+              kinds.add('never-fires');
               lines.push(`      ${describeBroken(field, bad)}`);
             }
           }
@@ -394,14 +443,46 @@ export function registerGetRules(server: McpServer): void {
         if (flagged > 0) {
           // At the end as well as beside each one: a long list scrolls, and
           // this is the part worth acting on.
+          //
+          // Built from what was actually marked. The fixed version named
+          // every kind this can find, so a budget whose only marked rule
+          // compares text against an id was told that some of them take the
+          // next import down, and the sentence that mattered looked exactly
+          // like the four that did not apply. The import one comes first
+          // where it applies, because nothing about a failed import points
+          // back at the rule that caused it.
+          const BY_KIND: [string, string][] = [
+            [
+              'import',
+              'A rule that writes a field Actual keeps no column for takes the next import ' +
+                'down with it, and none of that batch arrives.',
+            ],
+            [
+              'zero',
+              'A rule holding nothing where a figure belongs sets every transaction it ' +
+                'matches to zero.',
+            ],
+            [
+              'opposite',
+              'A rule holding a word where Actual keeps true or false means true, whatever ' +
+                'the word says.',
+            ],
+            [
+              'wrong-rows',
+              'A rule comparing text against an internal id fires on transactions it has ' +
+                'nothing to do with.',
+            ],
+            ['never-alone', 'A condition Actual cannot answer means the rule never runs on its own.'],
+            ['never-fires', 'A rule pointing at something that is not there has never fired.'],
+            ['nothing', 'A rule writing a field that is not stored does nothing at all.'],
+          ];
+          const said = BY_KIND.filter(([kind]) => kinds.has(kind)).map(([, text]) => text);
+
           lines.push(
             `${flagged} line${flagged === 1 ? '' : 's'} above ${flagged === 1 ? 'is' : 'are'} ` +
-              `marked. Some of these fire on transactions they were never meant to: a rule ` +
-              `comparing text against an internal id, or holding a word where Actual keeps ` +
-              `true or false. Some never run on their own at all. And some take the next ` +
-              `import down with them, which is the kind to deal with first, because nothing ` +
-              `about a failed import points back at the rule. create_rule refuses all of ` +
-              `them now, so the ones already saved are the ones to rewrite or delete.`,
+              `marked. ${said.join(' ')} create_rule refuses ` +
+              `${flagged === 1 ? 'it' : 'all of them'} now, so the ones already saved are the ` +
+              `ones to rewrite or delete.`,
           );
         }
 
