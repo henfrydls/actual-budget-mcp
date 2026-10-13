@@ -181,16 +181,30 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
       // report. Measured against the engine, a rule's category is on the row
       // in the first read after the write, so this costs one local query and
       // no waiting.
-      const ours = await findByMarker(marker);
-      const row = (ours ?? [])[0];
-      if (row?.is_parent === true) {
-        // A rule can split the row instead. The parent holds no category in
-        // that case, so "uncategorised" would be the wrong word for it too.
-        splitByRule = true;
-      } else if (row?.category) {
-        const categories = await api.getCategories();
-        categoryFromRule =
-          categories.find((c) => c.id === row.category)?.name ?? undefined;
+      //
+      // In its own try, and this is the whole point of the block: the write
+      // has already happened. `findByMarker` swallows its own failures but
+      // `getCategories` does not, and a throw from here lands in the catch
+      // below, which decides the write may not have happened, reports an
+      // error and skips the sync. Measured with `getCategories` rejecting:
+      // the row was in the budget, with its category, and the reply said
+      // Error. Nothing this block learns is worth telling someone their
+      // transaction failed when it did not.
+      try {
+        const ours = await findByMarker(marker);
+        const row = (ours ?? [])[0];
+        if (row?.is_parent === true) {
+          // A rule can split the row instead. The parent holds no category in
+          // that case, so "uncategorised" would be the wrong word for it too.
+          splitByRule = true;
+        } else if (row?.category) {
+          const categories = await api.getCategories();
+          categoryFromRule =
+            categories.find((c) => c.id === row.category)?.name ?? undefined;
+        }
+      } catch {
+        // The reply says nothing about a category rather than nothing about
+        // the transaction.
       }
     }
 
@@ -338,6 +352,22 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         lines.push(
           `The category stays on the row in ${acctName}, but an off-budget account is ` +
             `outside your budget, so it does not count there. To make this ` +
+            `${arrived ? 'income' : 'spending'} count, set a category on the row in ` +
+            `${otherName}.`,
+        );
+      } else if (categoryFromRule && categoryCounts) {
+        // A rule put one there, so asking for a category asks for something
+        // that is done. Where it counts is the part still worth saying.
+        lines.push(
+          `It counts in ${acctName}, under ${categoryFromRule} (set by one of your rules).`,
+        );
+      } else if (categoryFromRule) {
+        // The rule's category is on the row that does not count, so the
+        // request stands, and saying only "give it a category" would read as
+        // if the row had none.
+        lines.push(
+          `A rule set ${categoryFromRule} on the row in ${acctName}, but an off-budget ` +
+            `account is outside your budget, so it does not count there. To make this ` +
             `${arrived ? 'income' : 'spending'} count, set a category on the row in ` +
             `${otherName}.`,
         );

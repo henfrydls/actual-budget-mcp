@@ -29,11 +29,12 @@ const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
 describe.skipIf(skip)('what a rule did, in the reply', () => {
   let categoryId = '';
   let payeeId = '';
+  let accountId = '';
 
   beforeAll(async () => {
     await initTestEngine();
     await createFreshBudget(async () => {
-      await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
+      accountId = (await api.createAccount({ name: 'Checking', offbudget: false } as never, 0)) as string;
       const group = await api.createCategoryGroup({ name: 'Spending' } as never);
       categoryId = (await api.createCategory({ name: 'Fun', group_id: group } as never)) as string;
       await api.createCategory({ name: 'Bills', group_id: group } as never);
@@ -65,6 +66,71 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
     expect(text, 'a rule choosing it is not the same as asking for it').toMatch(/rule/i);
   });
 
+  it('says a rule split the row instead of calling it uncategorised', async () => {
+    // A rule can split the transaction rather than categorise it, and the
+    // parent of a split holds no category, so "uncategorised" is the wrong
+    // word for it too.
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ op: 'is', field: 'notes', value: 'split-me' }],
+      actions: [
+        {
+          op: 'set-split-amount',
+          value: 50,
+          options: { splitIndex: 1, method: 'remainder' },
+        },
+      ],
+    } as never);
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -77,
+      payee: 'Nobody In Particular',
+      notes: 'split-me',
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    // The sentence, not the word: the notes say "split-me", so /split/ passes
+    // whether or not the line is there at all.
+    expect(text).toContain('A rule split this into parts');
+    expect(text, 'the parts hold the category, so naming one here would be wrong').not.toMatch(
+      /set by one of your rules/,
+    );
+  });
+
+  it('says where it counts when a rule categorised a transfer out of the budget', async () => {
+    // The reply used to say "Give the row in Checking a category to say where
+    // it counts" right after announcing the category a rule had just set,
+    // which asks for something already done.
+    await api.createAccount({ name: 'Savings', offbudget: true } as never, 0);
+    await api.createPayee({ name: 'Savings' } as never).catch(() => undefined);
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ op: 'is', field: 'notes', value: 'to-savings' }],
+      actions: [{ op: 'set', field: 'category', value: categoryId }],
+    } as never);
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -88,
+      payee: 'Savings',
+      notes: 'to-savings',
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    // Where it counts, in full. Asserting only that "Give the row a
+    // category" is absent passes on any other wording, including the one for
+    // a category that does not count.
+    expect(text).toContain('It counts in Checking, under Fun (set by one of your rules).');
+    expect(text, 'it asked for a category that was already there').not.toMatch(
+      /Give the row in .* a category/,
+    );
+  });
+
   it('says nothing about a category when no rule touched it', async () => {
     // The quiet case has to stay quiet, or every uncategorised transaction
     // starts carrying a line about rules.
@@ -76,6 +142,43 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
     } as never);
 
     expect(lines.join('\n')).not.toMatch(/Category:/);
+  });
+
+  it('still says the transaction was created when the lookup fails', async () => {
+    // The write has already happened by then. `getCategories` throwing landed
+    // in the catch that decides a failed write may not have been applied, so
+    // the reply said Error, skipped the sync, and the row was sitting in the
+    // budget with its category the whole time. Measured that way before the
+    // fix, with the read rejecting.
+    const real = api.getCategories;
+    (api as { getCategories: unknown }).getCategories = async () => {
+      throw new Error('database is locked');
+    };
+    try {
+      const lines = await createTransaction({
+        account: 'Checking',
+        amount: -44,
+        payee: 'Cinema',
+        date: '2026-10-12',
+      } as never);
+      const text = lines.join('\n');
+
+      expect(text, 'the transaction was recorded, so the reply must say so').toMatch(
+        /Transaction created|Checking/,
+      );
+      // And it keeps quiet about the category rather than guessing.
+      expect(text).not.toMatch(/set by one of your rules/);
+    } finally {
+      (api as { getCategories: unknown }).getCategories = real;
+    }
+
+    // The row really is there, which is what made the old reply a lie.
+    let rows: { amount: number }[] = [];
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      rows = (await api.getTransactions(accountId, '2000-01-01', '2100-01-01')) as never;
+      if (rows.some((r) => r.amount === -4400)) break;
+    }
+    expect(rows.map((r) => r.amount), 'the write did happen').toContain(-4400);
   });
 
   it('still reports the category that was asked for as the caller asked for it', async () => {
