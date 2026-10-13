@@ -9,6 +9,7 @@ import {
   MATCHABLE_FIELDS,
   NUMBER_FIELDS,
   RULE_FIELDS,
+  SETTABLE_FIELDS,
   TEXT_OPS,
   describeBooleanField,
   isTextOpOnIdField,
@@ -17,6 +18,7 @@ import {
   refuseListValue,
   refuseMatchingField,
   refuseOpOnBoolean,
+  refuseSettingField,
 } from '../rule-fields.js';
 
 /**
@@ -270,6 +272,51 @@ describe('the fields Actual stores by id', () => {
     for (const field of ['transfer', 'parent', 'saved']) {
       expect(body, `the engine now provides ${field}`).not.toContain(`r.${field} =`);
     }
+  });
+
+  it('lists exactly the fields a rule can write', () => {
+    // An action writes its value onto the transaction object and the engine
+    // inserts that object, so a field that is not a column is either dropped
+    // or fatal. `payee_name` is the one exception, because the engine
+    // resolves it to a payee itself, and this is what holds it to being the
+    // only one: anything else that stops being a column has to be noticed.
+    const columns = new Set(transactionColumnsFromEngine());
+    const derived = new Set([
+      ...[...RULE_FIELDS].filter((field) => columns.has(field)),
+      'payee_name',
+    ]);
+    expect([...SETTABLE_FIELDS].sort()).toEqual([...derived].sort());
+  });
+
+  it('can set fewer fields than it can match on', () => {
+    // Not a tautology: the two lists were one list, and `category_group` is
+    // the difference. A condition on it is answered, because the engine works
+    // the group out from the category before the rules run, and an action on
+    // it writes to a column that does not exist.
+    for (const field of SETTABLE_FIELDS) {
+      expect(MATCHABLE_FIELDS.has(field), `${field} can be set but not matched`).toBe(true);
+    }
+    expect(MATCHABLE_FIELDS.has('category_group')).toBe(true);
+    expect(SETTABLE_FIELDS.has('category_group')).toBe(false);
+  });
+
+  it('refuses a field a rule cannot write, and says what it would have cost', () => {
+    // The two costs are different and the refusal has to say which one: one
+    // rule does nothing, the other takes the next import down with it.
+    const group = refuseSettingField('category_group');
+    expect(group).toContain('do nothing at all');
+    expect(group).not.toContain('fail as a whole');
+
+    for (const field of ['saved', 'transfer', 'parent']) {
+      const message = refuseSettingField(field);
+      expect(message, field).toContain(`Field "${field}" does not exist on table transactions`);
+      expect(message, field).toContain('none of the three');
+      expect(message, field).toContain('cleared');
+    }
+
+    const unknown = refuseSettingField('banana');
+    expect(unknown).toContain('no rule field called');
+    expect(unknown).not.toContain('does not exist on table transactions');
   });
 
   it('refuses a field a condition cannot be answered on, and says which', () => {

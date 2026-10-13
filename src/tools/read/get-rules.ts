@@ -8,6 +8,7 @@ import {
   ID_FIELDS,
   MATCHABLE_FIELDS,
   NUMBER_FIELDS,
+  SETTABLE_FIELDS,
   isTextOpOnIdField,
   warnTextOpOnIdField,
   looksLikeAnId,
@@ -348,6 +349,22 @@ export function registerGetRules(server: McpServer): void {
               lines.push('      warning: an empty list sets nothing.');
               continue;
             }
+            // A field the rule cannot write (#187). Worth saying first and on
+            // its own: the others make a rule do the wrong thing, and this one
+            // makes every import that matches it fail as a whole, which is not
+            // traceable back to the rule from anywhere else.
+            if (action.op === 'set' && !SETTABLE_FIELDS.has(field)) {
+              flagged += 1;
+              lines.push(
+                field === 'category_group'
+                  ? `      warning: a rule cannot file a transaction under a group, and ` +
+                      `Actual keeps no column for it, so this action does nothing.`
+                  : `      warning: Actual keeps no ${field} column on a transaction, so ` +
+                      `every import with a transaction matching this rule fails as a ` +
+                      `whole and none of the batch arrives. Delete this rule.`,
+              );
+              continue;
+            }
             const actionAsFigure = textWhereActionFigureBelongs(
               field,
               action.value,
@@ -381,8 +398,10 @@ export function registerGetRules(server: McpServer): void {
             `${flagged} line${flagged === 1 ? '' : 's'} above ${flagged === 1 ? 'is' : 'are'} ` +
               `marked. Some of these fire on transactions they were never meant to: a rule ` +
               `comparing text against an internal id, or holding a word where Actual keeps ` +
-              `true or false. Others never run on their own at all. create_rule refuses all ` +
-              `of them now, so the ones already saved are the ones to rewrite or delete.`,
+              `true or false. Some never run on their own at all. And some take the next ` +
+              `import down with them, which is the kind to deal with first, because nothing ` +
+              `about a failed import points back at the rule. create_rule refuses all of ` +
+              `them now, so the ones already saved are the ones to rewrite or delete.`,
           );
         }
 

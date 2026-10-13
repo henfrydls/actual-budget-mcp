@@ -55,6 +55,22 @@ describe('what create_rule says it takes', () => {
     expect(said).toContain('cleared is false');
   });
 
+  it('names what a rule can set, and what it must not', () => {
+    // Both halves matter. Without the first, a caller never learns that date
+    // and imported_payee can be set at all; without the second, it tries
+    // transfer and the refusal is the first it hears of the problem.
+    const said = shapeOf().action_field.description ?? '';
+    // `amount` among them: it is safe to offer only because the figure is
+    // converted before it is saved (#183), and until that landed a rule
+    // setting one took down every import that matched it.
+    for (const field of ['date', 'imported_payee', 'payee_name', 'amount']) {
+      expect(said, `${field} is missing from the description`).toContain(field);
+    }
+    expect(said).toContain('Not category_group');
+    expect(said).toContain('transfer, parent or saved');
+    expect(said, 'the cost is what stops someone trying anyway').toContain('fail as a whole');
+  });
+
   it('says how to write a true or a false', () => {
     const said = shapeOf().condition_value.description ?? '';
     expect(said).toContain('true or false');

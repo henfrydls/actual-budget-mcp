@@ -52,6 +52,20 @@ describe.skipIf(skip)('listing a rule that was saved broken (#185)', () => {
       conditions: [{ field: 'transfer', op: 'is', value: true }],
       actions: [{ op: 'set', field: 'notes', value: 'never runs' }],
     } as never);
+    // The two actions a rule cannot write (#187), which are already in
+    // people's budgets and are the ones that cost the most.
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'notes', op: 'is', value: 'breaks the import' }],
+      actions: [{ op: 'set', field: 'transfer', value: true }],
+    } as never);
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'notes', op: 'is', value: 'files nothing' }],
+      actions: [{ op: 'set', field: 'category_group', value: 'anything' }],
+    } as never);
     // A figure held as the text of one (#183), which is the third of the
     // three and the one that costs the most.
     await api.createRule({
@@ -95,6 +109,27 @@ describe.skipIf(skip)('listing a rule that was saved broken (#185)', () => {
       conditions: [{ field: 'notes', op: 'is', value: 'from a formula' }],
       actions: [
         { op: 'set', field: 'reconciled', value: '', options: { formula: 'true' } },
+      ],
+    } as never);
+    // Two actions that set no field at all. Measured: the engine stores
+    // `field: null` for both, and `append-notes` is not one of them, because
+    // that one is stored with `field: "notes"`.
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'notes', op: 'is', value: 'on a schedule' }],
+      actions: [{ op: 'link-schedule', value: null }],
+    } as never);
+    await api.createRule({
+      stage: null,
+      conditionsOp: 'and',
+      conditions: [{ field: 'notes', op: 'is', value: 'half of it' }],
+      actions: [
+        {
+          op: 'set-split-amount',
+          value: 50,
+          options: { method: 'fixed-percent', splitIndex: 1 },
+        },
       ],
     } as never);
     // One that is right, to be sure the marking is about the rule and not
@@ -141,6 +176,21 @@ describe.skipIf(skip)('listing a rule that was saved broken (#185)', () => {
     expect(text).toContain('marks every transaction it matches as not reconciled');
   });
 
+  it('marks an action that makes every matching import fail', () => {
+    // Nothing else points at the rule as the cause: the import fails with a
+    // message about a column, in a batch that has nothing else to do with it.
+    expect(text).toContain('Actual keeps no transfer column on a transaction');
+    expect(text).toContain('none of the batch arrives');
+  });
+
+  it('marks an action that files nothing, for its own reason', () => {
+    expect(text).toContain('a rule cannot file a transaction under a group');
+    // Not the same complaint as the one above: this rule breaks nothing, it
+    // simply never does what it reads as doing.
+    const group = text.split('\n').find((line) => line.includes('under a group'))!;
+    expect(group).not.toContain('none of the batch');
+  });
+
   it('leaves a rule whose value comes from a template alone', () => {
     // The empty value is not what is wrong with it: the engine reads the
     // template and never looks at the stored value. Marking a rule somebody
@@ -150,6 +200,21 @@ describe.skipIf(skip)('listing a rule that was saved broken (#185)', () => {
     expect(text.split('\n')[line + 2] ?? '', 'the template rule was marked').not.toContain(
       'warning:',
     );
+  });
+
+  it('leaves an action that sets no field alone', () => {
+    // `link-schedule` and `set-split-amount` are stored with no field, and
+    // the listing falls back to the operation's own name for the line. So
+    // without asking whether the action is a `set`, both come out marked as
+    // fields Actual cannot write, which is two warnings about nothing on
+    // rules that work.
+    for (const op of ['link-schedule', 'set-split-amount']) {
+      expect(text, `${op} is not in the listing at all`).toContain(op);
+      const marked = text
+        .split('\n')
+        .filter((l) => l.includes('warning:') && l.includes(op));
+      expect(marked, `${op} was marked`).toHaveLength(0);
+    }
   });
 
   it('leaves a formula alone as well as a template', () => {
@@ -190,11 +255,11 @@ describe.skipIf(skip)('listing a rule that was saved broken (#185)', () => {
   });
 
   it('leaves a rule that is right alone', () => {
-    // Nine rules, four marked. The other five are a figure written properly,
-    // a figure from a template, a template, a formula, and real booleans on
-    // both sides.
+    // Thirteen rules, six marked. The other seven are a figure written
+    // properly, a figure from a template, a template, a formula, two actions
+    // with no field, and real booleans on both sides.
     const marked = text.split('\n').filter((line) => line.includes('warning:'));
-    expect(marked).toHaveLength(4);
-    expect(text).toContain('4 lines above are marked');
+    expect(marked).toHaveLength(6);
+    expect(text).toContain('6 lines above are marked');
   });
 });

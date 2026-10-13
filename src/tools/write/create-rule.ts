@@ -11,9 +11,11 @@ import {
   BOOLEAN_FIELDS,
   BOOLEAN_OPS,
   MATCHABLE_FIELDS,
+  SETTABLE_FIELDS,
   describeBooleanField,
   refuseMatchingField,
   refuseOpOnBoolean,
+  refuseSettingField,
   ID_FIELDS,
   LIST_FIELDS,
   isTextOpOnIdField,
@@ -385,6 +387,13 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
     throw new Error(refuseMatchingField(condition_field));
   }
 
+  // And a field the rule cannot write (#187). The engine takes the action,
+  // and what it costs lands on whoever next imports a transaction that
+  // matches it, which may be weeks later and is not traceable back to here.
+  if (!SETTABLE_FIELDS.has(action_field)) {
+    throw new Error(refuseSettingField(action_field));
+  }
+
   // Refused before anything is resolved or created (#169). The engine accepts
   // these and the rule then fires on the wrong transactions, with nothing
   // saying so: a rule is stored, so this is the one chance to stop it.
@@ -497,7 +506,10 @@ export function registerCreateRule(server: McpServer): void {
       action_field: z
         .string()
         .describe(
-          'Field to set: category, payee, notes, account, cleared, reconciled. Setting ' +
+          'Field to set: category, payee, payee_name, notes, account, amount, date, ' +
+            'imported_payee, cleared, reconciled. Not category_group, which does nothing, ' +
+            'and not transfer, parent or saved, which make every import that matches the ' +
+            'rule fail as a whole. Setting ' +
             'account moves the transaction, which a later import of the same movement ' +
             'does not recognise, so ' +
             'a bank sync can leave a duplicate; a row moved off budget also loses its ' +

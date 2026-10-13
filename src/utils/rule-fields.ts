@@ -308,6 +308,74 @@ export function refuseMatchingField(field: string): string {
 }
 
 /**
+ * The fields a rule can set.
+ *
+ * Narrower than the fields it can match on, and the gap is not obvious from
+ * anything the engine says. A rule's action writes its value onto the
+ * transaction object and the engine then inserts that object, so a field that
+ * is not a column on `transactions` is either dropped or fatal, depending on
+ * which one it is. Measured, one rule per field in `FIELD_INFO`, each with an
+ * import of a transaction that matched it:
+ *
+ *   account, amount, category, cleared, date, imported_payee, notes, payee
+ *   and payee_name   all did what they say.
+ *
+ *   category_group   accepted, and did nothing at all: the row came back
+ *                    with no category. A rule that reads as if it files
+ *                    transactions and has never filed one.
+ *
+ *   saved, transfer  the import failed as a whole, with
+ *   and parent       `Field "<name>" does not exist on table transactions`.
+ *                    Three rows imported with one of them matching, and none
+ *                    of the three arrived.
+ *
+ * That last one is the serious half: it is not the matching row that is lost
+ * but the batch, so for anyone syncing a bank nothing comes in at all from
+ * then on, and the rule reads perfectly well wherever they go looking.
+ *
+ * `payee_name` is the one that is settable without being a column, because
+ * the engine resolves it to a payee itself. A test derives this list from the
+ * engine's own schema and holds that exception to being the only one.
+ */
+export const SETTABLE_FIELDS: ReadonlySet<string> = new Set([
+  'account',
+  'amount',
+  'category',
+  'cleared',
+  'date',
+  'imported_payee',
+  'notes',
+  'payee',
+  'payee_name',
+  'reconciled',
+]);
+
+/** What to say when a rule tries to set a field it cannot set. */
+export function refuseSettingField(field: string): string {
+  if (!RULE_FIELDS.has(field)) {
+    return (
+      `Actual has no rule field called \`${field}\`. A rule can set ` +
+      `${[...SETTABLE_FIELDS].join(', ')}.`
+    );
+  }
+  // Two different things go wrong, and the one that costs the most says so.
+  const because =
+    field === 'category_group'
+      ? 'A transaction is filed under a category, not under a group, so Actual keeps no ' +
+        'column for this and the rule would be created and then do nothing at all: ' +
+        'measured, a transaction that matched came back with no category. '
+      : `Actual keeps no column of that name on a transaction, so the rule would be ` +
+        `created and then every import with a transaction matching it would fail as a ` +
+        `whole, with \`Field "${field}" does not exist on table transactions\`. Measured, ` +
+        `a batch of three rows with one of them matching brought in none of the three, so ` +
+        `a bank sync stops working altogether. `;
+  return (
+    `A rule cannot set \`${field}\`. ${because}A rule can set ` +
+    `${[...SETTABLE_FIELDS].join(', ')}.`
+  );
+}
+
+/**
  * What each boolean field says about a transaction, in words.
  *
  * A rule is stored and keeps running, so the reply is the one chance the
