@@ -4,18 +4,43 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // from outside the wrapper is whether the preference was read, so that is what
 // this asks about: stubbing `refreshBudgetDecimalPlaces` would not work, since
 // mocking a module's export does not change the calls made inside that module.
+/**
+ * Everything the tools touch, in the order they touch it.
+ *
+ * The order is the point. Counting reads is not enough:
+ * `transfer_between_categories` reads `preferences/get` itself, for the note
+ * the engine writes, and it does that after converting the amount. A test
+ * that only counts would see that read and call the tool covered while the
+ * conversion it is there to protect had already happened with the old count.
+ */
+// `vi.hoisted`, because a `vi.mock` factory is lifted above everything else in
+// the file and cannot see an ordinary top-level variable.
+const { touched, record } = vi.hoisted(() => {
+  const seen: string[] = [];
+  return {
+    touched: seen,
+    record:
+      <T>(name: string, result: T) =>
+      async () => {
+        seen.push(name);
+        return result;
+      },
+  };
+});
+
 vi.mock('@actual-app/api', () => ({
-  sync: vi.fn().mockResolvedValue(undefined),
-  getAccounts: vi.fn().mockResolvedValue([]),
-  getCategoryGroups: vi.fn().mockResolvedValue([]),
-  getCategories: vi.fn().mockResolvedValue([]),
-  getPayees: vi.fn().mockResolvedValue([]),
-  getRules: vi.fn().mockResolvedValue([]),
-  getAccountBalance: vi.fn().mockResolvedValue(0),
-  getBudgetMonths: vi.fn().mockResolvedValue([]),
-  runQuery: vi.fn().mockResolvedValue({ data: [] }),
+  sync: record('sync', undefined),
+  getAccounts: record('getAccounts', []),
+  getCategoryGroups: record('getCategoryGroups', []),
+  getCategories: record('getCategories', []),
+  getPayees: record('getPayees', []),
+  getRules: record('getRules', []),
+  getAccountBalance: record('getAccountBalance', 0),
+  getBudgetMonths: record('getBudgetMonths', []),
+  getBudgetMonth: record('getBudgetMonth', { categoryGroups: [] }),
+  runQuery: record('runQuery', { data: [] }),
+  aqlQuery: record('aqlQuery', { data: [] }),
   q: vi.fn(() => ({ filter: () => ({ select: () => ({}) }), select: () => ({}) })),
-  aqlQuery: vi.fn().mockResolvedValue({ data: [] }),
   utils: {
     amountToInteger: (a: number, places = 2) => Math.round(a * Math.pow(10, places)),
     integerToAmount: (c: number, places = 2) => c / Math.pow(10, places),
@@ -25,7 +50,12 @@ vi.mock('@actual-app/api', () => ({
 const send = vi.fn();
 vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
-  getInternal: () => ({ send: (...a: unknown[]) => send(...a) }),
+  getInternal: () => ({
+    send: (...a: unknown[]) => {
+      touched.push(`send:${String(a[0])}`);
+      return send(...a);
+    },
+  }),
 }));
 
 import { registerAllTools } from '../index.js';
@@ -74,43 +104,44 @@ describe('the registered server re-reads the currency before writing', () => {
     send.mockReset().mockResolvedValue({ defaultCurrencyCode: 'JPY' });
   });
 
-  /** Which preference reads happened while running `handler`. */
-  async function preferenceReadsDuring(tool: Registered): Promise<number> {
-    send.mockClear();
+  /** Everything the tool touched in the engine, in order. */
+  async function engineCallsOf(tool: Registered): Promise<string[]> {
+    touched.length = 0;
     try {
       await tool.handler({});
     } catch {
       // The handler itself is free to fail: it is being called with no
       // arguments against a stubbed engine. The wrapper runs before it, and
-      // the call is what is being counted.
+      // what is being recorded is what the tool reached for first.
     }
-    return send.mock.calls.filter((c) => c[0] === 'preferences/get').length;
+    return [...touched];
   }
 
-  it('reads it in every tool that writes', async () => {
+  it('reads it first in every tool that writes, before anything is converted', async () => {
     const tools = registerAndCollect();
     const writes = tools.filter((t) => !t.readOnly);
     expect(writes.length, 'no write tools were registered at all').toBeGreaterThan(10);
 
-    const missing: string[] = [];
+    const late: string[] = [];
     for (const tool of writes) {
-      if ((await preferenceReadsDuring(tool)) === 0) missing.push(tool.name);
+      // First, not merely present. A tool that reads the preference somewhere
+      // in the middle of its work has already converted its amount by then,
+      // which is the case this exists to catch rather than the case it looks
+      // like it catches.
+      if ((await engineCallsOf(tool))[0] !== 'send:preferences/get') late.push(tool.name);
     }
 
-    expect(missing, 'these write tools convert amounts with whatever count was left over').toEqual(
-      [],
-    );
+    expect(late, 'these write tools convert amounts before re-reading the currency').toEqual([]);
   });
 
-  it('does not read it twice in a tool that only reads', async () => {
+  it('does not add a read of its own to a tool that only reads', async () => {
     // Reads refresh through the sync instead, so a second query per read
     // would be for the same answer.
     const tools = registerAndCollect();
     const read = tools.find((t) => t.readOnly && t.name === 'list_accounts');
     expect(read, 'list_accounts is not registered as read-only any more').toBeDefined();
 
-    // The sync path reads it once, through `syncNow`. What must not happen is
-    // the wrapper adding another on top.
-    expect(await preferenceReadsDuring(read!)).toBeLessThanOrEqual(1);
+    const calls = await engineCallsOf(read!);
+    expect(calls.filter((c) => c === 'send:preferences/get').length).toBeLessThanOrEqual(1);
   });
 });
