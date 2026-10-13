@@ -109,6 +109,15 @@ describe('pairing the two sides of one movement', () => {
    * Both faults found in review were arrangements where a better pairing
    * existed and the code did not find it, so that is what this asserts,
    * against a brute-force maximum.
+   *
+   * The first version of this generator spread its rows over three accounts,
+   * two amounts and either sign, and almost never produced two rows competing
+   * for the same transfer: a greedy pairing passed all three hundred batches.
+   * A property that cannot fail for the reason it was written is worse than no
+   * property, because it is read as cover. So the rows are concentrated into
+   * the shape the fault lives in, one pair of accounts and one amount over a
+   * handful of days, and a test below insists the generator keeps producing
+   * batches where greedy and maximum disagree.
    */
   describe('over generated batches', () => {
     /** A small deterministic generator, so a failure can be re-run. */
@@ -120,10 +129,64 @@ describe('pairing the two sides of one movement', () => {
       };
     }
 
+    /**
+     * Six consecutive days, and batches of four to sixteen rows.
+     *
+     * Measured while choosing it, counting how many of three hundred batches
+     * a greedy pairing would get wrong:
+     *
+     *   2 days,  4 to 12 rows     0     every row sees every other, greedy is right
+     *   3 days,  2 to 10 rows    12
+     *   4 days,  2 to 10 rows     7
+     *   6 days,  4 to 16 rows    36
+     *   8 days,  6 to 18 rows    22
+     *
+     * The disagreements come from the edges, where a row has one candidate
+     * and another takes it, so a window that every row can see produces none
+     * at all. The first version of this spread rows over three accounts and
+     * two amounts and found almost no edges.
+     */
+    const DATES = [
+      '2026-09-22',
+      '2026-09-23',
+      '2026-09-24',
+      '2026-09-25',
+      '2026-09-26',
+      '2026-09-27',
+    ];
+
+    /**
+     * One batch, in the shape a month of statements arrives in: payments out
+     * of one account and credits on one card, same amount, a few days apart.
+     * Some rows come back marked, as they would after the duplicate checks.
+     */
+    function makeBatch(random: () => number): { rows: PairableRow[]; skip: Set<number> } {
+      const size = 4 + Math.floor(random() * 13);
+      const rows: PairableRow[] = [];
+      const skip = new Set<number>();
+      for (let index = 0; index < size; index += 1) {
+        const isTransfer = random() < 0.5;
+        const date = DATES[Math.floor(random() * DATES.length)];
+        rows.push(
+          isTransfer
+            ? { index, accountId: BANK, amountCents: -800, date, transferTargetId: CARD }
+            : { index, accountId: CARD, amountCents: 800, date },
+        );
+        // Roughly one row in six arrives already reported, for a repeat or a
+        // bank id, which is where the last fault was.
+        if (random() < 0.17) skip.add(index);
+      }
+      return { rows, skip };
+    }
+
     /** The largest matching, by trying every assignment. */
-    function bruteForceMax(rows: readonly PairableRow[], windowDays: number): number {
-      const transfers = rows.filter((r) => r.transferTargetId);
-      const ordinaries = rows.filter((r) => !r.transferTargetId);
+    function bruteForceMax(
+      rows: readonly PairableRow[],
+      windowDays: number,
+      skip: ReadonlySet<number>,
+    ): number {
+      const transfers = rows.filter((r) => r.transferTargetId && !skip.has(r.index));
+      const ordinaries = rows.filter((r) => !r.transferTargetId && !skip.has(r.index));
       const fits = (t: PairableRow, o: PairableRow): boolean =>
         t.transferTargetId === o.accountId &&
         t.amountCents === -o.amountCents &&
@@ -144,34 +207,52 @@ describe('pairing the two sides of one movement', () => {
       return best(0, new Set());
     }
 
-    it('always finds as many pairs as exist, and never reuses a row', () => {
-      const random = makeRandom(20_261_012);
-      const accounts = ['a', 'b', 'c'];
-      const amounts = [800, 1250];
-      const dates = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28'];
-      const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)];
-
-      for (let batch = 0; batch < 300; batch += 1) {
-        const size = 2 + Math.floor(random() * 9);
-        const rows: PairableRow[] = [];
-        for (let index = 0; index < size; index += 1) {
-          const account = pick(accounts);
-          const amount = pick(amounts);
-          const isTransfer = random() < 0.5;
-          const target = pick(accounts.filter((a) => a !== account));
-          rows.push({
-            index,
-            accountId: account,
-            amountCents: random() < 0.5 ? amount : -amount,
-            date: pick(dates),
-            ...(isTransfer ? { transferTargetId: target } : {}),
-          });
+    /**
+     * What the code did before: each row takes its nearest free candidate and
+     * keeps it. Here so the generator can be held to producing batches where
+     * this is not enough.
+     */
+    function greedyCount(
+      rows: readonly PairableRow[],
+      windowDays: number,
+      skip: ReadonlySet<number>,
+    ): number {
+      const transfers = rows.filter((r) => r.transferTargetId && !skip.has(r.index));
+      const taken = new Set<number>();
+      let count = 0;
+      for (const o of rows) {
+        if (o.transferTargetId || skip.has(o.index)) continue;
+        const candidate = transfers
+          .filter(
+            (t) =>
+              !taken.has(t.index) &&
+              t.transferTargetId === o.accountId &&
+              t.amountCents === -o.amountCents &&
+              daysApart(t.date, o.date) <= windowDays,
+          )
+          .sort((a, b) => daysApart(a.date, o.date) - daysApart(b.date, o.date) || a.index - b.index)[0];
+        if (candidate) {
+          taken.add(candidate.index);
+          count += 1;
         }
+      }
+      return count;
+    }
 
-        const pairs = pairCounterparts(rows, 1);
-        const where = `batch ${batch}: ${JSON.stringify(rows)}`;
+    const SEED = 20_261_012;
+    const BATCHES = 300;
 
-        expect(pairs.length, `fewer pairs than exist in ${where}`).toBe(bruteForceMax(rows, 1));
+    it('always finds as many pairs as exist, and never reuses a row', () => {
+      const random = makeRandom(SEED);
+
+      for (let batch = 0; batch < BATCHES; batch += 1) {
+        const { rows, skip } = makeBatch(random);
+        const pairs = pairCounterparts(rows, 1, skip);
+        const where = `batch ${batch}, skip ${[...skip]}: ${JSON.stringify(rows)}`;
+
+        expect(pairs.length, `fewer pairs than exist in ${where}`).toBe(
+          bruteForceMax(rows, 1, skip),
+        );
         expect(new Set(pairs.map((p) => p.transfer)).size, `a transfer used twice in ${where}`).toBe(
           pairs.length,
         );
@@ -181,42 +262,44 @@ describe('pairing the two sides of one movement', () => {
         for (const pair of pairs) {
           const t = rows.find((r) => r.index === pair.transfer)!;
           const o = rows.find((r) => r.index === pair.ordinary)!;
+          expect(skip.has(t.index), `paired a reported transfer in ${where}`).toBe(false);
+          expect(skip.has(o.index), `paired a reported row in ${where}`).toBe(false);
           expect(t.transferTargetId, `paired across accounts in ${where}`).toBe(o.accountId);
           expect(t.amountCents, `paired unequal amounts in ${where}`).toBe(-o.amountCents);
-          expect(daysApart(t.date, o.date), `paired outside the window in ${where}`).toBeLessThanOrEqual(1);
+          expect(
+            daysApart(t.date, o.date),
+            `paired outside the window in ${where}`,
+          ).toBeLessThanOrEqual(1);
         }
       }
     });
 
-    it('generates batches worth testing, not a field of nothing', () => {
-      // A generator that produced no pairable rows would make the property
-      // above pass over an empty set every time.
-      const random = makeRandom(20_261_012);
-      const accounts = ['a', 'b', 'c'];
-      const amounts = [800, 1250];
-      const dates = ['2026-09-24', '2026-09-25', '2026-09-26', '2026-09-27', '2026-09-28'];
-      const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)];
+    it('keeps producing batches where greedy is not enough', () => {
+      // The property above can only catch a greedy pairing on a batch where
+      // greedy and maximum disagree. Asking for batches that merely contain a
+      // pair is not the same thing, and that is what the first version asked
+      // for: it passed with the greedy code in place.
+      const random = makeRandom(SEED);
+      let contested = 0;
 
-      let withPairs = 0;
-      for (let batch = 0; batch < 300; batch += 1) {
-        const size = 2 + Math.floor(random() * 9);
-        const rows: PairableRow[] = [];
-        for (let index = 0; index < size; index += 1) {
-          const account = pick(accounts);
-          const amount = pick(amounts);
-          const isTransfer = random() < 0.5;
-          const target = pick(accounts.filter((a) => a !== account));
-          rows.push({
-            index,
-            accountId: account,
-            amountCents: random() < 0.5 ? amount : -amount,
-            date: pick(dates),
-            ...(isTransfer ? { transferTargetId: target } : {}),
-          });
-        }
-        if (pairCounterparts(rows, 1).length > 0) withPairs += 1;
+      for (let batch = 0; batch < BATCHES; batch += 1) {
+        const { rows, skip } = makeBatch(random);
+        if (greedyCount(rows, 1, skip) < bruteForceMax(rows, 1, skip)) contested += 1;
       }
-      expect(withPairs, 'the generator produced almost nothing to pair').toBeGreaterThan(30);
+
+      // 36 of 300 as written. The floor leaves room for the generator to
+      // drift a little without the property quietly going hollow.
+      expect(contested, 'no batch would catch a greedy pairing').toBeGreaterThan(20);
+    });
+
+    it('produces batches with rows already reported', () => {
+      // The other half of what the property has to cover.
+      const random = makeRandom(SEED);
+      let withSkips = 0;
+      for (let batch = 0; batch < BATCHES; batch += 1) {
+        if (makeBatch(random).skip.size > 0) withSkips += 1;
+      }
+      expect(withSkips, 'nothing was ever marked').toBeGreaterThan(100);
     });
   });
 });
