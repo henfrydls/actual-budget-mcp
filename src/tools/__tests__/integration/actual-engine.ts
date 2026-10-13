@@ -15,6 +15,7 @@ import path from 'node:path';
 
 let dataDir: string | undefined;
 let originalLog: typeof console.log | undefined;
+let internal: Awaited<ReturnType<typeof api.init>> | undefined;
 
 // The engine emits informational "[Breadcrumb]" / spreadsheet chatter on stdout.
 // Filter it so test output stays focused on assertions (real errors still pass through).
@@ -39,7 +40,21 @@ function restoreLog(): void {
 export async function initTestEngine(): Promise<void> {
   silenceEngineChatter();
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'actual-mcp-it-'));
-  await api.init({ dataDir });
+  internal = await api.init({ dataDir });
+}
+
+/**
+ * The engine's internal handlers, which `api.init` returns and the real
+ * `connection.ts` hands out as `getInternal()`.
+ *
+ * A test that exercises code reaching for an internal handler mocks
+ * `connection.js` and points `getInternal` here, so the handler is the real
+ * one against the local budget. Reading a preference goes this way, because
+ * the public API has no getter for the synced store.
+ */
+export function testInternal(): Awaited<ReturnType<typeof api.init>> {
+  if (!internal) throw new Error('the test engine is not initialised');
+  return internal;
 }
 
 export async function shutdownTestEngine(): Promise<void> {
@@ -48,6 +63,7 @@ export async function shutdownTestEngine(): Promise<void> {
   } finally {
     if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
     dataDir = undefined;
+    internal = undefined;
     restoreLog();
   }
 }
@@ -72,6 +88,19 @@ export async function createFreshBudget(
   const created = budgets.find((b) => b.name === name);
   if (!created) throw new Error(`could not locate freshly created budget "${name}"`);
   await api.loadBudget(created.id);
+  // The decimal count belongs to the budget that is open, and a new budget
+  // has its own currency. In the server this happens inside `ensureConnection`,
+  // which reads the preference as part of opening one; here the harness opens
+  // budgets itself, so without this a budget in yen would leave its count
+  // behind for the next test to inherit.
+  //
+  // Imported here rather than at the top of the file, and that is load-order,
+  // not style: `currency.ts` imports `connection.js`, and the tests that need
+  // the engine's own handlers mock `connection.js` with a factory that imports
+  // this file. A static import closes that circle and vitest waits on itself,
+  // which hangs the run with no failure to read.
+  const { resetBudgetDecimalPlaces } = await import('../../../utils/currency.js');
+  resetBudgetDecimalPlaces();
   return created.id;
 }
 

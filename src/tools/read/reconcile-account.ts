@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
-import { amountToCents, formatMoney } from '../../utils/money.js';
+import { amountToCents, formatMoney, isRoundHundred } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 
@@ -72,7 +72,8 @@ const KIND_TEXT: Record<Candidate['kind'], (c: Candidate) => string> = {
  * An audit caught this being said about 3,333.33.
  */
 function differenceIsRound(cents: number): boolean {
-  return Math.abs(cents) % 10000 === 0;
+  // In the budget's currency: a hundred is a hundred of whatever it is in.
+  return isRoundHundred(cents);
 }
 
 /** Strongest signal first. A bare amount match is common by chance, so it goes last. */

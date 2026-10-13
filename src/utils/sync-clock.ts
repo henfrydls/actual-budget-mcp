@@ -1,4 +1,5 @@
 import * as api from '@actual-app/api';
+import { refreshBudgetDecimalPlaces } from './currency.js';
 
 /**
  * When this process last managed to sync, in one place (#126).
@@ -63,4 +64,26 @@ export async function syncNow(): Promise<void> {
     throw error;
   }
   markGoodSync();
+
+  // The budget currency, re-read here for the same reason the clock is kept
+  // here: this is the one place every sync passes through. It scales every
+  // amount read or written (#141), and a sync is where a currency changed in
+  // the app arrives.
+  //
+  // Tying it to the read path instead was not enough. A write syncs before
+  // its own checks, which marks the clock fresh, so the next read answers
+  // from the TTL and never refreshes: on a server left running, a write could
+  // keep the figure from the morning indefinitely. It reads both preference
+  // stores and keeps the count it already had when neither answers, so a
+  // budget whose preferences cannot be read goes on converting as it was.
+  //
+  // Caught here as well, rather than trusted: this runs after the sync has
+  // been recorded, and a throw from it would turn a sync that worked into a
+  // failed call for every write that syncs before its checks. The decimal
+  // count is a formatting detail and must not be able to fail a sync.
+  try {
+    await refreshBudgetDecimalPlaces();
+  } catch {
+    // Keeping the count already held, which is what a failed read means.
+  }
 }

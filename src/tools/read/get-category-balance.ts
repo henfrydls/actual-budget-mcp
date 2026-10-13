@@ -92,7 +92,10 @@ export function registerGetCategoryBalance(server: McpServer): void {
             totalSpent += found.spent;
             monthsWithData++;
           } else {
-            rows.push([month, '0.00', '0.00', '0.00']);
+            // Through the formatter, so a month with nothing in it is
+            // written the way every other figure in the table is.
+            const nothing = formatMoney(0);
+            rows.push([month, nothing, nothing, nothing]);
           }
         }
 

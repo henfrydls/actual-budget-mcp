@@ -121,6 +121,8 @@ export async function refreshBeforeRead(now?: number): Promise<FreshnessReport> 
   if (!inFlight) {
     inFlight = (async () => {
       try {
+        // `syncNow` also re-reads the budget currency, which is where a
+        // change to it arrives.
         await syncNow();
         return true;
       } catch (error) {

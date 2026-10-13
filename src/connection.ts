@@ -9,6 +9,7 @@ import {
 } from './utils/data-dir-lock.js';
 import { packageVersion, actualApiVersion } from './utils/version.js';
 import { readEnv } from './utils/env.js';
+import { refreshBudgetDecimalPlaces, resetBudgetDecimalPlaces } from './utils/currency.js';
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
@@ -622,6 +623,13 @@ export async function ensureConnection(): Promise<void> {
       throw error;
     }
 
+    // With the budget open, and before any tool can convert a figure: every
+    // amount in and out is scaled by the currency's decimal count, and the
+    // default is wrong for a budget in one that has none (#141). It reads
+    // nothing over the network and cannot throw, so a budget whose preference
+    // is unreadable connects exactly as before, with the default.
+    await refreshBudgetDecimalPlaces();
+
     initialized = true;
   })();
 
@@ -642,6 +650,7 @@ export async function shutdown(): Promise<void> {
   releaseDataDirLock(claimedDataDir ?? effectiveDataDir());
   claimedDataDir = null;
   forgetActiveDataDir();
+  resetBudgetDecimalPlaces();
   initialized = false;
   initializing = null;
   internal = null;
