@@ -5,16 +5,15 @@ on:
     types: [published]
   workflow_dispatch:
 
-permissions:
-  # contents:write is needed only to attach the .mcpb to the release; the
-  # workflow does not push code. Narrower than it looks: a release asset upload
-  # cannot modify the repository.
-  contents: write
-  id-token: write # npm provenance, and OIDC for the MCP registry
-
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      # contents:write is needed only to attach the .mcpb to the release; the
+      # workflow does not push code. Narrower than it looks: a release asset
+      # upload cannot modify the repository.
+      contents: write
+      id-token: write # npm provenance
     steps:
       - uses: actions/checkout@v4
 
@@ -47,10 +46,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # Publishing to the MCP registry used to be a manual step done afterwards,
-      # and 0.8.3 shows what that costs: it never happened, so the registry
-      # advertised 0.8.2 for two weeks while npm served 0.8.3. A step that lives
-      # in someone's memory is a step that eventually does not run.
+  # Publishing to the MCP registry used to be a manual step done afterwards,
+  # and 0.8.3 shows what that costs: it never happened, so the registry
+  # advertised 0.8.2 for two weeks while npm served 0.8.3. A step that lives in
+  # someone's memory is a step that eventually does not run.
+  #
+  # Its own job, because of what happened publishing 0.10.4: npm took more than
+  # two and a half minutes to show the new version, the retries ran out, and
+  # npm, the container image and the .mcpb had all succeeded. Re-running the
+  # job would have failed on `npm publish`, which refuses a version that is
+  # already there, so the registry entry had to be published by hand. Split
+  # like this, the half that failed is the half that can be re-run.
+  registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout only
+      id-token: write # OIDC for the MCP registry
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       # Pinned on purpose. `releases/latest` would silently upgrade the tool
       # under us, and a behaviour change would break a release at the worst
       # possible moment: after npm has already published. This is the same drift
@@ -106,9 +126,12 @@ jobs:
               "https://ghcr.io/v2/${IMAGE}/manifests/${VERSION}"
           }
 
-          for attempt in 1 2 3 4 5; do
+          # Ten attempts rather than five. Both of the things being waited
+          # for are outside this workflow, and 0.10.4 took longer than the
+          # two and a half minutes the old loop allowed.
+          for attempt in $(seq 1 10); do
             if ! image_exists; then
-              echo "attempt $attempt: ghcr has no ${VERSION} tag yet, waiting 30s"
+              echo "attempt $attempt of 10: ghcr has no ${VERSION} tag yet, waiting 30s"
               sleep 30
               continue
             fi
@@ -116,8 +139,9 @@ jobs:
               echo "published ${VERSION} to the MCP registry"
               exit 0
             fi
-            echo "attempt $attempt: publish failed, npm may still be propagating, waiting 30s"
+            echo "attempt $attempt of 10: publish failed, npm may still be propagating, waiting 30s"
             sleep 30
           done
-          echo "::error::could not publish ${VERSION} to the MCP registry after 5 attempts"
+          echo "::error::could not publish ${VERSION} to the MCP registry after 10 attempts."
+          echo "::error::npm, the image and the release asset are already done: re-run this job alone."
           exit 1
