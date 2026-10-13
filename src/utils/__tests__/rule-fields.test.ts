@@ -2,12 +2,23 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import {
+  BOOLEAN_FIELDS,
+  BOOLEAN_OPS,
   ID_FIELDS,
-  NUMBER_FIELDS,
-  TEXT_OPS,
   LIST_FIELDS,
+  MATCHABLE_FIELDS,
+  NUMBER_FIELDS,
+  RULE_FIELDS,
+  SETTABLE_FIELDS,
+  TEXT_OPS,
+  describeBooleanField,
   isTextOpOnIdField,
   looksLikeAnId,
+  refuseListOnField,
+  refuseListValue,
+  refuseMatchingField,
+  refuseOpOnBoolean,
+  refuseSettingField,
 } from '../rule-fields.js';
 
 /**
@@ -152,5 +163,241 @@ describe('the fields Actual stores by id', () => {
     expect(looksLikeAnId('')).toBe(false);
     // Close but not an id: a rule holding this was never pointing at anything.
     expect(looksLikeAnId('7f46d9e7-1b2c-4d3e-8f90')).toBe(false);
+  });
+
+  /** The `name: { type: "boolean" ... }` entries, the same way. */
+  function booleanFieldsFromEngine(): string[] {
+    const start = bundle.indexOf('FIELD_INFO = {');
+    const block = bundle.slice(start, start + 2000);
+    const end = block.indexOf('\n};');
+    const fields: string[] = [];
+    const entry = /(\w+):\s*\{\s*(?:\/\*[^*]*\*\/\s*)?type:\s*"(\w+)"/g;
+    let match: RegExpExecArray | null;
+    while ((match = entry.exec(block.slice(0, end))) !== null) {
+      if (match[2] === 'boolean') fields.push(match[1]);
+    }
+    return fields;
+  }
+
+  it('lists exactly the boolean fields the engine does', () => {
+    // The issue that reported this named `cleared` and `reconciled`, and the
+    // engine has two more. A list written from the fields an issue happens to
+    // mention is how `category_group` was missed above, and the fields missed
+    // here are the two a rule must never set (#187).
+    const found = booleanFieldsFromEngine();
+    expect(found.length, 'the parse found no boolean field at all').toBeGreaterThan(0);
+    expect([...BOOLEAN_FIELDS].sort()).toEqual(found.sort());
+  });
+
+  it('offers exactly the operators the engine takes on a boolean', () => {
+    // `TYPE_INFO` is where the engine says which operators each type takes,
+    // and the boolean type takes one. Measured as well, one rule per operator
+    // on `cleared`: everything but `is` comes back as a bare refusal. If a
+    // later version adds `isNot` there, this fails and the advice can change.
+    const start = bundle.indexOf('var TYPE_INFO = {');
+    expect(start, 'TYPE_INFO is not in the bundle any more').toBeGreaterThan(-1);
+    const block = bundle.slice(start, bundle.indexOf('var FIELD_INFO = {', start));
+    const entry = /boolean:\s*\{\s*ops:\s*\[([^\]]*)\]/.exec(block);
+    expect(entry, 'the boolean type is not in TYPE_INFO any more').not.toBeNull();
+
+    const ops = [...entry![1].matchAll(/"(\w+)"/g)].map((m) => m[1]);
+    expect(ops.length, 'the parse found no operator at all').toBeGreaterThan(0);
+    expect([...BOOLEAN_OPS].sort()).toEqual(ops.sort());
+  });
+
+  it('has words for every boolean field', () => {
+    // The reply and the refusals are built from this, so a field with no entry
+    // is said back as "undefined" in the one sentence written to be read.
+    for (const field of BOOLEAN_FIELDS) {
+      expect(describeBooleanField(field), `${field} has no words`).toBeTypeOf('string');
+    }
+  });
+
+  /** Every name in FIELD_INFO, whatever its type. */
+  function ruleFieldsFromEngine(): string[] {
+    const start = bundle.indexOf('FIELD_INFO = {');
+    const block = bundle.slice(start, start + 2000);
+    const end = block.indexOf('\n};');
+    const entry = /(\w+):\s*\{\s*(?:\/\*[^*]*\*\/\s*)?type:\s*"(\w+)"/g;
+    return [...block.slice(0, end).matchAll(entry)].map((m) => m[1]);
+  }
+
+  /** The columns the engine keeps on a transaction. */
+  function transactionColumnsFromEngine(): string[] {
+    const start = bundle.indexOf('var schema = {');
+    expect(start, 'the engine schema is not in the bundle any more').toBeGreaterThan(-1);
+    const table = bundle.indexOf('transactions: {', start);
+    expect(table, 'the transactions table is not in the schema any more').toBeGreaterThan(-1);
+    const body = bundle.slice(table, bundle.indexOf('\n\t},', table));
+    return [...body.matchAll(/^\t\t(\w+): f\(/gm)].map((m) => m[1]);
+  }
+
+  it('knows every field the engine has a rule field for', () => {
+    // Not to use them all: three of these can never be matched on. It is so
+    // that a field added in a later version is refused by its name here
+    // instead of falling through as one Actual has never heard of.
+    const found = ruleFieldsFromEngine();
+    expect(found.length, 'the parse found no field at all').toBeGreaterThan(10);
+    expect([...RULE_FIELDS].sort()).toEqual(found.sort());
+  });
+
+  it('lists exactly the fields a condition can be answered on', () => {
+    // A rule is evaluated against a transaction row plus what
+    // `prepareTransactionForRules` puts on it. Anything else in FIELD_INFO is
+    // answered `undefined`, and `Condition.eval` returns false for that
+    // without a word, so the rule is saved and never fires.
+    const columns = new Set(transactionColumnsFromEngine());
+    expect(columns.size, 'the parse found no column at all').toBeGreaterThan(10);
+
+    const derived = new Set([
+      ...[...RULE_FIELDS].filter((field) => columns.has(field)),
+      'payee_name',
+      'category_group',
+    ]);
+    expect([...MATCHABLE_FIELDS].sort()).toEqual([...derived].sort());
+  });
+
+  it('adds exactly the two fields the engine adds before a rule runs', () => {
+    // The pair above is hand-written, and this is what holds it honest: the
+    // function that prepares a transaction for the rules sets `payee_name`
+    // and `category_group`, and nothing else a rule field is named after. If
+    // a later version starts handing the rules a transfer or a split flag,
+    // this fails and the refusal can be lifted.
+    const from = bundle.indexOf('async function prepareTransactionForRules');
+    expect(from, 'the engine no longer prepares a transaction for the rules').toBeGreaterThan(-1);
+    const body = bundle.slice(from, bundle.indexOf('\n}', from));
+
+    expect(body).toContain('r.payee_name = payee.name');
+    expect(body).toContain('r.category_group = category.cat_group');
+    for (const field of ['transfer', 'parent', 'saved']) {
+      expect(body, `the engine now provides ${field}`).not.toContain(`r.${field} =`);
+    }
+  });
+
+  it('lists exactly the fields a rule can write', () => {
+    // An action writes its value onto the transaction object and the engine
+    // inserts that object, so a field that is not a column is either dropped
+    // or fatal. `payee_name` is the one exception, because the engine
+    // resolves it to a payee itself, and this is what holds it to being the
+    // only one: anything else that stops being a column has to be noticed.
+    const columns = new Set(transactionColumnsFromEngine());
+    const derived = new Set([
+      ...[...RULE_FIELDS].filter((field) => columns.has(field)),
+      'payee_name',
+    ]);
+    expect([...SETTABLE_FIELDS].sort()).toEqual([...derived].sort());
+  });
+
+  it('can set fewer fields than it can match on', () => {
+    // Not a tautology: the two lists were one list, and `category_group` is
+    // the difference. A condition on it is answered, because the engine works
+    // the group out from the category before the rules run, and an action on
+    // it writes to a column that does not exist.
+    for (const field of SETTABLE_FIELDS) {
+      expect(MATCHABLE_FIELDS.has(field), `${field} can be set but not matched`).toBe(true);
+    }
+    expect(MATCHABLE_FIELDS.has('category_group')).toBe(true);
+    expect(SETTABLE_FIELDS.has('category_group')).toBe(false);
+  });
+
+  it('refuses a field a rule cannot write, and says what it would have cost', () => {
+    // The two costs are different and the refusal has to say which one: one
+    // rule does nothing, the other takes the next import down with it.
+    const group = refuseSettingField('category_group');
+    expect(group).toContain('do nothing at all');
+    expect(group).not.toContain('fail as a whole');
+
+    for (const field of ['saved', 'transfer', 'parent']) {
+      const message = refuseSettingField(field);
+      expect(message, field).toContain(`Field "${field}" does not exist on table transactions`);
+      expect(message, field).toContain('none of the three');
+      expect(message, field).toContain('cleared');
+    }
+
+    const unknown = refuseSettingField('banana');
+    expect(unknown).toContain('no rule field called');
+    expect(unknown).not.toContain('does not exist on table transactions');
+  });
+
+  it('refuses a field a condition cannot be answered on, and says which', () => {
+    for (const field of ['transfer', 'parent', 'saved']) {
+      const message = refuseMatchingField(field);
+      expect(message, field).toContain('never runs the rule on its own');
+      expect(message, field).toContain('cleared');
+      // A field Actual knows is refused for a different reason than one it
+      // does not, and saying the wrong one sends the reader to the wrong fix.
+      expect(message, field).not.toContain('no rule field called');
+    }
+
+    const unknown = refuseMatchingField('banana');
+    expect(unknown).toContain('no rule field called');
+    expect(unknown).not.toContain('never runs the rule');
+  });
+
+  it('gives the reason the engine actually has, which is the name', () => {
+    // The first version of this said a transaction knows about its transfer
+    // only once the rules have run, which is not what was measured: a row
+    // that already had its transfer_id does not match either. The engine
+    // hands the rules `transfer_id` and `is_parent`, and a rule asks for
+    // `transfer` and `parent`. That is all it is.
+    expect(refuseMatchingField('transfer')).toContain('carries this as `transfer_id`');
+    expect(refuseMatchingField('parent')).toContain('carries this as `is_parent`');
+    for (const field of ['transfer', 'parent']) {
+      expect(refuseMatchingField(field), field).not.toContain('once the rules have run');
+    }
+  });
+
+  it('does not claim a rule can never match, only that Actual will not run it', () => {
+    // `make-filters-from-conditions` turns `transfer is true` into
+    // `transfer_id isNot null`, and `parent is true` into `is_parent true`,
+    // so applying a rule by hand from the rules page does match. Saying it
+    // never fires would be telling somebody to delete a rule that works in
+    // the one place they may have made it.
+    for (const field of ['transfer', 'parent']) {
+      const message = refuseMatchingField(field);
+      expect(message, field).toContain('by hand from the rules page');
+      expect(message, field).not.toContain('never fire');
+    }
+  });
+
+  it('says what the field was asking without doubling the punctuation', () => {
+    for (const field of ['transfer', 'parent']) {
+      expect(refuseMatchingField(field), field).not.toContain(',.');
+    }
+  });
+
+  it('never points at an operator the field cannot take, whatever the refusal', () => {
+    // `oneOf` is the general answer to a list, and on a boolean it is refused
+    // outright, so offering it there is the same broken promise as `isNot`.
+    for (const field of BOOLEAN_FIELDS) {
+      const message = refuseListValue(field, 'is');
+      expect(message, message).not.toContain('oneOf');
+      expect(message, message).toContain('one value');
+    }
+    // Where a list does work, it is still the thing to say.
+    expect(refuseListValue('payee', 'is')).toContain('oneOf');
+  });
+
+  it('never offers an operator a boolean field does not take', () => {
+    // The list refusal used to send everyone to `is` or `isNot`, and the
+    // engine does not accept `isNot` on a boolean: the way out of one bare
+    // failure was another one.
+    for (const field of BOOLEAN_FIELDS) {
+      // Neither of these was asked about `isNot`, so the word appearing at all
+      // is the tool offering it.
+      for (const message of [
+        refuseListOnField(field, 'oneOf'),
+        refuseOpOnBoolean(field, 'contains'),
+      ]) {
+        expect(message, message).not.toContain('isNot');
+        expect(message, message).toContain('`is`');
+      }
+
+      // And where it was asked about, it is named once, as the thing that does
+      // not work, alongside the thing that does.
+      const answer = refuseOpOnBoolean(field, 'isNot');
+      expect(answer.match(/isNot/g), answer).toHaveLength(1);
+      expect(answer, answer).toContain('`is` with false');
+    }
   });
 });

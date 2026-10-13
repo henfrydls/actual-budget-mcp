@@ -4,8 +4,11 @@ import { ensureConnection } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import {
+  BOOLEAN_FIELDS,
   ID_FIELDS,
+  MATCHABLE_FIELDS,
   NUMBER_FIELDS,
+  SETTABLE_FIELDS,
   isTextOpOnIdField,
   warnTextOpOnIdField,
   looksLikeAnId,
@@ -132,9 +135,123 @@ export function registerGetRules(server: McpServer): void {
           );
         };
 
+        /**
+         * Whether the value is written somewhere else, in a template or a
+         * formula, which is what the app's own rule editor writes.
+         */
+        const hasOwnTemplate = (options: unknown): boolean => {
+          const o = options as { template?: unknown; formula?: unknown } | null | undefined;
+          return Boolean(o && (o.template || o.formula));
+        };
+
         /** An empty list matches nothing, whatever the field. */
         const isEmptyList = (value: unknown): boolean =>
           Array.isArray(value) && value.length === 0;
+
+        /**
+         * An action on a boolean field holding the word instead of the value
+         * (#185).
+         *
+         * The engine checks a condition's value and does not check an
+         * action's, so this is what the rules written before `create_rule`
+         * converted look like, and they are the dangerous half. Measured, on
+         * rows imported uncleared: an action holding "true", "false" or
+         * "banana" all left the row cleared, because anything that is not
+         * empty is true. A rule written to mark transactions as not cleared
+         * does the opposite, on every import.
+         *
+         * It cannot be seen in the listing otherwise: `delete_rule` prints
+         * values through `JSON.stringify` and shows `"false"` against
+         * `false`, and this tool printed both as false, so the two views of
+         * the same rule disagreed.
+         */
+        /**
+         * An action on a figure holding the text of one (#183, #185).
+         *
+         * The same shape as the boolean below and the worst of the three the
+         * listing marks. Measured: the next import with a transaction
+         * matching the rule dies on `Can't convert to integer: "-555"` and
+         * brings in none of its batch, so a bank sync stops working. The
+         * engine does not check an action's value, so this is what every rule
+         * written before the conversion looks like, and nothing in the
+         * listing told them apart: a figure and the text of one both printed
+         * as money.
+         */
+        const textWhereActionFigureBelongs = (
+          field: string,
+          value: unknown,
+          options: unknown,
+        ): string | null => {
+          if (!NUMBER_FIELDS.has(field) || typeof value !== 'string') return null;
+          if (hasOwnTemplate(options)) return null;
+          return (
+            `warning: this holds the text "${value}" where Actual keeps a figure, so every ` +
+            `import with a transaction matching this rule fails with ` +
+            `\`Can't convert to integer\` and none of the batch arrives. Recreate the rule ` +
+            `with create_rule.`
+          );
+        };
+
+        /**
+         * An action on a figure holding nothing at all (#183).
+         *
+         * Not the same fault as the text of a figure, and not the same cost.
+         * Measured, with a rule `set amount = null` and a batch of two: the
+         * import goes through, the neighbour arrives, and the matching row
+         * lands at 0. Money quietly set to nothing, on every import, with the
+         * listing showing `set amount = "(none)"`.
+         *
+         * An action saved with no value key at all behaves the same way, so
+         * both are read as nothing rather than only `null`.
+         */
+        const nothingWhereActionFigureBelongs = (
+          field: string,
+          value: unknown,
+          options: unknown,
+        ): string | null => {
+          if (!NUMBER_FIELDS.has(field) || value !== null) return null;
+          if (hasOwnTemplate(options)) return null;
+          return (
+            `warning: this holds nothing where Actual keeps a figure, so it sets every ` +
+            `transaction it matches to zero. The import goes through, which is what makes ` +
+            `it hard to notice. Recreate the rule with create_rule.`
+          );
+        };
+
+        const wordWhereActionBooleanBelongs = (
+          field: string,
+          value: unknown,
+          options: unknown,
+        ): { kind: string; text: string } | null => {
+          if (!BOOLEAN_FIELDS.has(field) || typeof value !== 'string') return null;
+          // A template or a formula is where the value comes from, and the
+          // engine does not read the stored one at all: `Action.exec` falls
+          // through to it only when there is neither. Measured, a template of
+          // `true` on `cleared` sets the flag with an empty value saved
+          // beside it. Marking those is marking a rule made in the app, which
+          // is how people learn to ignore the marks.
+          if (hasOwnTemplate(options)) return null;
+          // Two cases, and they mean opposite things: an empty value is read
+          // as false and a word as true. One line of the listing cannot say
+          // both, and neither can the paragraph that closes it.
+          if (value === '') {
+            return {
+              kind: 'empty-boolean',
+              text:
+                `warning: this holds an empty value where Actual keeps true or false, so it ` +
+                `marks every transaction it matches as not ${field}. That is what an empty ` +
+                `value happens to mean here, rather than what anyone wrote. Recreate the ` +
+                `rule with create_rule.`,
+            };
+          }
+          return {
+            kind: 'opposite',
+            text:
+              `warning: this holds the word "${value}", not the value true or false, and ` +
+              `Actual reads anything that is not empty as true. So it means true here, ` +
+              `whatever the word says. Recreate the rule with create_rule.`,
+          };
+        };
 
         const describeBroken = (field: string, bad: string[]): string => {
           const asNames = bad.filter((v) => !looksLikeAnId(v));
@@ -183,6 +300,9 @@ export function registerGetRules(server: McpServer): void {
         // them: the condition reads like any other, and the damage is that it
         // is compared against an id.
         let flagged = 0;
+        // What was marked, not what this tool is able to mark. The closing
+        // paragraph is built from these.
+        const kinds = new Set<string>();
 
         for (const rule of rules) {
           const conditions = (rule as any).conditions || [];
@@ -213,17 +333,41 @@ export function registerGetRules(server: McpServer): void {
             // looking for two fixes.
             if (isTextOpOnIdField(cond.field, cond.op)) {
               flagged += 1;
+              kinds.add('wrong-rows');
               lines.push(`      warning: ${warnTextOpOnIdField(cond.field, cond.op)}`);
               continue;
             }
             if (isEmptyList(cond.value)) {
               flagged += 1;
+              kinds.add('never-fires');
               lines.push('      warning: an empty list matches nothing, so this never fires.');
               continue;
             }
+            // A field the engine never puts on the transaction it hands the
+            // rules (#185). Measured: the condition is answered `undefined`
+            // and comes back false every time, so the rule reads correctly
+            // and has never fired.
+            if (!MATCHABLE_FIELDS.has(cond.field)) {
+              flagged += 1;
+              kinds.add('never-alone');
+              lines.push(
+                `      warning: Actual never runs this rule on its own. It looks ` +
+                  `${cond.field} up on the transaction and it is not there, so the rule does ` +
+                  `nothing on import or on a bank sync. It would still match if you applied ` +
+                  `it by hand from the rules page.`,
+              );
+              continue;
+            }
+            // No check here for a word where a boolean belongs. The engine
+            // validates a condition's value and refuses a string outright, so
+            // a stored boolean condition always holds a real boolean: the
+            // check below is for actions, which the engine does not validate.
+            // Condition options are not templates either, they are the
+            // inflow and outflow flags on an amount.
             const bad = brokenValues(cond.field, cond.value);
             if (bad.length > 0) {
               flagged += 1;
+              kinds.add('never-fires');
               lines.push(`      ${describeBroken(cond.field, bad)}`);
             }
           }
@@ -242,12 +386,60 @@ export function registerGetRules(server: McpServer): void {
             lines.push(`  THEN ${action.op} ${field} = "${readable(field, action.value)}"`);
             if (isEmptyList(action.value)) {
               flagged += 1;
+              kinds.add('nothing');
               lines.push('      warning: an empty list sets nothing.');
+              continue;
+            }
+            // A field the rule cannot write (#187). Worth saying first and on
+            // its own: the others make a rule do the wrong thing, and this one
+            // makes every import that matches it fail as a whole, which is not
+            // traceable back to the rule from anywhere else.
+            if (action.op === 'set' && !SETTABLE_FIELDS.has(field)) {
+              flagged += 1;
+              kinds.add(field === 'category_group' ? 'nothing' : 'import-field');
+              lines.push(
+                field === 'category_group'
+                  ? `      warning: a rule cannot file a transaction under a group, and ` +
+                      `Actual keeps no column for it, so this action does nothing.`
+                  : `      warning: Actual keeps no ${field} column on a transaction, so ` +
+                      `every import with a transaction matching this rule fails as a ` +
+                      `whole and none of the batch arrives. Delete this rule.`,
+              );
+              continue;
+            }
+            const actionAsFigure = textWhereActionFigureBelongs(
+              field,
+              action.value,
+              action.options,
+            );
+            if (actionAsFigure !== null) {
+              flagged += 1;
+              kinds.add('import-value');
+              lines.push(`      ${actionAsFigure}`);
+              continue;
+            }
+            const actionAsNothing = nothingWhereActionFigureBelongs(
+              field,
+              action.value ?? null,
+              action.options,
+            );
+            if (actionAsNothing !== null) {
+              flagged += 1;
+              kinds.add('zero');
+              lines.push(`      ${actionAsNothing}`);
+              continue;
+            }
+            const actionAsWord = wordWhereActionBooleanBelongs(field, action.value, action.options);
+            if (actionAsWord !== null) {
+              flagged += 1;
+              kinds.add(actionAsWord.kind);
+              lines.push(`      ${actionAsWord.text}`);
               continue;
             }
             const bad = brokenValues(field, action.value);
             if (bad.length > 0) {
               flagged += 1;
+              kinds.add('never-fires');
               lines.push(`      ${describeBroken(field, bad)}`);
             }
           }
@@ -258,12 +450,59 @@ export function registerGetRules(server: McpServer): void {
         if (flagged > 0) {
           // At the end as well as beside each one: a long list scrolls, and
           // this is the part worth acting on.
+          //
+          // Built from what was actually marked. The fixed version named
+          // every kind this can find, so a budget whose only marked rule
+          // compares text against an id was told that some of them take the
+          // next import down, and the sentence that mattered looked exactly
+          // like the four that did not apply. The import one comes first
+          // where it applies, because nothing about a failed import points
+          // back at the rule that caused it.
+          const BY_KIND: [string, string][] = [
+            // Both of these take an import down, and they do it for different
+            // reasons: one writes a field that is not there, the other writes
+            // a value the column will not take. `amount` has a column.
+            [
+              'import-field',
+              'A rule that writes a field Actual keeps no column for takes the next import ' +
+                'down with it, and none of that batch arrives.',
+            ],
+            [
+              'import-value',
+              'A rule holding the text of a figure where Actual keeps a figure takes the ' +
+                'next import down with it, and none of that batch arrives.',
+            ],
+            [
+              'zero',
+              'A rule holding nothing where a figure belongs sets every transaction it ' +
+                'matches to zero.',
+            ],
+            [
+              'opposite',
+              'A rule holding a word where Actual keeps true or false means true, whatever ' +
+                'the word says.',
+            ],
+            [
+              'empty-boolean',
+              'A rule holding an empty value where Actual keeps true or false means false, ' +
+                'which is what an empty value happens to mean rather than what anyone wrote.',
+            ],
+            [
+              'wrong-rows',
+              'A rule comparing text against an internal id fires on transactions it has ' +
+                'nothing to do with.',
+            ],
+            ['never-alone', 'A condition Actual cannot answer means the rule never runs on its own.'],
+            ['never-fires', 'A rule pointing at something that is not there has never fired.'],
+            ['nothing', 'A rule writing a field that is not stored does nothing at all.'],
+          ];
+          const said = BY_KIND.filter(([kind]) => kinds.has(kind)).map(([, text]) => text);
+
           lines.push(
             `${flagged} line${flagged === 1 ? '' : 's'} above ${flagged === 1 ? 'is' : 'are'} ` +
-              `marked. A rule that compares text against an internal id may be firing on the ` +
-              `wrong transactions; one holding a name where an id belongs has never fired at ` +
-              `all. create_rule refuses both now, so the ones already saved are the ones to ` +
-              `rewrite or delete.`,
+              `marked. ${said.join(' ')} create_rule refuses ` +
+              `${flagged === 1 ? 'it' : 'all of them'} now, so the ones already saved are the ` +
+              `ones to rewrite or delete.`,
           );
         }
 

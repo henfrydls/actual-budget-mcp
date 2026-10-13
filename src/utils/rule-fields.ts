@@ -172,14 +172,280 @@ export const AMOUNT_OPS: ReadonlySet<string> = new Set([
  */
 export const NUMBER_FIELDS: ReadonlySet<string> = new Set(['amount']);
 
+/**
+ * The fields Actual stores as true or false.
+ *
+ * Four of them, and the issue that reported this named two. Taken from the
+ * engine's `FIELD_INFO` rather than from the fields an issue happened to
+ * mention, which is how `category_group` was missed from the id list, and
+ * held to the installed engine by a test.
+ *
+ * Being on this list is what decides that a value has to be read as a boolean
+ * before it is saved. It is not the same question as whether a rule can use
+ * the field at all: two of these four cannot be used for anything, and
+ * `MATCHABLE_FIELDS` and `SETTABLE_FIELDS` below are what answer that.
+ */
+export const BOOLEAN_FIELDS: ReadonlySet<string> = new Set([
+  'cleared',
+  'reconciled',
+  'transfer',
+  'parent',
+]);
+
+/**
+ * The operators the engine takes on a boolean field: one.
+ *
+ * `TYPE_INFO` gives the boolean type a single operator, and measured one rule
+ * at a time on `cleared`, `isNot`, `oneOf`, `contains`, `gt` and `isapprox`
+ * each come back as a bare "Failed creating a new rule". There is no `isNot`
+ * here, which matters because it is the obvious way to write "not cleared":
+ * the way that works is `cleared is false`.
+ */
+export const BOOLEAN_OPS: ReadonlySet<string> = new Set(['is']);
+
+/**
+ * Every field the engine's rule table knows about.
+ *
+ * Which is not the same as every field a rule can use: three of these can
+ * never be matched on and four can never be set. Written out from
+ * `FIELD_INFO`, which is not exported, and held to the installed engine by a
+ * test, so that a field added in a later version is noticed here rather than
+ * falling through as "Actual has never heard of it".
+ */
+export const RULE_FIELDS: ReadonlySet<string> = new Set([
+  'account',
+  'amount',
+  'category',
+  'category_group',
+  'cleared',
+  'date',
+  'imported_payee',
+  'notes',
+  'parent',
+  'payee',
+  'payee_name',
+  'reconciled',
+  'saved',
+  'transfer',
+]);
+
+/**
+ * The fields a condition can actually match on.
+ *
+ * A rule condition is evaluated against one object, and the engine's
+ * `Condition.eval` reads `object[field]` and returns false the moment that is
+ * `undefined`. So a field the object never carries does not error: the rule is
+ * created, it reads perfectly well, and it never fires. That is the same shape
+ * as the rules #167 and #170 left behind.
+ *
+ * The object is a transaction row plus what `prepareTransactionForRules` adds
+ * to it, which is `payee_name` and `category_group` and nothing else. Three
+ * fields in `FIELD_INFO` are therefore unreachable: `transfer`, `parent` and
+ * `saved`. A transaction row has `transfer_id` and `is_parent`, under those
+ * names, and nothing ever copies them across.
+ *
+ * Measured, not only read: a rule `transfer is true` with an action on the
+ * notes, against a transaction imported with an account payee, which the
+ * engine turns into a real transfer. The row came out with its `transfer_id`
+ * set and its notes untouched, in all three stages, on first import and on
+ * re-import of a row that was already a transfer. The same for `parent`
+ * against a split.
+ */
+export const MATCHABLE_FIELDS: ReadonlySet<string> = new Set([
+  'account',
+  'amount',
+  'category',
+  'category_group',
+  'cleared',
+  'date',
+  'imported_payee',
+  'notes',
+  'payee',
+  'payee_name',
+  'reconciled',
+]);
+
+/**
+ * What to say when a condition names a field it can never match on.
+ *
+ * Refused rather than created, because a rule that never fires is worse than
+ * an error: it is saved, it reads like it works, and the transactions it was
+ * written for go on being untouched with nobody looking for a reason.
+ */
+export function refuseMatchingField(field: string): string {
+  // A field the engine has never heard of is refused by the engine too, with
+  // its own bare message. Saying "it would never fire" about it would be
+  // false, and would send someone looking for a rule that was never saved.
+  if (!RULE_FIELDS.has(field)) {
+    return (
+      `Actual has no rule field called \`${field}\`. A condition can match on ` +
+      `${[...MATCHABLE_FIELDS].join(', ')}.`
+    );
+  }
+  // What the field was for, said back, because the refusal is where somebody
+  // finds out that the thing they wanted to match on is not available.
+  const asked = BOOLEAN_FIELDS.has(field)
+    ? `, which asks whether a transaction is ${describeBooleanField(field)}`
+    : '';
+  // The name is the whole of it, and the first version of this said it was a
+  // matter of timing. It is not: a transaction that already had its
+  // `transfer_id` does not match either. What the rules are handed carries
+  // `transfer_id` and `is_parent`, under those names, and never `transfer` or
+  // `parent`.
+  const because =
+    field === 'transfer' || field === 'parent'
+      ? `A transaction carries this as \`${field === 'transfer' ? 'transfer_id' : 'is_parent'}\`, ` +
+        `and nothing ever copies it across under the name a rule uses. `
+      : '';
+  return (
+    `A rule cannot match on \`${field}\`${asked}. ${because}The engine checks a condition ` +
+    `by looking the field up on the transaction it was handed, and it is never there, so ` +
+    `Actual never runs the rule on its own: not on import, not on a bank sync, not when a ` +
+    `transaction is added or changed. It would still match if you applied it by hand from ` +
+    `the rules page, where the conditions become a query instead. A condition that runs on ` +
+    `its own can match on ${[...MATCHABLE_FIELDS].join(', ')}.`
+  );
+}
+
+/**
+ * The fields a rule can set.
+ *
+ * Narrower than the fields it can match on, and the gap is not obvious from
+ * anything the engine says. A rule's action writes its value onto the
+ * transaction object and the engine then inserts that object, so a field that
+ * is not a column on `transactions` is either dropped or fatal, depending on
+ * which one it is. Measured, one rule per field in `FIELD_INFO`, each with an
+ * import of a transaction that matched it:
+ *
+ *   account, amount, category, cleared, date, imported_payee, notes, payee
+ *   and payee_name   all did what they say.
+ *
+ *   category_group   accepted, and did nothing at all: the row came back
+ *                    with no category. A rule that reads as if it files
+ *                    transactions and has never filed one.
+ *
+ *   saved, transfer  the import failed as a whole, with
+ *   and parent       `Field "<name>" does not exist on table transactions`.
+ *                    Three rows imported with one of them matching, and none
+ *                    of the three arrived.
+ *
+ * That last one is the serious half: it is not the matching row that is lost
+ * but the batch, so for anyone syncing a bank nothing comes in at all from
+ * then on, and the rule reads perfectly well wherever they go looking.
+ *
+ * `payee_name` is the one that is settable without being a column, because
+ * the engine resolves it to a payee itself. A test derives this list from the
+ * engine's own schema and holds that exception to being the only one.
+ */
+export const SETTABLE_FIELDS: ReadonlySet<string> = new Set([
+  'account',
+  'amount',
+  'category',
+  'cleared',
+  'date',
+  'imported_payee',
+  'notes',
+  'payee',
+  'payee_name',
+  'reconciled',
+]);
+
+/** What to say when a rule tries to set a field it cannot set. */
+export function refuseSettingField(field: string): string {
+  if (!RULE_FIELDS.has(field)) {
+    return (
+      `Actual has no rule field called \`${field}\`. A rule can set ` +
+      `${[...SETTABLE_FIELDS].join(', ')}.`
+    );
+  }
+  // Two different things go wrong, and the one that costs the most says so.
+  const because =
+    field === 'category_group'
+      ? 'A transaction is filed under a category, not under a group, so Actual keeps no ' +
+        'column for this and the rule would be created and then do nothing at all: ' +
+        'measured, a transaction that matched came back with no category. '
+      : `Actual keeps no column of that name on a transaction, so the rule would be ` +
+        `created and then every import with a transaction matching it would fail as a ` +
+        `whole, with \`Field "${field}" does not exist on table transactions\`. Measured, ` +
+        `a batch of three rows with one of them matching brought in none of the three, so ` +
+        `a bank sync stops working altogether. `;
+  return (
+    `A rule cannot set \`${field}\`. ${because}A rule can set ` +
+    `${[...SETTABLE_FIELDS].join(', ')}.`
+  );
+}
+
+/**
+ * What each boolean field says about a transaction, in words.
+ *
+ * A rule is stored and keeps running, so the reply is the one chance the
+ * writer gets to see what they asked for. `cleared is false` reads well enough
+ * on its own, and the words are what make the reply say it rather than repeat
+ * the field name back.
+ *
+ * Every field in `BOOLEAN_FIELDS` has an entry here and a test holds it to
+ * that, because a field without one is said back as "undefined" in the one
+ * sentence that exists to be read.
+ */
+const BOOLEAN_MEANING: Record<string, string> = {
+  cleared: 'cleared',
+  reconciled: 'reconciled',
+  transfer: 'part of a transfer',
+  parent: 'a split parent',
+};
+
+/** The words for one of those fields, for a reply or for a refusal. */
+export function describeBooleanField(field: string): string {
+  return BOOLEAN_MEANING[field];
+}
+
 export function refuseListOnField(field: string, op: string): string {
+  // `isNot` is in the general advice and the engine takes it on neither a
+  // figure nor a truth, so both kinds need their own way out. A boolean has
+  // nothing to match several of either: the field has two values, and a list
+  // of both of them matches every transaction there is.
   const alternatives = NUMBER_FIELDS.has(field)
-    ? `Use ${[...AMOUNT_OPS].map((o) => `\`${o}\``).join(', ')} for one figure`
-    : 'Use `is` or `isNot` for one value';
+    ? `Use ${[...AMOUNT_OPS].map((o) => `\`${o}\``).join(', ')} for one figure, or one of ` +
+      `those fields to match several.`
+    : BOOLEAN_FIELDS.has(field)
+      ? 'Use `is` with true or false.'
+      : 'Use `is` or `isNot` for one value, or one of those fields to match several.';
   return (
     `A rule cannot use \`${op}\` on \`${field}\`. Actual takes a list only on ` +
-    `${[...LIST_FIELDS].join(', ')}. ${alternatives}, or one of ` +
-    `those fields to match several.`
+    `${[...LIST_FIELDS].join(', ')}. ${alternatives}`
+  );
+}
+
+/**
+ * What to say when a value arrives as a list on a field that takes one value.
+ *
+ * The general answer is to use `oneOf`, and on a field that does not take a
+ * list that is the same broken promise as sending someone to `isNot`: the
+ * operator named is one the engine refuses here too.
+ */
+export function refuseListValue(field: string, op: string): string {
+  const instead = LIST_FIELDS.has(field)
+    ? 'Use `oneOf` or `notOneOf` to match several, or send a single value.'
+    : BOOLEAN_FIELDS.has(field)
+      ? `Send one value. \`${field}\` is true or false, and a list of both matches every ` +
+        `transaction there is.`
+      : `Send one value. Actual takes a list only on ${[...LIST_FIELDS].join(', ')}.`;
+  return `\`${op}\` takes one value, not a list. ${instead}`;
+}
+
+/** What to say when an operator is not the one a boolean field takes. */
+export function refuseOpOnBoolean(field: string, op: string): string {
+  // `isNot` is the one worth answering, because it is how anyone would write
+  // "not cleared" and it is what this tool's own advice used to offer. After
+  // `contains` or `gt` the same sentence would be a non sequitur.
+  const instead =
+    op === 'isNot'
+      ? ` To match a transaction that is not ${describeBooleanField(field)}, use \`is\` ` +
+        `with false.`
+      : '';
+  return (
+    `A rule cannot use \`${op}\` on \`${field}\`, which is true or false. Actual takes ` +
+    `\`is\` there and nothing else.${instead}`
   );
 }
 
