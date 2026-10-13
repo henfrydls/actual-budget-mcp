@@ -97,6 +97,59 @@ describe.skipIf(skip)('what the closing line says, and about which rules', () =>
     expect(text).toContain('create_rule refuses all of them now');
   });
 
+  it('says why the import broke, when the field was not the reason', async () => {
+    // `amount` has a column. A rule that holds the text of a figure takes the
+    // import down for a different reason than one that writes a field Actual
+    // does not store, and the sentence about a missing column is false here.
+    const text = await listingOf('summary-figure', [
+      {
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [{ field: 'notes', op: 'is', value: 'the text of a figure' }],
+        actions: [{ op: 'set', field: 'amount', value: '-4550' }],
+      },
+    ]);
+
+    expect(text).toContain('holding the text of a figure where Actual keeps a figure');
+    expect(text).toContain('takes the next import down with it');
+    expect(text, 'it blames a column that is there').not.toContain('keeps no column for');
+  });
+
+  it('says that an empty boolean means false, not true', async () => {
+    // The other half of the same word: measured, "" is the one value the
+    // engine reads as false, so this rule marks what it matches as not
+    // cleared. Saying it means true is the opposite of what it does.
+    const text = await listingOf('summary-empty', [
+      {
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [{ field: 'notes', op: 'is', value: 'nothing at all' }],
+        actions: [{ op: 'set', field: 'cleared', value: '' }],
+      },
+    ]);
+
+    expect(text).toContain('holding an empty value where Actual keeps true or false means false');
+    expect(text, 'it says the opposite of what the rule does').not.toContain(
+      'means true, whatever the word says',
+    );
+  });
+
+  it('says that a word means true, when that is the one in the budget', async () => {
+    const text = await listingOf('summary-word', [
+      {
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [{ field: 'notes', op: 'is', value: 'the word' }],
+        actions: [{ op: 'set', field: 'cleared', value: 'false' }],
+      },
+    ]);
+
+    expect(text).toContain('means true, whatever the word says');
+    expect(text, 'it brings in the empty case as well').not.toContain(
+      'an empty value happens to mean',
+    );
+  });
+
   it('marks a figure held as nothing, and says it is the import that works', async () => {
     // Measured: with `set amount = null` the import goes through, the row
     // beside it arrives, and the matching row lands at 0. The money is gone

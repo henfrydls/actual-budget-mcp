@@ -222,7 +222,7 @@ export function registerGetRules(server: McpServer): void {
           field: string,
           value: unknown,
           options: unknown,
-        ): string | null => {
+        ): { kind: string; text: string } | null => {
           if (!BOOLEAN_FIELDS.has(field) || typeof value !== 'string') return null;
           // A template or a formula is where the value comes from, and the
           // engine does not read the stored one at all: `Action.exec` falls
@@ -231,19 +231,26 @@ export function registerGetRules(server: McpServer): void {
           // beside it. Marking those is marking a rule made in the app, which
           // is how people learn to ignore the marks.
           if (hasOwnTemplate(options)) return null;
+          // Two cases, and they mean opposite things: an empty value is read
+          // as false and a word as true. One line of the listing cannot say
+          // both, and neither can the paragraph that closes it.
           if (value === '') {
-            return (
-              `warning: this holds an empty value where Actual keeps true or false, so it ` +
-              `marks every transaction it matches as not ${field}. That is what an empty ` +
-              `value happens to mean here, rather than what anyone wrote. Recreate the rule ` +
-              `with create_rule.`
-            );
+            return {
+              kind: 'empty-boolean',
+              text:
+                `warning: this holds an empty value where Actual keeps true or false, so it ` +
+                `marks every transaction it matches as not ${field}. That is what an empty ` +
+                `value happens to mean here, rather than what anyone wrote. Recreate the ` +
+                `rule with create_rule.`,
+            };
           }
-          return (
-            `warning: this holds the word "${value}", not the value true or false, and ` +
-            `Actual reads anything that is not empty as true. So it means true here, ` +
-            `whatever the word says. Recreate the rule with create_rule.`
-          );
+          return {
+            kind: 'opposite',
+            text:
+              `warning: this holds the word "${value}", not the value true or false, and ` +
+              `Actual reads anything that is not empty as true. So it means true here, ` +
+              `whatever the word says. Recreate the rule with create_rule.`,
+          };
         };
 
         const describeBroken = (field: string, bad: string[]): string => {
@@ -389,7 +396,7 @@ export function registerGetRules(server: McpServer): void {
             // traceable back to the rule from anywhere else.
             if (action.op === 'set' && !SETTABLE_FIELDS.has(field)) {
               flagged += 1;
-              kinds.add(field === 'category_group' ? 'nothing' : 'import');
+              kinds.add(field === 'category_group' ? 'nothing' : 'import-field');
               lines.push(
                 field === 'category_group'
                   ? `      warning: a rule cannot file a transaction under a group, and ` +
@@ -407,7 +414,7 @@ export function registerGetRules(server: McpServer): void {
             );
             if (actionAsFigure !== null) {
               flagged += 1;
-              kinds.add('import');
+              kinds.add('import-value');
               lines.push(`      ${actionAsFigure}`);
               continue;
             }
@@ -425,8 +432,8 @@ export function registerGetRules(server: McpServer): void {
             const actionAsWord = wordWhereActionBooleanBelongs(field, action.value, action.options);
             if (actionAsWord !== null) {
               flagged += 1;
-              kinds.add('opposite');
-              lines.push(`      ${actionAsWord}`);
+              kinds.add(actionAsWord.kind);
+              lines.push(`      ${actionAsWord.text}`);
               continue;
             }
             const bad = brokenValues(field, action.value);
@@ -452,10 +459,18 @@ export function registerGetRules(server: McpServer): void {
           // where it applies, because nothing about a failed import points
           // back at the rule that caused it.
           const BY_KIND: [string, string][] = [
+            // Both of these take an import down, and they do it for different
+            // reasons: one writes a field that is not there, the other writes
+            // a value the column will not take. `amount` has a column.
             [
-              'import',
+              'import-field',
               'A rule that writes a field Actual keeps no column for takes the next import ' +
                 'down with it, and none of that batch arrives.',
+            ],
+            [
+              'import-value',
+              'A rule holding the text of a figure where Actual keeps a figure takes the ' +
+                'next import down with it, and none of that batch arrives.',
             ],
             [
               'zero',
@@ -466,6 +481,11 @@ export function registerGetRules(server: McpServer): void {
               'opposite',
               'A rule holding a word where Actual keeps true or false means true, whatever ' +
                 'the word says.',
+            ],
+            [
+              'empty-boolean',
+              'A rule holding an empty value where Actual keeps true or false means false, ' +
+                'which is what an empty value happens to mean rather than what anyone wrote.',
             ],
             [
               'wrong-rows',
