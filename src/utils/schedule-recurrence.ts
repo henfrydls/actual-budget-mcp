@@ -21,6 +21,28 @@
  * A plain date is stored as a string on the same field, and that one was
  * already readable, so it is left alone: this returns nothing for anything
  * that is not a recurrence, and the caller prints what it has.
+ *
+ * ## Patterns belong to monthly, and nothing else
+ *
+ * `recurConfigToRSchedule` applies `patterns` only when the frequency is
+ * monthly; daily, weekly and yearly each return the base rule and ignore them.
+ * The app leaves them behind all the same: its picker opens on monthly with a
+ * pattern for today, and switching to weeks clears them only by looking at the
+ * frequency it came from. So a weekly schedule carrying `[{day: 12}]` is
+ * ordinary, and the first version of this read it out as "every week on day
+ * 12".
+ *
+ * Measured through `schedule/get-upcoming-dates`, from 2026-10-12, a Monday:
+ *
+ *   weekly,  patterns [{day, 12}]   12 Oct, 19 Oct, 26 Oct, 2 Nov   every Monday
+ *   weekly,  no patterns            12 Oct, 19 Oct, 26 Oct, 2 Nov   the same
+ *   yearly,  patterns [{TU, 2}]     12 Oct 2026, 2027, 2028, 2029   the same day
+ *   daily/3, patterns [{day, 12}]   12, 15, 18, 21 Oct              every third day
+ *   monthly, patterns [{day, 15}]   15 Oct, 15 Nov, 15 Dec          here they count
+ *   monthly, patterns [{day, -1}]   31 Oct, 30 Nov, 31 Dec          the last day
+ *
+ * So patterns are read on monthly only, and a weekly is described by the
+ * weekday its start falls on, which is what the app shows.
  */
 
 interface Pattern {
@@ -67,6 +89,15 @@ const UNITS: Readonly<Record<string, [one: string, many: string]>> = {
   yearly: ['year', 'years'],
 };
 
+/** The weekday a `YYYY-MM-DD` falls on, counted in UTC so no offset can shift it. */
+function weekdayOf(date: string): string | undefined {
+  const parts = date.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return undefined;
+  const [year, month, day] = parts;
+  const names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return names[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+}
+
 function isRecurrence(value: unknown): value is Recurrence {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const candidate = value as Recurrence;
@@ -83,16 +114,32 @@ function howOften(frequency: string, interval: unknown): string {
   return every === 1 ? `every ${unit[0]}` : `every ${every} ${unit[1]}`;
 }
 
-/** "day 15", "the last Friday". */
-function describePattern(pattern: Pattern): string | undefined {
-  const value = pattern.value;
-  if (pattern.type === 'day') {
-    return typeof value === 'number' ? `day ${value}` : undefined;
-  }
+/** "the last Friday", for the patterns that name a weekday. */
+function describeWeekdayPattern(pattern: Pattern): string | undefined {
   const weekday = typeof pattern.type === 'string' ? WEEKDAYS[pattern.type] : undefined;
   if (!weekday) return undefined;
-  const which = typeof value === 'number' ? NTH[value] : undefined;
+  const which = typeof pattern.value === 'number' ? NTH[pattern.value] : undefined;
   return which ? `the ${which} ${weekday}` : weekday;
+}
+
+/**
+ * The days of the month, in the order they happen.
+ *
+ * `-1` is the last day of the month, measured: 31 Oct, 30 Nov, 31 Dec. Printing
+ * it as "day -1" leaks the storage, and leaving it where it was written puts
+ * the end of the month before the middle of it.
+ */
+function describeDayPatterns(days: number[]): string | undefined {
+  if (days.length === 0) return undefined;
+  const numbered = days.filter((d) => d > 0).sort((a, b) => a - b);
+  const hasLast = days.some((d) => d === -1);
+  const parts = [...numbered.map(String), ...(hasLast ? ['the last day'] : [])];
+
+  if (parts.length === 1) {
+    return hasLast && numbered.length === 0 ? 'the last day' : `day ${parts[0]}`;
+  }
+  const head = parts.slice(0, -1).join(', ');
+  return `days ${head} and ${parts[parts.length - 1]}`;
 }
 
 /**
@@ -107,13 +154,32 @@ export function describeRecurrence(value: unknown): string | undefined {
 
   // The pattern belongs to the frequency, so they read as one phrase: "every
   // month on day 15", not "every month, on day 15".
-  const patterns = Array.isArray(value.patterns) ? (value.patterns as Pattern[]) : [];
-  const described = patterns.map(describePattern).filter((p): p is string => p !== undefined);
-  const howOftenPhrase =
-    howOften(value.frequency as string, value.interval) +
-    (described.length > 0 ? ` on ${described.join(' and ')}` : '');
+  const start = value.start as string;
+  let on: string | undefined;
 
-  const parts: string[] = [howOftenPhrase, `from ${value.start as string}`];
+  if (value.frequency === 'monthly') {
+    const patterns = Array.isArray(value.patterns) ? (value.patterns as Pattern[]) : [];
+    const days = describeDayPatterns(
+      patterns
+        .filter((p) => p.type === 'day' && typeof p.value === 'number')
+        .map((p) => p.value as number),
+    );
+    const weekdays = patterns
+      .filter((p) => p.type !== 'day')
+      .map(describeWeekdayPattern)
+      .filter((p): p is string => p !== undefined);
+    const both = [...(days ? [days] : []), ...weekdays];
+    if (both.length > 0) on = both.join(' and ');
+  } else if (value.frequency === 'weekly') {
+    // The engine ignores patterns here and repeats the start, so the weekday
+    // it falls on is what actually happens, and what the app shows.
+    on = weekdayOf(start);
+  }
+
+  const howOftenPhrase =
+    howOften(value.frequency as string, value.interval) + (on ? ` on ${on}` : '');
+
+  const parts: string[] = [howOftenPhrase, `from ${start}`];
 
   if (value.endMode === 'on_date' && typeof value.endDate === 'string') {
     parts.push(`until ${value.endDate}`);

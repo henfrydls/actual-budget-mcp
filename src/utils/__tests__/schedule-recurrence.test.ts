@@ -31,12 +31,88 @@ describe('describing a schedule recurrence', () => {
   });
 
   it('counts the interval when there is one', () => {
+    // 2026-11-01 is a Sunday, and a weekly repeats its start, so the weekday
+    // is part of what it does.
     expect(describeRecurrence({ ...monthly, frequency: 'weekly', interval: 2 })).toBe(
-      'every 2 weeks, from 2026-11-01',
+      'every 2 weeks on Sunday, from 2026-11-01',
     );
     // An interval of one is the default and saying "every 1 month" reads as a
     // setting someone chose.
     expect(describeRecurrence({ ...monthly, interval: 1 })).toBe('every month, from 2026-11-01');
+  });
+
+  it('ignores patterns on a frequency the engine ignores them on', () => {
+    // The engine applies patterns only on monthly: daily, weekly and yearly
+    // return the base rule. The app leaves them behind anyway, because its
+    // picker starts on monthly and clears them by looking at the frequency it
+    // came from, so a weekly schedule carrying a day pattern is ordinary.
+    //
+    // Measured from 2026-10-12, a Monday, through the engine's own
+    // `get-upcoming-dates`: a weekly with `[{day: 12}]` falls on the 12th,
+    // 19th and 26th of October, which is every Monday, and a yearly with
+    // `[{TU, 2}]` falls on 12 October of each year. Reading those patterns
+    // out loud described days nothing happens on.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        start: '2026-10-12',
+        frequency: 'weekly',
+        patterns: [{ type: 'day', value: 12 }],
+      }),
+    ).toBe('every week on Monday, from 2026-10-12');
+
+    expect(
+      describeRecurrence({
+        ...monthly,
+        start: '2026-10-12',
+        frequency: 'yearly',
+        patterns: [{ type: 'TU', value: 2 }],
+      }),
+    ).toBe('every year, from 2026-10-12');
+
+    expect(
+      describeRecurrence({
+        ...monthly,
+        start: '2026-10-12',
+        frequency: 'daily',
+        interval: 3,
+        patterns: [{ type: 'day', value: 12 }],
+      }),
+    ).toBe('every 3 days, from 2026-10-12');
+  });
+
+  it('names the weekday a weekly falls on, as the app does', () => {
+    // With no pattern involved at all: the start is what repeats.
+    expect(
+      describeRecurrence({ ...monthly, start: '2026-11-06', frequency: 'weekly', interval: 2 }),
+    ).toBe('every 2 weeks on Friday, from 2026-11-06');
+    expect(
+      describeRecurrence({ ...monthly, start: '2026-10-14', frequency: 'weekly' }),
+    ).toBe('every week on Wednesday, from 2026-10-14');
+  });
+
+  it('calls the last day of the month what it is', () => {
+    // `-1` is the last day: measured, 31 Oct, 30 Nov, 31 Dec. "day -1" leaks
+    // how it is stored.
+    expect(describeRecurrence({ ...monthly, patterns: [{ type: 'day', value: -1 }] })).toBe(
+      'every month on the last day, from 2026-11-01',
+    );
+  });
+
+  it('puts the days of the month in the order they happen', () => {
+    // Stored in whatever order they were picked, and the last day is stored
+    // as a negative number, so printing them as written puts the end of the
+    // month in the middle.
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: 15 },
+          { type: 'day', value: 1 },
+          { type: 'day', value: -1 },
+        ],
+      }),
+    ).toBe('every month on days 1, 15 and the last day, from 2026-11-01');
   });
 
   it('names the day of the month', () => {
@@ -63,7 +139,19 @@ describe('describing a schedule recurrence', () => {
           { type: 'day', value: 15 },
         ],
       }),
-    ).toBe('every month on day 1 and day 15, from 2026-11-01');
+    ).toBe('every month on days 1 and 15, from 2026-11-01');
+  });
+
+  it('joins a day and a weekday', () => {
+    expect(
+      describeRecurrence({
+        ...monthly,
+        patterns: [
+          { type: 'day', value: 1 },
+          { type: 'FR', value: -1 },
+        ],
+      }),
+    ).toBe('every month on day 1 and the last Friday, from 2026-11-01');
   });
 
   it('says when it stops, in whichever way it stops', () => {

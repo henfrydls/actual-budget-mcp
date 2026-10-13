@@ -42,24 +42,21 @@ export function registerGetRules(server: McpServer): void {
           ...accounts.map((a) => [a.id, a.name] as const),
         ]);
 
-        // Schedules, which are not in the public API's getters but are a
-        // table. A rule Actual writes for a schedule ends in `link-schedule`
-        // holding the schedule's id, and the id is the one thing the person
-        // reading the list cannot look up anywhere (#182).
+        // A rule Actual writes for a schedule ends in `link-schedule` holding
+        // the schedule's id, and the id is the one thing the person reading
+        // the list cannot look up anywhere (#182).
         const scheduleNames = new Map<string, string>();
         try {
-          const found = (await api.aqlQuery(
-            api.q('schedules').select(['id', 'name']) as never,
-          )) as { data?: { id?: unknown; name?: unknown }[] };
-          for (const schedule of found?.data ?? []) {
+          const schedules = (await api.getSchedules()) as { id?: unknown; name?: unknown }[];
+          for (const schedule of schedules ?? []) {
             if (typeof schedule.id === 'string' && typeof schedule.name === 'string') {
               scheduleNames.set(schedule.id, schedule.name);
             }
           }
         } catch {
-          // A listing without schedule names is still worth printing, and this
-          // is the only part of it that depends on a table rather than on the
-          // public API.
+          // The rules are the answer; the schedule names are an improvement on
+          // one line of it. A listing that loses them is still worth printing,
+          // and a budget with no schedules reaches here with nothing to lose.
         }
 
         /**
@@ -190,7 +187,19 @@ export function registerGetRules(server: McpServer): void {
           lines.push(`  Stage: ${stage} | Conditions: ${condOp}`);
 
           for (const cond of conditions) {
-            lines.push(`  IF ${cond.field} ${cond.op} "${readable(cond.field, cond.value)}"`);
+            // `inflow` and `outflow` decide which direction the amount is
+            // compared in, and the value is stored positive either way: a
+            // rule for spending of 4,500 or more is `gte 450000` with
+            // `outflow`. Printed without it, and now with the figure
+            // formatted as money, it reads as a rule about income (#182).
+            const flow = cond.options?.outflow
+              ? ' (outflow)'
+              : cond.options?.inflow
+                ? ' (inflow)'
+                : '';
+            lines.push(
+              `  IF ${cond.field}${flow} ${cond.op} "${readable(cond.field, cond.value)}"`,
+            );
             // One complaint per line. A text operator on an id field holds
             // text on purpose, so the check below would call the same
             // condition broken for a second reason and send the reader

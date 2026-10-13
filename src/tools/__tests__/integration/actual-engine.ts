@@ -49,8 +49,8 @@ export async function initTestEngine(): Promise<void> {
  *
  * A test that exercises code reaching for an internal handler mocks
  * `connection.js` and points `getInternal` here, so the handler is the real
- * one against the local budget. Reading a preference goes this way, because
- * the public API has no getter for the synced store.
+ * one against the local budget. A test can also reach for one itself, to set
+ * up something the public API does not expose, such as creating a schedule.
  */
 export function testInternal(): Awaited<ReturnType<typeof api.init>> {
   if (!internal) throw new Error('the test engine is not initialised');
