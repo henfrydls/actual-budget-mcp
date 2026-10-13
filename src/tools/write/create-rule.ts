@@ -8,26 +8,58 @@ import { describeError } from '../../utils/errors.js';
 import {
   AMOUNT_OPS,
   refuseOpOnAmount,
+  BOOLEAN_FIELDS,
+  BOOLEAN_OPS,
+  MATCHABLE_FIELDS,
+  describeBooleanField,
+  refuseMatchingField,
+  refuseOpOnBoolean,
   ID_FIELDS,
   LIST_FIELDS,
   isTextOpOnIdField,
   refuseTextOpOnIdField,
   refuseListOnField,
+  refuseListValue,
 } from '../../utils/rule-fields.js';
 import { syncNow } from '../../utils/sync-clock.js';
+
+/**
+ * One value as a client sends it.
+ *
+ * The tool reads every value as text, and a client filling these from JSON
+ * writes `true` and `1` as a boolean and a number without thinking about it.
+ * Measured: the schema answered `action_value: true` with "Expected string,
+ * received boolean", which says nothing about the rule, and called directly it
+ * reached `value.trim` and threw `value.trim is not a function`.
+ */
+export type RuleValue = string | number | boolean;
 
 export interface CreateRuleInput {
   condition_field: string;
   condition_op: string;
   /** A list for `oneOf` and `notOneOf`, a single value for everything else. */
-  condition_value: string | string[];
+  condition_value: RuleValue | RuleValue[];
   action_field: string;
-  action_value: string;
+  action_value: RuleValue;
   stage?: string;
+}
+
+/** A value of any of those shapes, as the text everything here reads. */
+function asText(value: RuleValue): string {
+  return typeof value === 'string' ? value : String(value);
 }
 
 /** The operators whose value is a list of ids rather than one (#171). */
 const LIST_OPS = new Set(['oneOf', 'notOneOf']);
+
+/**
+ * What a rule value may arrive as.
+ *
+ * Text, and the two shapes a client writes without thinking: `true` for a
+ * boolean field and `1` for a figure. Both are read as the text they spell,
+ * so nothing downstream has to know they were ever anything else.
+ */
+const RULE_VALUE = z.union([z.string(), z.boolean(), z.number()]);
 
 /**
  * A payee value as Actual stores it in a rule: the payee's id, and the name it
@@ -142,6 +174,84 @@ function amountForRule(field: string, value: string, role: 'condition' | 'action
 }
 
 /**
+ * A true or false typed as a word, read as the boolean the engine stores.
+ *
+ * The tool takes one string for a value, and the engine takes a boolean on
+ * these fields and nothing else. What happened in between was measured on both
+ * halves of a rule, and they failed differently because the engine checks a
+ * condition's value and does not check an action's:
+ *
+ *   condition `cleared is "true"`   refused outright, which reached the caller
+ *                                   as a bare "Failed creating a new rule". No
+ *                                   rule about a cleared transaction could be
+ *                                   written here at all.
+ *
+ *   action `set cleared = "false"`  saved as the word, and then read for its
+ *                                   truth: a non-empty string is true, so the
+ *                                   rule marked every transaction it matched
+ *                                   as cleared. The opposite of what was
+ *                                   asked, quietly, on every import.
+ *
+ * Measured, importing rows that start uncleared: "true", "false" and "banana"
+ * all left the row cleared, and only the empty string left it alone. So "0"
+ * meant true as well, which is why 0 is one of the words read as false here
+ * rather than passed through.
+ */
+const TRUE_WORDS: ReadonlySet<string> = new Set(['true', 'yes', '1']);
+const FALSE_WORDS: ReadonlySet<string> = new Set(['false', 'no', '0']);
+
+function booleanForRule(field: string, value: string, role: 'condition' | 'action'): boolean {
+  const text = value.trim().toLowerCase();
+  if (TRUE_WORDS.has(text)) return true;
+  if (FALSE_WORDS.has(text)) return false;
+
+  // Empty on its own, because it is the one value that was being accepted and
+  // acted on. Measured: `set cleared = ""` was stored as written and read as
+  // false, so the rule marked matching transactions not cleared, and nothing
+  // anywhere said that was what had been asked for.
+  if (text === '') {
+    // What a zero-like value would do differs by where it is, and the
+    // abstract version of this sentence left the reader to work out which.
+    const phrase = describeBooleanField(field);
+    throw new Error(
+      `\`${field}\` needs true or false, and nothing was given. An empty value is read as ` +
+        (role === 'action'
+          ? `false, so the rule would mark every transaction it matches as not ${phrase}.`
+          : `false, so the rule would match only transactions that are not ${phrase}.`),
+    );
+  }
+
+  throw new Error(
+    `\`${field}\` is true or false, and "${value}" is neither. Write true, yes or 1 for ` +
+      `one, and false, no or 0 for the other. Stored as written, "${value}" would have ` +
+      `been read as true, because anything that is not empty is.`,
+  );
+}
+
+/**
+ * The reading said back, which is the half that was silently wrong.
+ *
+ * A rule is stored and keeps running until somebody deletes it, so the reply
+ * is where the writer gets to see that "false" means not cleared and not, as
+ * it did, cleared.
+ */
+function describeBooleanValue(
+  field: string,
+  value: boolean,
+  role: 'condition' | 'action',
+): string {
+  const phrase = describeBooleanField(field);
+  if (role === 'action') {
+    return value
+      ? `true, so matching transactions are marked ${phrase}`
+      : `false, so matching transactions are marked not ${phrase}`;
+  }
+  return value
+    ? `true, so the rule matches transactions that are ${phrase}`
+    : `false, so the rule matches transactions that are not ${phrase}`;
+}
+
+/**
  * One value of one of the fields the engine stores by id, resolved to that id.
  *
  * All four match the same way, by id or by the whole name: a rule is stored
@@ -191,10 +301,10 @@ async function resolveRuleFieldValue(
 async function resolveRuleValue(
   field: string,
   op: string,
-  value: string | string[],
+  value: RuleValue | RuleValue[],
   role: 'condition' | 'action' = 'condition',
-): Promise<{ stored: string | string[] | number; matched: string[] }> {
-  const list = Array.isArray(value) ? value : [value];
+): Promise<{ stored: string | string[] | number | boolean; matched: string[] }> {
+  const list = (Array.isArray(value) ? value : [value]).map(asText);
 
   // Refused here rather than by the engine, which answers a list on the wrong
   // field with a bare "Failed creating a new rule" and says nothing about
@@ -204,11 +314,11 @@ async function resolveRuleValue(
     throw new Error(refuseListOnField(field, op));
   }
 
+  // Not "use `oneOf`", which is refused outright on most fields: naming an
+  // operator the engine will not take here is the same broken promise as
+  // sending someone to `isNot` on a figure or a truth.
   if (!LIST_OPS.has(op) && Array.isArray(value)) {
-    throw new Error(
-      `\`${op}\` takes one value, not a list. Use \`oneOf\` or \`notOneOf\` to match ` +
-        `several, or send a single value.`,
-    );
+    throw new Error(refuseListValue(field, op));
   }
   if (list.length === 0) {
     throw new Error(`\`${op}\` needs at least one value.`);
@@ -229,6 +339,17 @@ async function resolveRuleValue(
     // forty five and a half, not forty five cents, and a rule runs until
     // somebody deletes it.
     return { stored: cents, matched: [`${formatMoney(cents)}, stored as ${cents}`] };
+  }
+
+  if (BOOLEAN_FIELDS.has(field)) {
+    // Refused here rather than by the engine, which answers every operator but
+    // `is` with the same bare "Failed creating a new rule" this tool exists to
+    // stop handing over.
+    if (!BOOLEAN_OPS.has(op)) {
+      throw new Error(refuseOpOnBoolean(field, op));
+    }
+    const truth = booleanForRule(field, list[0], role);
+    return { stored: truth, matched: [describeBooleanValue(field, truth, role)] };
   }
 
   if (!ID_FIELDS.has(field)) {
@@ -256,6 +377,13 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
   const stage = input.stage ?? 'null';
 
   await ensureConnection();
+
+  // A field a condition can never match on, refused before anything else
+  // (#185). The engine saves such a rule and then answers it `undefined` for
+  // ever, so it reads correctly and never fires.
+  if (!MATCHABLE_FIELDS.has(condition_field)) {
+    throw new Error(refuseMatchingField(condition_field));
+  }
 
   // Refused before anything is resolved or created (#169). The engine accepts
   // these and the rule then fires on the wrong transactions, with nothing
@@ -341,7 +469,7 @@ export function registerCreateRule(server: McpServer): void {
         .string()
         .describe(
           'Field to match: payee, payee_name, category, category_group, account, amount, ' +
-            'notes, imported_payee',
+            'notes, date, imported_payee, cleared, reconciled',
         ),
       condition_op: z
         .string()
@@ -351,33 +479,36 @@ export function registerCreateRule(server: McpServer): void {
             'are refused on payee, category, category_group and account, which Actual stores ' +
             'as ids: they would compare against the id. For text on a payee, imported_payee ' +
             'holds what the row arrived with, and payee_name the payee name, once that payee ' +
-            'exists. On amount the operators are is, isapprox, gt, gte, lt and lte; isNot is ' +
-            'not one of them.',
+            'exists. On amount the operators are is, isapprox, gt, gte, lt and lte; ' +
+            'isNot is not one of them. On cleared and reconciled the only operator is ' +
+            'is: for "not cleared", write cleared is false.',
         ),
       condition_value: z
-        .union([z.string(), z.array(z.string())])
+        .union([RULE_VALUE, z.array(RULE_VALUE)])
         .describe(
           'Value to match against. For payee, category, category_group and account, a whole ' +
             'name or an ID. For amount, the figure as you would say it (45.50, or -45.50 for ' +
             'money going out), not in cents. Spending is negative, so "more than 45.50 spent" ' +
-            'is lt -45.50: gt -45.50 would also catch every deposit and every zero. Pass a ' +
-            'list for oneOf and notOneOf; a single value for every other operator.',
+            'is lt -45.50: gt -45.50 would also catch every deposit and every zero. For ' +
+            'cleared and reconciled, true or false; yes and 1 are read as true, no and 0 ' +
+            'as false. Pass a list for oneOf and notOneOf; a single value for every ' +
+            'other operator.',
         ),
       action_field: z
         .string()
         .describe(
-          'Field to set: category, payee, notes, account. Setting account moves the ' +
-            'transaction, which a later import of the same movement does not recognise, so ' +
+          'Field to set: category, payee, notes, account, cleared, reconciled. Setting ' +
+            'account moves the transaction, which a later import of the same movement ' +
+            'does not recognise, so ' +
             'a bank sync can leave a duplicate; a row moved off budget also loses its ' +
             'category.',
         ),
-      action_value: z
-        .string()
-        .describe(
-          'Value to set (category name/ID, payee name/ID, account name/ID, note text, or an ' +
-            'amount as you would say it). A payee, category or account must already exist; ' +
-            'use create_payee or create_category for a new one.',
-        ),
+      action_value: RULE_VALUE.describe(
+        'Value to set (category name/ID, payee name/ID, account name/ID, note text, an ' +
+          'amount as you would say it, or true or false for cleared and reconciled). A ' +
+          'payee, category or account must already exist; use create_payee or ' +
+          'create_category for a new one.',
+      ),
       stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
     },
     { title: 'Create automation rule', readOnlyHint: false },
