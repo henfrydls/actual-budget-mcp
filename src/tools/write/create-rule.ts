@@ -82,7 +82,7 @@ async function resolveRulePayee(value: string): Promise<{ id: string; name: stri
  */
 const AMOUNT_FIELDS: ReadonlySet<string> = new Set(['amount']);
 
-function amountForRule(field: string, value: string): number {
+function amountForRule(field: string, value: string, role: 'condition' | 'action'): number {
   // Trimmed before anything else, so the emptiness check below sees a value
   // of spaces for what it is.
   const text = value.trim();
@@ -92,9 +92,14 @@ function amountForRule(field: string, value: string): number {
   // `set amount = ""` was saved, and then each import that matched it moved a
   // row of -100 to 0. A figure nobody typed, losing data quietly, every time.
   if (text === '') {
+    // What a zero would do differs by where it is, and saying the wrong one
+    // sends the reader looking for the wrong thing.
     throw new Error(
-      `\`${field}\` needs a figure. An empty value would be saved as 0, which sets ` +
-        `matching transactions to nothing.`,
+      role === 'action'
+        ? `\`${field}\` needs a figure. An empty value would be saved as 0, which sets ` +
+            `every matching transaction to nothing.`
+        : `\`${field}\` needs a figure. An empty value would be saved as 0, so the rule ` +
+            `would match transactions of exactly zero.`,
     );
   }
 
@@ -124,7 +129,16 @@ function amountForRule(field: string, value: string): number {
     );
   }
 
-  return amountToCents(Number(text));
+  const cents = amountToCents(Number(text));
+  // A figure so large that the integer is no longer exact: "100000000000000000000"
+  // is a plain decimal and converts to 1e+22, which is not a figure anybody
+  // can be stored or compared against meaningfully.
+  if (!Number.isSafeInteger(cents)) {
+    throw new Error(
+      `\`${field}\` cannot hold ${text}: it is past the largest figure that stays exact.`,
+    );
+  }
+  return cents;
 }
 
 /**
@@ -178,6 +192,7 @@ async function resolveRuleValue(
   field: string,
   op: string,
   value: string | string[],
+  role: 'condition' | 'action' = 'condition',
 ): Promise<{ stored: string | string[] | number; matched: string[] }> {
   const list = Array.isArray(value) ? value : [value];
 
@@ -209,7 +224,7 @@ async function resolveRuleValue(
     if (!AMOUNT_OPS.has(op)) {
       throw new Error(refuseOpOnAmount(field, op));
     }
-    const cents = amountForRule(field, list[0]);
+    const cents = amountForRule(field, list[0], role);
     // Said back, because the reading is the thing that was wrong: 45.50 is
     // forty five and a half, not forty five cents, and a rule runs until
     // somebody deletes it.
@@ -255,7 +270,7 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
   const condition = await resolveRuleValue(condition_field, condition_op, condition_value);
   const resolvedCondValue: unknown = condition.stored;
 
-  const action = await resolveRuleValue(action_field, 'is', action_value);
+  const action = await resolveRuleValue(action_field, 'is', action_value, 'action');
   const resolvedActionValue: unknown = action.stored;
 
   const rule = {

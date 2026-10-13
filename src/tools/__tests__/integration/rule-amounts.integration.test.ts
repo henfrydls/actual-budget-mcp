@@ -151,7 +151,9 @@ describe.skipIf(skip)('rules about an amount (#183)', () => {
     // `Number` reads "0x10" as 16 and "1e3" as 1000, and past 1e20 an integer
     // is not exact any more. None of those is a figure someone typed meaning
     // money.
-    for (const odd of ['0x10', '1e3', '1e20', '4,550', 'forty']) {
+    // A missing half counts too: ".5" and "45." are not how anyone writes an
+    // amount, and both are numbers to `Number`.
+    for (const odd of ['0x10', '1e3', '1e20', '4,550', 'forty', '.5', '45.', '- 45.50']) {
       await expect(
         createRuleFromInput({
           condition_field: 'amount',
@@ -163,6 +165,43 @@ describe.skipIf(skip)('rules about an amount (#183)', () => {
         odd,
       ).rejects.toThrow(/takes a figure/);
     }
+  });
+
+  it('refuses a figure too large to stay exact', async () => {
+    // A plain decimal, and still not a figure: "100000000000000000000" lands
+    // on 1e+22 once converted, past the point where an integer is exact, so
+    // nothing stored or compared against it means what it says.
+    await expect(
+      createRuleFromInput({
+        condition_field: 'amount',
+        condition_op: 'is',
+        condition_value: '100000000000000000000',
+        action_field: 'category',
+        action_value: 'Fun',
+      } as never),
+    ).rejects.toThrow(/exact/);
+  });
+
+  it('says what a zero would do where it would do it', async () => {
+    // An empty value means different things in the two places, and the wrong
+    // sentence sends the reader looking for the wrong thing.
+    const action = await createRuleFromInput({
+      condition_field: 'notes',
+      condition_op: 'is',
+      condition_value: 'empty-here',
+      action_field: 'amount',
+      action_value: '',
+    } as never).catch((e: Error) => e.message);
+    expect(action).toContain('sets every matching transaction to nothing');
+
+    const condition = await createRuleFromInput({
+      condition_field: 'amount',
+      condition_op: 'is',
+      condition_value: '',
+      action_field: 'category',
+      action_value: 'Fun',
+    } as never).catch((e: Error) => e.message);
+    expect(condition).toContain('match transactions of exactly zero');
   });
 
   it('refuses more decimals than the currency has, rather than rounding them', async () => {
@@ -195,6 +234,25 @@ describe.skipIf(skip)('rules about an amount (#183)', () => {
     expect(message).toContain('isNot');
     expect(message, 'it has to name the ones that do work').toContain('isapprox');
     expect(message).not.toContain('Failed creating a new rule');
+    // The way out of `isNot` is to match what you do want, and that advice
+    // belongs to `isNot` alone.
+    expect(message).toContain('match the amounts you do want');
+  });
+
+  it('does not give the isNot advice for an operator it does not answer', async () => {
+    // `contains` on a figure is refused for a different reason entirely, and
+    // "match the amounts you do want instead" reads as a non sequitur there.
+    const message = await createRuleFromInput({
+      condition_field: 'amount',
+      condition_op: 'contains',
+      condition_value: '-45.50',
+      action_field: 'category',
+      action_value: 'Fun',
+    } as never).catch((e: Error) => e.message);
+
+    expect(message).toContain('contains');
+    expect(message).toContain('isapprox');
+    expect(message).not.toContain('match the amounts you do want');
   });
 
   it('names the figure operators when a list is tried on an amount', async () => {

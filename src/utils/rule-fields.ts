@@ -185,10 +185,14 @@ export function refuseListOnField(field: string, op: string): string {
 
 /** What to say when an operator is not one a numeric field takes. */
 export function refuseOpOnAmount(field: string, op: string): string {
+  // The advice about matching what you do want answers `isNot` and nothing
+  // else: it reads as a non sequitur after `contains` or `isbetween`, which
+  // are refused here for entirely different reasons.
+  const instead =
+    op === 'isNot' ? ' For "not this amount", match the amounts you do want instead.' : '';
   return (
     `A rule cannot use \`${op}\` on \`${field}\`, which holds a figure. Actual takes ` +
-    `${[...AMOUNT_OPS].map((o) => `\`${o}\``).join(', ')} there. For "not this amount", ` +
-    `match the amounts you do want instead.`
+    `${[...AMOUNT_OPS].map((o) => `\`${o}\``).join(', ')} there.${instead}`
   );
 }
 
