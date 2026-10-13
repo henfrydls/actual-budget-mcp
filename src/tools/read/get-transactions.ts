@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
-import { formatMoney } from '../../utils/money.js';
+import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountId } from '../../utils/resolvers.js';
 import { sectionHeader, formatTable } from '../../utils/formatters.js';
@@ -296,13 +296,17 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
     });
   }
 
+  // Through the same conversion as every other amount, rather than a hundred
+  // written here: in a currency with no decimal places a bound of 100 was
+  // being compared against rows a hundred times smaller, so the filter
+  // returned nothing and said so as if the budget held nothing (#141).
   if (min_amount !== undefined) {
-    const minCents = Math.round(min_amount * 100);
+    const minCents = amountToCents(min_amount);
     allTransactions = allTransactions.filter((t) => t.amount >= minCents);
   }
 
   if (max_amount !== undefined) {
-    const maxCents = Math.round(max_amount * 100);
+    const maxCents = amountToCents(max_amount);
     allTransactions = allTransactions.filter((t) => t.amount <= maxCents);
   }
 

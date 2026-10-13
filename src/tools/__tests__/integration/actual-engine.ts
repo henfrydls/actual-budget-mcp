@@ -15,6 +15,7 @@ import path from 'node:path';
 
 let dataDir: string | undefined;
 let originalLog: typeof console.log | undefined;
+let internal: Awaited<ReturnType<typeof api.init>> | undefined;
 
 // The engine emits informational "[Breadcrumb]" / spreadsheet chatter on stdout.
 // Filter it so test output stays focused on assertions (real errors still pass through).
@@ -39,7 +40,21 @@ function restoreLog(): void {
 export async function initTestEngine(): Promise<void> {
   silenceEngineChatter();
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'actual-mcp-it-'));
-  await api.init({ dataDir });
+  internal = await api.init({ dataDir });
+}
+
+/**
+ * The engine's internal handlers, which `api.init` returns and the real
+ * `connection.ts` hands out as `getInternal()`.
+ *
+ * A test that exercises code reaching for an internal handler mocks
+ * `connection.js` and points `getInternal` here, so the handler is the real
+ * one against the local budget. Reading a preference goes this way, because
+ * the public API has no getter for the synced store.
+ */
+export function testInternal(): Awaited<ReturnType<typeof api.init>> {
+  if (!internal) throw new Error('the test engine is not initialised');
+  return internal;
 }
 
 export async function shutdownTestEngine(): Promise<void> {
@@ -48,6 +63,7 @@ export async function shutdownTestEngine(): Promise<void> {
   } finally {
     if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
     dataDir = undefined;
+    internal = undefined;
     restoreLog();
   }
 }

@@ -1,5 +1,6 @@
 import { ensureConnection } from '../connection.js';
 import { describeError } from './errors.js';
+import { refreshBudgetDecimalPlaces } from './currency.js';
 import { lastFailedSync, lastGoodSync, markFailedSync, resetSyncClock, syncNow } from './sync-clock.js';
 
 /**
@@ -122,6 +123,13 @@ export async function refreshBeforeRead(now?: number): Promise<FreshnessReport> 
     inFlight = (async () => {
       try {
         await syncNow();
+        // A sync is where a currency changed in the app arrives, and the
+        // decimal count scales every amount this server reads or writes. Tied
+        // to the sync rather than to the read so it costs one engine call a
+        // minute at most, the same budget the TTL above sets. It reads both
+        // preference stores and swallows its own failures, so a server whose
+        // preferences cannot be read keeps the count it already had.
+        await refreshBudgetDecimalPlaces();
         return true;
       } catch (error) {
         // stdout carries JSON-RPC. `syncNow` has already recorded it.

@@ -8,6 +8,11 @@ vi.mock('../../connection.js', () => ({
   ensureConnection: (...a: unknown[]) => ensureConnection(...a),
 }));
 
+const refreshBudgetDecimalPlaces = vi.fn();
+vi.mock('../currency.js', () => ({
+  refreshBudgetDecimalPlaces: (...a: unknown[]) => refreshBudgetDecimalPlaces(...a),
+}));
+
 import {
   refreshBeforeRead,
   stalenessNotice,
@@ -33,6 +38,7 @@ describe('refreshing before a read', () => {
     resetSyncState();
     sync.mockReset().mockResolvedValue(undefined);
     ensureConnection.mockReset().mockResolvedValue(undefined);
+    refreshBudgetDecimalPlaces.mockReset().mockResolvedValue(2);
     stderr = [];
     const original = console.error;
     console.error = (...args: unknown[]) => void stderr.push(args.map(String).join(' '));
@@ -600,5 +606,45 @@ describe('a wrapped resource', () => {
 
     expect(result.contents).toHaveLength(2);
     expect(result.contents[1].text).toMatch(/could not refresh/i);
+  });
+});
+
+/**
+ * The budget currency, refreshed where a change to it arrives (#141).
+ *
+ * The decimal count scales every amount read or written, and it is read once
+ * when a budget opens. A server that stays up for days would hold the count
+ * from the morning, so a currency changed in the app is picked up with the
+ * same sync that picks up a recategorised transaction, and no more often than
+ * that: the count is not worth an engine call per read.
+ */
+describe('keeping the budget currency current', () => {
+  beforeEach(() => {
+    resetSyncState();
+    sync.mockReset().mockResolvedValue(undefined);
+    ensureConnection.mockReset().mockResolvedValue(undefined);
+    refreshBudgetDecimalPlaces.mockReset().mockResolvedValue(2);
+  });
+
+  it('re-reads it after a sync that happened', async () => {
+    await refreshBeforeRead();
+    expect(refreshBudgetDecimalPlaces).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-read it on a read answered from the TTL', async () => {
+    // The sync is what is skipped, and this goes with it. Without the check a
+    // read that costs nothing today would start costing an engine call.
+    const start = Date.now();
+    await refreshBeforeRead(start);
+    await refreshBeforeRead(start + SYNC_TTL_MS - 1);
+    expect(refreshBudgetDecimalPlaces).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-read it when the sync failed', async () => {
+    // Nothing arrived, so there is nothing to pick up, and the engine is the
+    // thing that is not answering.
+    sync.mockRejectedValue(new Error('server is down'));
+    await refreshBeforeRead();
+    expect(refreshBudgetDecimalPlaces).not.toHaveBeenCalled();
   });
 });
