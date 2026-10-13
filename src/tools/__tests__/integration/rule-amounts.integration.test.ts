@@ -4,12 +4,23 @@ vi.mock('@actual-app/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@actual-app/api')>();
   return { ...actual, sync: vi.fn().mockResolvedValue(undefined) };
 });
-vi.mock('../../../connection.js', () => ({
-  ensureConnection: vi.fn().mockResolvedValue(undefined),
-}));
+// `getInternal` reaches the harness engine, because reading the budget
+// currency goes through the engine's own preference handler.
+vi.mock('../../../connection.js', async () => {
+  const harness = await import('./actual-engine.js');
+  return {
+    ensureConnection: vi.fn().mockResolvedValue(undefined),
+    getInternal: () => harness.testInternal(),
+  };
+});
 
 import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './actual-engine.js';
-import { createRuleFromInput } from '../../write/create-rule.js';
+import { createRuleFromInput, registerCreateRule } from '../../write/create-rule.js';
+import {
+  withCurrentCurrency,
+  budgetDecimalPlaces,
+  refreshBudgetDecimalPlaces,
+} from '../../../utils/currency.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
 
@@ -300,5 +311,41 @@ describe.skipIf(skip)('rules about an amount (#183)', () => {
       if (rows.some((r) => r.notes === 'set-the-amount')) break;
     }
     expect(rows.find((r) => r.notes === 'set-the-amount')?.amount).toBe(-4550);
+  });
+
+  it('stores a rule amount in the budget currency, not in hundredths', async () => {
+    // A rule's amount goes through the same conversion as every other amount,
+    // so in a budget with no decimal places 100 is a hundred whole units and
+    // the rule has to hold 100, not 10,000 (#141, #183).
+    //
+    // Through the registered tool, because re-reading the currency is wrapped
+    // at registration: create_rule is a write, and a write converts at the top
+    // of its handler.
+    await api.setPreference('defaultCurrencyCode', 'JPY');
+
+    let handler: ((input: unknown) => Promise<unknown>) | undefined;
+    registerCreateRule(
+      withCurrentCurrency({
+        tool: (...a: unknown[]) => {
+          handler = a.at(-1) as (input: unknown) => Promise<unknown>;
+        },
+      }) as never,
+    );
+    await handler!({
+      condition_field: 'amount',
+      condition_op: 'is',
+      condition_value: '100',
+      action_field: 'category',
+      action_value: 'Fun',
+      stage: 'null',
+    });
+
+    expect(budgetDecimalPlaces(), 'the write did not re-read the currency').toBe(0);
+    expect(await storedConditions()).toContainEqual(
+      expect.objectContaining({ field: 'amount', op: 'is', value: 100 }),
+    );
+
+    await api.setPreference('defaultCurrencyCode', 'USD');
+    await refreshBudgetDecimalPlaces();
   });
 });
