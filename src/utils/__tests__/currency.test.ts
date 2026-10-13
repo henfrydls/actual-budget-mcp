@@ -13,8 +13,9 @@ import {
   resetBudgetDecimalPlaces,
   DECIMAL_PLACES_BY_CODE,
   DEFAULT_DECIMAL_PLACES,
+  withCurrentCurrency,
 } from '../currency.js';
-import { amountToCents, centsToAmount, formatMoney } from '../money.js';
+import { amountToCents, centsToAmount, formatMoney, isRoundHundred } from '../money.js';
 
 /**
  * Which preference store answers, and what happens when neither does.
@@ -199,6 +200,24 @@ describe('amounts in a currency with no decimal places', () => {
     expect(formatMoney(-1000)).toBe('-1,000');
   });
 
+  it('calls a round hundred round in whatever the currency is', async () => {
+    // The threshold decides whether an amount match is reported as weak
+    // evidence. Written as a hundred in cents, it called every multiple of
+    // 10,000 yen round and nothing else, so in a yen budget a difference of
+    // exactly 100 was presented as a lead worth chasing.
+    send.mockResolvedValue({ defaultCurrencyCode: 'JPY' });
+    await refreshBudgetDecimalPlaces();
+    expect(isRoundHundred(100)).toBe(true);
+    expect(isRoundHundred(133)).toBe(false);
+    expect(isRoundHundred(10_000)).toBe(true);
+
+    send.mockResolvedValue({ defaultCurrencyCode: 'USD' });
+    await refreshBudgetDecimalPlaces();
+    expect(isRoundHundred(10_000)).toBe(true);
+    expect(isRoundHundred(100)).toBe(false);
+    expect(isRoundHundred(333_333)).toBe(false);
+  });
+
   it('keeps the decimals for a currency that has them', async () => {
     send.mockResolvedValue({ defaultCurrencyCode: 'USD' });
     expect(await refreshBudgetDecimalPlaces()).toBe(DEFAULT_DECIMAL_PLACES);
@@ -208,9 +227,9 @@ describe('amounts in a currency with no decimal places', () => {
     expect(formatMoney(-1234)).toBe('-12.34');
   });
 
-  it('goes back to two when a preference cannot be read at all', async () => {
-    // A budget with no currency set, which is the ordinary case, and a store
-    // that errors both land here.
+  it('goes back to two when the budget has no currency any more', async () => {
+    // The store answered, and what it answered is that nothing is set. That
+    // is information, so the count follows it.
     send.mockResolvedValue({ defaultCurrencyCode: 'KRW' });
     await refreshBudgetDecimalPlaces();
     expect(budgetDecimalPlaces()).toBe(0);
@@ -218,5 +237,89 @@ describe('amounts in a currency with no decimal places', () => {
     send.mockResolvedValue({});
     expect(await refreshBudgetDecimalPlaces()).toBe(DEFAULT_DECIMAL_PLACES);
     expect(formatMoney(-1234)).toBe('-12.34');
+  });
+
+  it('keeps what it had when the preference cannot be read', async () => {
+    // The dangerous one. A read that failed is not news that the budget has
+    // no currency, and treating it as such put a budget in yen back on
+    // hundredths: a transaction of 100 would be written as 10,000 with
+    // nothing reporting a problem.
+    send.mockResolvedValue({ defaultCurrencyCode: 'JPY' });
+    await refreshBudgetDecimalPlaces();
+    expect(budgetDecimalPlaces()).toBe(0);
+
+    send.mockRejectedValue(new Error('handler is not a function'));
+    expect(await refreshBudgetDecimalPlaces()).toBe(0);
+    expect(amountToCents(100)).toBe(100);
+  });
+
+  it('asks both stores before giving up on the read', async () => {
+    // One store missing is not a failed read: the value lives in whichever
+    // of them has it, so a budget whose currency was cleared is still
+    // recognised when only the other one answers.
+    send.mockImplementation(async (method: string) => {
+      if (method === 'preferences/get') throw new Error('unavailable');
+      return {};
+    });
+    send.mockClear();
+    await refreshBudgetDecimalPlaces();
+    expect(budgetDecimalPlaces()).toBe(DEFAULT_DECIMAL_PLACES);
+    expect(send.mock.calls.map((c) => c[0])).toEqual(['preferences/get', 'load-prefs']);
+  });
+});
+
+/**
+ * The wrapper that keeps a write converting in the right currency (#141).
+ *
+ * A write reads the count at the top of its handler, so the refresh has to
+ * have happened by then. Tying it to syncing was one write late, which is
+ * what these pin: the order, not just the call.
+ */
+describe('re-reading the currency before a write', () => {
+  beforeEach(() => {
+    send.mockReset();
+    resetBudgetDecimalPlaces();
+  });
+
+  /** Register one tool through the wrapper and hand back its handler. */
+  function register(annotations: object): () => Promise<unknown> {
+    let handler: (() => Promise<unknown>) | undefined;
+    let seen: number | undefined;
+    const server = withCurrentCurrency({
+      tool: (...a: unknown[]) => {
+        handler = a.at(-1) as () => Promise<unknown>;
+      },
+    } as never);
+    (server.tool as (...a: unknown[]) => unknown)('a_tool', 'does a thing', {}, annotations, async () => {
+      seen = budgetDecimalPlaces();
+      return { seen };
+    });
+    return handler as () => Promise<unknown>;
+  }
+
+  it('has the new count before the handler reads it', async () => {
+    send.mockResolvedValue({ defaultCurrencyCode: 'JPY' });
+    const handler = register({ title: 'Write something' });
+
+    // The count the handler saw, not the one left behind afterwards: a
+    // refresh that ran late would still leave 0 here at the end.
+    expect(await handler()).toEqual({ seen: 0 });
+  });
+
+  it('leaves a read tool alone', async () => {
+    // Reads go through the sync, which re-reads it, and a second query per
+    // read would be for the same answer.
+    send.mockResolvedValue({ defaultCurrencyCode: 'JPY' });
+    const handler = register({ readOnlyHint: true });
+
+    expect(await handler()).toEqual({ seen: DEFAULT_DECIMAL_PLACES });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('lets the write through when the currency cannot be read', async () => {
+    send.mockRejectedValue(new Error('handler is not a function'));
+    const handler = register({ title: 'Write something' });
+
+    await expect(handler()).resolves.toEqual({ seen: DEFAULT_DECIMAL_PLACES });
   });
 });

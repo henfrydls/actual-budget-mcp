@@ -30,3 +30,16 @@ export function formatMoney(cents: number): string {
     maximumFractionDigits: places,
   }).format(amount);
 }
+
+/**
+ * Whether an amount is a round hundred in the budget's own currency.
+ *
+ * A difference like 100.00 or 300.00 is common by chance, so an amount match
+ * against one is weak evidence; one with centavos is worth chasing. The
+ * threshold was a hundred written in cents, which in a currency with no
+ * decimal places called every multiple of 10,000 yen round and nothing else
+ * (#141).
+ */
+export function isRoundHundred(cents: number): boolean {
+  return Math.abs(cents) % amountToCents(100) === 0;
+}

@@ -17,6 +17,7 @@ import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './ac
 import { registerCategoryTrends } from '../../analysis/category-trends.js';
 import { registerTransferBetweenCategories } from '../../write/transfer-between-categories.js';
 import { getInternal } from '../../../connection.js';
+import { withCurrentCurrency } from '../../../utils/currency.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
 
@@ -32,6 +33,22 @@ function handlerFor(register: (s: never) => void): Handler {
       handler = a.at(-1) as Handler;
     },
   } as never);
+  return handler as Handler;
+}
+
+/**
+ * The same, through the wrapper the server registers write tools with, which
+ * re-reads the budget currency before the handler converts anything (#141).
+ */
+function writeHandlerFor(register: (s: never) => void): Handler {
+  let handler: Handler | undefined;
+  register(
+    withCurrentCurrency({
+      tool: (...a: unknown[]) => {
+        handler = a.at(-1) as Handler;
+      },
+    }) as never,
+  );
   return handler as Handler;
 }
 
@@ -326,10 +343,18 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
     expect(line).toContain('-100.0%');
   }, 60_000);
 
-  it("writes the month note in the budget's own currency (#115)", async () => {
-    // `getCurrency` falls back to `{code: "", decimalPlaces: 2}`, and that
-    // decimal count is the divisor the note is formatted with. On a currency
-    // with none, the figure came out wrong by a factor of a hundred.
+  it("moves what was asked for, in the budget's own currency (#115, #141)", async () => {
+    // Two halves of the same thing, and they were fixed a release apart.
+    //
+    // #115: the note the engine writes is formatted with the currency's
+    // decimal count as its divisor, and `getCurrency` falls back to
+    // `{code: "", decimalPlaces: 2}`, so the figure in the note came out a
+    // hundred times too large until the currency was passed.
+    //
+    // #141: the amount itself was converted with two decimal places
+    // regardless, so asking to move 100 yen moved 10,000. Both now follow the
+    // budget, and the amount is what this checks first: the note is a trail,
+    // the figure is the money.
     let from = '';
     let to = '';
     await createFreshBudget(async () => {
@@ -348,21 +373,33 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
     await internal.send('preferences/save', { id: 'defaultCurrencyCode', value: 'JPY' });
     await api.setBudgetAmount('2026-09', from, 2000000);
 
-    await handlerFor(registerTransferBetweenCategories)({
+    await writeHandlerFor(registerTransferBetweenCategories)({
       from: 'Origen',
       to: 'Destino',
       amount: 100,
       month: '2026-09',
     });
 
+    // The money, read back from the budget. Before #141 this was 10,000.
+    const month = (await api.getBudgetMonth('2026-09')) as unknown as {
+      categoryGroups: { categories: { id: string; budgeted: number }[] }[];
+    };
+    const budgeted = new Map(
+      month.categoryGroups.flatMap((g) => g.categories.map((c) => [c.id, c.budgeted] as const)),
+    );
+    expect(budgeted.get(to), 'moved the wrong amount of yen').toBe(100);
+
     const note = (await internal.send('notes-get', { id: 'budget-2026-09' })) as {
       note?: string;
     } | null;
     const line = String(note?.note ?? '').split('\n').pop() ?? '';
 
-    // 10,000 cents in a zero-decimal currency is 10,000, not 100.
-    expect(line).toContain('10,000');
-    expect(line).not.toMatch(/Reassigned 100\.00 /);
+    // And the note says the same number. The trailing `.00` is the budget's
+    // number format, which is a separate setting from the currency and not
+    // this server's to decide; what #115 was about is the figure, and a
+    // hundred yen is no longer written as ten thousand.
+    expect(line).toContain('100');
+    expect(line).not.toContain('10,000');
   }, 60_000);
 
   it('writes the note unchanged when the budget has no currency set', async () => {

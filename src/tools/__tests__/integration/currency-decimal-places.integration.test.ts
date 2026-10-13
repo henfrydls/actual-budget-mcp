@@ -25,7 +25,8 @@ import {
   resetBudgetDecimalPlaces,
   budgetDecimalPlaces,
 } from '../../../utils/currency.js';
-import { createTransaction } from '../../write/create-transaction.js';
+import { createTransaction, registerCreateTransaction } from '../../write/create-transaction.js';
+import { withCurrentCurrency } from '../../../utils/currency.js';
 import { getTransactionsReport } from '../../read/get-transactions.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
@@ -149,6 +150,29 @@ describe.skipIf(skip)('amounts in a currency with no decimal places (#141)', () 
     } as never);
 
     expect(await storedAmounts(accountId)).toEqual([-1234]);
+  });
+
+  it('picks up a currency changed while the server is running', async () => {
+    // Through the registered tool, which is where the refresh is wrapped, and
+    // with nothing calling it by hand. A write converts its amount at the top
+    // of the handler and syncs at the end, so a refresh tied to syncing was
+    // always one write late: measured, this wrote 10,000 for an amount of 100.
+    const accountId = await budgetIn('USD');
+
+    await api.setPreference('defaultCurrencyCode', 'JPY');
+
+    let handler: ((input: unknown) => Promise<unknown>) | undefined;
+    registerCreateTransaction(
+      withCurrentCurrency({
+        tool: (...a: unknown[]) => {
+          handler = a.at(-1) as (input: unknown) => Promise<unknown>;
+        },
+      }) as never,
+    );
+    await handler!({ account: 'Checking', amount: -100, payee: 'Ramen', date: '2026-10-12' });
+
+    expect(budgetDecimalPlaces(), 'the write did not re-read the currency').toBe(0);
+    expect(await storedAmounts(accountId)).toEqual([-100]);
   });
 
   it('treats a budget with no currency set the way it always did', async () => {

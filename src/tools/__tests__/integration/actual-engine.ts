@@ -88,6 +88,19 @@ export async function createFreshBudget(
   const created = budgets.find((b) => b.name === name);
   if (!created) throw new Error(`could not locate freshly created budget "${name}"`);
   await api.loadBudget(created.id);
+  // The decimal count belongs to the budget that is open, and a new budget
+  // has its own currency. In the server this happens inside `ensureConnection`,
+  // which reads the preference as part of opening one; here the harness opens
+  // budgets itself, so without this a budget in yen would leave its count
+  // behind for the next test to inherit.
+  //
+  // Imported here rather than at the top of the file, and that is load-order,
+  // not style: `currency.ts` imports `connection.js`, and the tests that need
+  // the engine's own handlers mock `connection.js` with a factory that imports
+  // this file. A static import closes that circle and vitest waits on itself,
+  // which hangs the run with no failure to read.
+  const { resetBudgetDecimalPlaces } = await import('../../../utils/currency.js');
+  resetBudgetDecimalPlaces();
   return created.id;
 }
 
