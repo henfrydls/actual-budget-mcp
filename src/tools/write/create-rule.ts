@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { resolvePayeeIn, resolveByWholeName } from '../../utils/resolvers.js';
+import { amountToCents, formatMoney } from '../../utils/money.js';
 import { describeError } from '../../utils/errors.js';
 import {
   ID_FIELDS,
@@ -56,6 +57,44 @@ async function resolveRulePayee(value: string): Promise<{ id: string; name: stri
 }
 
 /**
+ * The fields that hold an amount, which Actual keeps as an integer.
+ *
+ * One of them: the engine's own field table has a single numeric field,
+ * `amount`. A value typed as a human writes it has to become that integer
+ * before it is saved, and what happens when it does not was measured both
+ * ways:
+ *
+ *   condition `amount is "-45.50"`   the engine refuses the rule outright,
+ *                                    "Value must be a number or between",
+ *                                    and the tool answered with a bare
+ *                                    "Failed creating a new rule". So no rule
+ *                                    about an amount could be made here at all.
+ *
+ *   action `set amount = "-45.50"`   saved without complaint, and then every
+ *                                    import that matched it died on
+ *                                    `Can't convert to integer: "-45.50"`.
+ *                                    The rule sits there breaking imports.
+ *
+ * The amount is read the way every other amount this server takes is read, in
+ * the budget's own units: 45.50, not 4550.
+ */
+const AMOUNT_FIELDS: ReadonlySet<string> = new Set(['amount']);
+
+function amountForRule(field: string, value: string | string[]): number {
+  if (Array.isArray(value)) {
+    throw new Error(`\`${field}\` takes one amount, not a list.`);
+  }
+  const amount = Number(String(value).trim());
+  if (!Number.isFinite(amount)) {
+    throw new Error(
+      `\`${field}\` takes an amount, like 45.50 or -45.50, and "${value}" is not one. ` +
+        `Write it the way you would say it, not in cents.`,
+    );
+  }
+  return amountToCents(amount);
+}
+
+/**
  * One value of one of the fields the engine stores by id, resolved to that id.
  *
  * All four match the same way, by id or by the whole name: a rule is stored
@@ -106,7 +145,7 @@ async function resolveRuleValue(
   field: string,
   op: string,
   value: string | string[],
-): Promise<{ stored: string | string[]; matched: string[] }> {
+): Promise<{ stored: string | string[] | number; matched: string[] }> {
   const list = Array.isArray(value) ? value : [value];
 
   // Refused here rather than by the engine, which answers a list on the wrong
@@ -125,6 +164,16 @@ async function resolveRuleValue(
   }
   if (list.length === 0) {
     throw new Error(`\`${op}\` needs at least one value.`);
+  }
+
+  // After the list checks, which already say the useful thing about `oneOf`
+  // on a field that cannot take one (#171), and before anything is saved.
+  if (AMOUNT_FIELDS.has(field)) {
+    const cents = amountForRule(field, value);
+    // Said back, because the reading is the thing that was wrong: 45.50 is
+    // forty five and a half, not forty five cents, and a rule runs until
+    // somebody deletes it.
+    return { stored: cents, matched: [`${formatMoney(cents)}, stored as ${cents}`] };
   }
 
   if (!ID_FIELDS.has(field)) {
@@ -253,8 +302,9 @@ export function registerCreateRule(server: McpServer): void {
         .union([z.string(), z.array(z.string())])
         .describe(
           'Value to match against. For payee, category, category_group and account, a whole ' +
-            'name or an ID. Pass a list for oneOf and notOneOf; a single value for every ' +
-            'other operator.',
+            'name or an ID. For amount, the figure as you would say it (45.50, or -45.50 for ' +
+            'money going out), not in cents. Pass a list for oneOf and notOneOf; a single ' +
+            'value for every other operator.',
         ),
       action_field: z
         .string()
@@ -267,9 +317,9 @@ export function registerCreateRule(server: McpServer): void {
       action_value: z
         .string()
         .describe(
-          'Value to set (category name/ID, payee name/ID, account name/ID, or note text). ' +
-            'A payee, category or account must already exist; use create_payee or ' +
-            'create_category for a new one.',
+          'Value to set (category name/ID, payee name/ID, account name/ID, note text, or an ' +
+            'amount as you would say it). A payee, category or account must already exist; ' +
+            'use create_payee or create_category for a new one.',
         ),
       stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
     },
