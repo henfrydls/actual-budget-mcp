@@ -159,6 +159,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   const acctName = accounts.find((a) => a.id === accountId)?.name || accountId;
 
+  // What a rule did to the row, for the reply. Both are about a transaction
+  // that is not what the caller described, which is the part worth saying.
+  let categoryFromRule: string | undefined;
+  let splitByRule = false;
+
   try {
     await api.addTransactions(accountId, [transaction as any], {
       learnCategories: false,
@@ -169,6 +174,26 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     // its marker rather than by "new rows around this date". The old diff could
     // reach another process's row and give it this transaction's category:
     // silent, on the success path, and invisible in a reconciliation.
+    if (!categoryId) {
+      // Nobody asked for a category, so anything the row ended up with was put
+      // there by a rule, and the reply said nothing about it: the transaction
+      // came back looking uncategorised and the category turned up later in a
+      // report. Measured against the engine, a rule's category is on the row
+      // in the first read after the write, so this costs one local query and
+      // no waiting.
+      const ours = await findByMarker(marker);
+      const row = (ours ?? [])[0];
+      if (row?.is_parent === true) {
+        // A rule can split the row instead. The parent holds no category in
+        // that case, so "uncategorised" would be the wrong word for it too.
+        splitByRule = true;
+      } else if (row?.category) {
+        const categories = await api.getCategories();
+        categoryFromRule =
+          categories.find((c) => c.id === row.category)?.name ?? undefined;
+      }
+    }
+
     if (categoryId) {
       const ours = await findByMarker(marker);
       // A rule can turn what we sent into a split. Actual ignores the category
@@ -240,7 +265,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   } else if (input.payee) {
     lines.push(`  Payee:    ${input.payee}`);
   }
-  if (input.category) lines.push(`  Category: ${input.category}`);
+  if (input.category) {
+    lines.push(`  Category: ${input.category}`);
+  } else if (categoryFromRule) {
+    // Named as a rule's doing, not presented as if it had been asked for: one
+    // of them is a choice the caller made and the other is something that
+    // happened to the transaction, and a rule can be wrong.
+    lines.push(`  Category: ${categoryFromRule} (set by one of your rules)`);
+  } else if (splitByRule) {
+    lines.push('  A rule split this into parts, so its category lives on them.');
+  }
   if (transferPayeeId) {
     // Said out loud, because the caller asked for a payee and got a transfer,
     // and in #137 the person did not find out until they went looking for the
