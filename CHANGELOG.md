@@ -1,5 +1,168 @@
 # Changelog
 
+## 0.10.5
+
+Rules again, and amounts. The thread running through it is a value saved as
+the text it arrived as, where Actual keeps something else: a figure, a true or
+a false. The rule was created, it read back correctly, and then it either
+never matched anything or did the opposite of what it says. One kind takes
+your next bank import down with it and brings in none of that batch.
+
+If you wrote rules through this server before now, the section on what to look
+for is the part worth reading. `get_rules` does that reading for you.
+
+### Amounts in a currency with no decimal places (#141)
+
+Actual stores an amount as an integer in the currency's smallest unit, and
+converts using that currency's own number of decimal places. This server
+always used two. In JPY, KRW and IRR, which have none, every amount was out by
+a factor of a hundred in both directions: asking to spend 100 recorded 10,000,
+and a real 100 came back as 1. It was not a display problem, the wrong number
+was what got written.
+
+The decimal count now comes from the budget. It is read when the connection
+opens and again after each sync, so a currency changed in the app arrives with
+the next sync, and the write tools re-read it before converting anything. The
+count also decides how many decimals an amount is printed with, so a yen is no
+longer shown as "1,000.00".
+
+`get_transactions` had the same hundred written into its amount filters, so in
+one of those currencies a bound was compared against figures a hundred times
+smaller and the reply read as if the account were empty.
+
+Budgets in any other currency are unaffected, and so is a budget with no
+currency set.
+
+### A rule about an amount (#183)
+
+`create_rule` passed the figure through as text. A condition was refused by
+the engine, which answered "Failed creating a new rule" and said nothing about
+which part was wrong, so no rule about an amount could be made here at all. An
+action was saved without complaint, and then every import with a transaction
+matching it died on `Can't convert to integer` and brought in none of its
+batch.
+
+The figure is now read the way every other amount here is, as you would say
+it: 45.50, not 4550. The reply says it back with the stored integer beside it,
+because that reading is the thing that was wrong.
+
+What is not a figure is refused by name instead of by the engine. An empty
+value used to be saved as zero, which in an action set every transaction it
+matched to nothing. "0x10", "1e3", ".5" and "45." are all numbers to
+JavaScript and none of them is how anyone writes an amount. More decimals than
+the currency has are refused rather than rounded, because rounding saves a
+figure you did not write.
+
+On an amount the operators are `is`, `isapprox`, `gt`, `gte`, `lt` and `lte`.
+`isNot` is not one of them, and it was what this server's own advice offered.
+Spending is negative, which the description now says: "more than 45.50 spent"
+is `lt -45.50`.
+
+### Rules about cleared and reconciled transactions (#185)
+
+The same fault on the two fields Actual keeps as true or false. A condition
+was refused outright, so a rule about a cleared transaction could not be
+written here. An action was saved, and then read for its truth, which is where
+it got interesting: any text that is not empty is true, so `set cleared =
+"false"` marked every transaction it matched as cleared. The opposite of what
+it says, on every import, with nothing reporting it. `"0"` meant true for the
+same reason.
+
+Both are read as real values now. Write `true` or `false`, and `yes`, `no`,
+`1` and `0` are understood as well, in any case. Anything else is refused by
+name rather than quietly meaning true. `is` is the only operator these fields
+take, so "not cleared" is written `cleared is false`.
+
+`transfer` and `parent` are refused as conditions. Actual lists them beside
+`cleared` and `reconciled`, but it never hands them to a rule when one runs:
+a transaction carries them under different names, so the condition is always
+false. Such a rule is created, reads correctly, and does nothing on an import
+or a bank sync. It would still match if you applied it by hand from the rules
+page, and the refusal says so rather than telling you it can never work.
+
+A value sent as a real boolean or a number, which is what a client does
+without thinking, is accepted now instead of being refused by the schema.
+
+### Rules that break your next import (#187)
+
+A rule's action writes onto the transaction, so a field Actual keeps no column
+for cannot be written at all. `transfer`, `parent` and `saved` were accepted
+anyway, and then every import with a transaction matching the rule failed as a
+whole:
+
+    Field "transfer" does not exist on table transactions
+
+It is not the matching row that is lost, it is the batch. Three transactions
+imported with one of them matching, and none of the three arrived, so a bank
+sync stops bringing anything in and nothing points back at the rule.
+`category_group` was accepted too and did nothing at all: a rule that reads as
+though it files transactions and has never filed one.
+
+All four are refused now, each with the reason it is refused for. The fields a
+rule can set are checked against Actual's own table rather than against a list
+written here, which also means `date`, `imported_payee` and `amount` are
+offered: all three worked and this server never said so.
+
+### A rule that sets a category now says so (#190)
+
+A transaction recorded without one came back with no mention of a category,
+and a rule had given it one. It read as uncategorised, and the category turned
+up later in a report, which is an expensive place to find out that a rule is
+wrong. The reply names it as the rule's doing, and says so too when the rule
+split the transaction instead.
+
+On a transfer out of the budget the reply used to announce the category and
+then ask for one in the same breath. It says where the transaction counts
+instead.
+
+### Schedule rules are readable (#182)
+
+Actual writes a rule for every schedule, and all three interesting parts of it
+came out unreadable: the date as `[object Object]`, the amount in cents, and
+the link printing the operation twice instead of naming the schedule.
+
+A schedule's date is described in words now: how often, on which day or
+weekday, from when, until when or how many times, and whether weekends move
+it. The amount is money, with the direction said, because a rule about 4,500
+or more spent is stored as a positive figure and read as income without it.
+The link names the schedule.
+
+What cannot be described is shown as it is stored rather than guessed at. The
+fifth Monday of the month and the days counted back from the end used to fall
+through to a sentence that was wrong rather than incomplete: "every month on
+Monday" for a schedule that falls in November, March and May.
+
+### What to look for in the rules you already have
+
+Refusing new ones does nothing for the ones already saved, and these cannot be
+spotted by reading them. `get_rules` marks them, and counts them at the end
+with a line saying what each kind does:
+
+- A figure held as text, which is the one that takes your next import down.
+  Both it and a correct rule print as money, so there is no telling them apart
+  by eye.
+- A figure held as nothing, which sets every transaction it matches to zero.
+  The import succeeds, which is what makes it hard to notice.
+- A word where true or false belongs, which means true whatever the word says.
+  An empty value is marked too, and it means false.
+- A condition Actual never runs on its own.
+- An action on a field with no column, which fails every import that matches
+  it, and one on a field that is not stored, which does nothing.
+
+A rule whose value comes from a template or a formula is left alone, since
+that is how the app's own editor writes some of them and the stored value is
+not what it uses.
+
+### Known, and not fixed here
+
+- `allow_duplicate` in a batch is still all or nothing. To let one legitimate
+  repeat through, it switches off the approximate checks for every row in the
+  call. The `imported_id` checks stay on. (#175)
+- `delete_rule` prints a rule's values as they are stored, so the confirmation
+  is harder to read than the listing. (#186)
+- `create_transaction` echoes the payee and notes it was given rather than
+  what the rules left behind. (#184)
+
 ## 0.10.4
 
 Rules are most of this release. Four bugs with one shape: the rule was
