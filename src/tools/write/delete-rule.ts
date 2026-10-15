@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { loadRuleNames, describeRule } from '../../utils/rule-describe.js';
 
 export interface DeleteRuleInput {
   rule_id: string;
@@ -18,6 +19,18 @@ export interface DeleteRuleInput {
  * preview matters more here than elsewhere: a rule id says nothing about what
  * the rule does, so without spelling out its conditions and actions the caller
  * has no way to tell whether it is the right one.
+ *
+ * It spells them out the way `get_rules` does, through the same code (#186).
+ * This used to print the values with `JSON.stringify`, which shows them as
+ * the engine stores them: an amount a hundred times larger than the figure it
+ * means, a recurrence as its stored config, and a payee as a uuid. The one
+ * thing a confirmation exists for, recognising the rule, was the part that
+ * could not be read, while `get_rules` had been translating all three for two
+ * releases.
+ *
+ * The warnings come with them. Someone about to delete a rule that takes
+ * every import down with it is entitled to know that before deciding, and it
+ * is the answer to "is this the right one".
  */
 export async function deleteRuleGuarded(
   input: DeleteRuleInput,
@@ -33,25 +46,21 @@ export async function deleteRuleGuarded(
     return { deleted: false, lines: [`Rule ${input.rule_id} not found. Nothing was deleted.`] };
   }
 
-  // The SDK's rule type does not model conditions/actions/stage, though they
-  // are present at runtime — `read/get-rules.ts` reads them the same way. A
-  // narrow shape beats `any`: it keeps the fields typed where they are used.
-  const detail = rule as unknown as {
-    stage?: string;
-    conditions?: Array<{ field: string; op: string; value: unknown }>;
-    actions?: Array<{ field: string; op: string; value: unknown }>;
-  };
-  const conditions = detail.conditions ?? [];
-  const actions = detail.actions ?? [];
+  // Read whether or not the preview is the thing that gets returned. The
+  // alternative is for this to decide for itself whether a confirmation is
+  // coming, and a guard each tool re-implements is a guard the next tool
+  // forgets, which is why `requireConfirmation` exists at all. Five local
+  // reads on a tool nobody calls in a loop.
+  const names = await loadRuleNames();
+  const described = describeRule(rule, names);
 
   const confirmation = requireConfirmation({
     subject: `Rule: ${input.rule_id}`,
+    // Two spaces deeper than `get_rules` prints them, so the rule sits under
+    // the line naming it. The text itself is the same text.
     losses: [
-      `  Stage:      ${detail.stage ?? 'default'}`,
-      `  Conditions: ${conditions.length}`,
-      ...conditions.map((c) => `    - ${c.field} ${c.op} ${JSON.stringify(c.value)}`),
-      `  Actions:    ${actions.length}`,
-      ...actions.map((a) => `    - ${a.field} ${a.op} ${JSON.stringify(a.value)}`),
+      `    Stage: ${described.stage} | Conditions: ${described.conditionsOp}`,
+      ...[...described.conditions, ...described.actions].map((line) => `  ${line}`),
     ],
     input,
   });
