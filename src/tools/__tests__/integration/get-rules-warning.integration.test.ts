@@ -182,7 +182,7 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
 
     const text = (await handlerFor()()).content[0].text;
 
-    expect(text).toContain('IF payee oneOf "Netflix, Spotify"');
+    expect(text).toContain('IF payee oneOf "Netflix", "Spotify"');
     expect(text).toContain('THEN set category = "Fun"');
     // On the IF and THEN lines only: the rule's own id is on its header line
     // and belongs there, since delete_rule takes it.
@@ -318,8 +318,8 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
 
     expect(text, 'a working rule was called broken').not.toMatch(/warning/);
     // And it reads as nothing rather than as the word null.
-    expect(text).toContain('IF category is "(none)"');
-    expect(text).toContain('THEN set category = "(none)"');
+    expect(text).toContain('IF category is (none)');
+    expect(text).toContain('THEN set category = (none)');
     expect(text).not.toContain('"null"');
 
     // The rule really does fire, which is why marking it would be wrong.
@@ -350,7 +350,7 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
 
     const text = (await handlerFor()()).content[0].text;
 
-    expect(text).toContain('IF payee oneOf "(empty list)"');
+    expect(text).toContain('IF payee oneOf (empty list)');
     expect(text).toMatch(/an empty list matches nothing, so this never fires/);
   }, 60_000);
 

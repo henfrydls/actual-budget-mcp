@@ -146,7 +146,7 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
   it('says when the schedule runs instead of [object Object]', async () => {
     const text = await listing();
     expect(text).not.toContain('[object Object]');
-    expect(text).toContain('IF date isapprox "every month, from 2026-11-01"');
+    expect(text).toContain('IF date isapprox every month, from 2026-11-01');
   });
 
   it('describes a weekly by the day it falls on, not by a pattern it ignores', async () => {
@@ -172,18 +172,18 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
     // Stored positive with `outflow` beside it, so "amount gte 4,500.00"
     // reads as a rule about income when it is about spending.
     const text = await listing();
-    expect(text).toContain('IF amount (outflow) gte "4,500.00"');
+    expect(text).toContain('IF amount (outflow) gte 4,500.00');
   });
 
   it('shows an amount as an amount', async () => {
     const text = await listing();
-    expect(text).toContain('IF amount is "-4,500.00"');
+    expect(text).toContain('IF amount is -4,500.00');
     expect(text, 'the raw integer should be gone').not.toContain('-450000');
   });
 
   it('shows both bounds of a range', async () => {
     const text = await listing();
-    expect(text).toContain('IF amount isbetween "-2,000.00 and -1,000.00"');
+    expect(text).toContain('IF amount isbetween -2,000.00 and -1,000.00');
   });
 
   it('names the schedule the rule links to, once', async () => {

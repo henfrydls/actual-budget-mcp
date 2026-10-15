@@ -72,6 +72,13 @@ export async function loadRuleNames(): Promise<RuleNames> {
 /**
  * A stored value, as the person who wrote the rule would recognise it.
  *
+ * Quotes mean one thing: the budget is holding text. A figure, a true or
+ * false and a recurrence are printed as themselves, and `"-5.55"` beside
+ * `-5.55` is the difference between a rule that works and one that takes the
+ * next import down (#183, #185). The quotes used to go round everything, so
+ * the listing showed both the same way and the only tool that told them apart
+ * was the one nobody reads.
+ *
  * Lists as well as single values: `oneOf` holds an array, and printing it raw
  * was a row of UUIDs separated by commas.
  */
@@ -79,7 +86,8 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
   const one = (v: unknown): string => {
     // Nothing, said as nothing. `category is null` is a real rule that
     // matches transactions with no category, and printing it as the word
-    // "null" reads like a value someone typed by mistake.
+    // "null" reads like a value someone typed by mistake. Not quoted: it
+    // stands for the absence of a value rather than for one.
     if (v === null || v === undefined || v === '') return '(none)';
 
     // An amount is stored the way every amount is stored, as an integer in
@@ -95,9 +103,12 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
       }
     }
 
+    if (typeof v === 'boolean') return v ? 'true' : 'false';
+    if (typeof v === 'number') return String(v);
+
     // The date of a schedule is a recurrence, and `String()` on it gives
     // `[object Object]`. A plain date is a string and comes back undefined
-    // here, which prints it as it is.
+    // here, which sends it on to be quoted as the text it is.
     const recurrence = describeRecurrence(v);
     if (recurrence !== undefined) return recurrence;
 
@@ -109,7 +120,7 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
     if (typeof v === 'object') return JSON.stringify(v);
 
     const text = String(v);
-    return ID_FIELDS.has(field) ? (names.byId.get(text) ?? text) : text;
+    return `"${ID_FIELDS.has(field) ? (names.byId.get(text) ?? text) : text}"`;
   };
   if (Array.isArray(value)) {
     return value.length === 0 ? '(empty list)' : value.map(one).join(', ');
@@ -187,7 +198,7 @@ function textWhereActionFigureBelongs(
  * Measured, with a rule `set amount = null` and a batch of two: the import
  * goes through, the neighbour arrives, and the matching row lands at 0. Money
  * quietly set to nothing, on every import, with the listing showing
- * `set amount = "(none)"`.
+ * `set amount = (none)`.
  *
  * An action saved with no value key at all behaves the same way, so both are
  * read as nothing rather than only `null`.
@@ -339,7 +350,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     const options = cond.options as { inflow?: unknown; outflow?: unknown } | undefined;
     const flow = options?.outflow ? ' (outflow)' : options?.inflow ? ' (inflow)' : '';
     conditionLines.push(
-      `  IF ${cond.field}${flow} ${cond.op} "${readable(names, cond.field, cond.value)}"`,
+      `  IF ${cond.field}${flow} ${cond.op} ${readable(names, cond.field, cond.value)}`,
     );
     // One complaint per line. A text operator on an id field holds text on
     // purpose, so the check below would call the same condition broken for a
@@ -390,7 +401,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
       continue;
     }
     const field = action.field || action.op;
-    actionLines.push(`  THEN ${action.op} ${field} = "${readable(names, field, action.value)}"`);
+    actionLines.push(`  THEN ${action.op} ${field} = ${readable(names, field, action.value)}`);
     if (isEmptyList(action.value)) {
       mark(actionLines, 'nothing', 'warning: an empty list sets nothing.');
       continue;
