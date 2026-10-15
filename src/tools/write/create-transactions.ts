@@ -6,7 +6,17 @@ import { amountToCents, formatMoney } from '../../utils/money.js';
 import { resolveDate } from '../../utils/dates.js';
 import { resolveAccountIn, resolveCategoryIn } from '../../utils/resolvers.js';
 import { transactionsQuery } from '../../utils/transaction-query.js';
-import { newWriteMarker } from '../../utils/write-marker.js';
+import {
+  newWriteMarker,
+  findSavedRowsByMarker,
+  type SavedRow,
+} from '../../utils/write-marker.js';
+import {
+  changesMadeByRules,
+  describeChange,
+  listChanges,
+  type AskedRow,
+} from '../../utils/rule-changes.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import {
   findPossibleDuplicates,
@@ -595,34 +605,39 @@ async function writeBatch(
     }
   }
 
-  // The learned mapping can still have overridden an explicit category on the
-  // way in, so the rows are found by the ids they were given and corrected.
-  // One query for the whole batch rather than one per row.
-  const wantCategory = written.filter((row) => row.categoryId);
-  if (wantCategory.length > 0) {
-    const result = await api.runQuery(
-      transactionsQuery('all')
-        .filter({ id: { $oneof: wantCategory.map((r) => r.marker) } })
-        .select(['id', 'category', 'amount', 'is_parent']),
+  // One read for the whole batch, by the ids the rows were written with. It
+  // pays for two things at once: the learned mapping can still have
+  // overridden an explicit category on the way in and has to be corrected,
+  // and the rules can have changed the amount, the date, the payee, the notes
+  // or the cleared flag, which the reply used to describe from the request
+  // (#184).
+  //
+  // It answers null rather than throwing when the budget cannot be read. The
+  // query that was here threw, and by this point the rows are already in the
+  // budget: a batch that landed would have been reported as an error, which
+  // is the one answer that invites resending it.
+  const saved = await findSavedRowsByMarker(written.map((row) => row.marker));
+  if (!saved && written.length > 0) {
+    console.error(
+      `[create_transactions] warning: the ${written.length} rows that were written could not be read back, so an explicit category may not have been enforced and the reply describes what was asked for.`,
     );
-    const found =
-      (result as { data?: Array<Record<string, unknown>> }).data ?? [];
-    const byId = new Map(found.map((r) => [String(r.id), r]));
-    for (const row of wantCategory) {
-      const actual = byId.get(row.marker);
-      if (!actual) continue;
-      if (actual.is_parent === true) {
-        console.error(
-          `[create_transactions] warning: a rule turned row ${row.index + 1} into a split, and a split's category lives on its parts, so the category asked for was not applied.`,
-        );
-        continue;
-      }
-      if (actual.category !== row.categoryId) {
-        await updatePreservingChildAmount(row.marker, {
-          category: row.categoryId,
-          amount: Number(actual.amount),
-        });
-      }
+  }
+
+  for (const row of written) {
+    if (!row.categoryId) continue;
+    const actual = saved?.get(row.marker);
+    if (!actual) continue;
+    if (actual.isParent) {
+      console.error(
+        `[create_transactions] warning: a rule turned row ${row.index + 1} into a split, and a split's category lives on its parts, so the category asked for was not applied.`,
+      );
+      continue;
+    }
+    if (actual.category !== row.categoryId) {
+      await updatePreservingChildAmount(row.marker, {
+        category: row.categoryId,
+        amount: actual.amount,
+      });
     }
   }
 
@@ -664,7 +679,8 @@ async function writeBatch(
     'Transactions on each account, before and after:',
     ...counts,
   );
-  lines.push(...describeTransfers(written));
+  lines.push(...describeTransfers(written, saved));
+  lines.push(...describeRuleChanges(written, saved));
   return lines;
 }
 
@@ -700,14 +716,30 @@ const EFFECT_PARAGRAPH: Record<TransferEffect, string> = {
  * recorded. Saying it per row would repeat the same paragraph up to twenty
  * times in one reply, so the rows are listed and the explanation follows once
  * per kind of effect that actually occurred.
+ *
+ * A row that asked to be a transfer and was not is listed separately. A rule
+ * that rewrites the payee leaves it pointing elsewhere and the other account
+ * gets nothing, and this table used to announce a matching row for it (#184).
  */
-function describeTransfers(written: ResolvedRow[]): string[] {
-  const transfers = written.filter((row) => row.transfer?.payeeId);
-  if (transfers.length === 0) return [];
+function describeTransfers(
+  written: ResolvedRow[],
+  saved: Map<string, SavedRow> | null,
+): string[] {
+  const asked = written.filter((row) => row.transfer?.payeeId);
+  if (asked.length === 0) return [];
 
-  const entries = transfers.map((row) => {
+  const entries = asked.map((row) => {
+    const actual = saved?.get(row.marker);
+    // The amount on the row, which a rule can have changed on the way in.
+    const amountCents = actual?.amount ?? row.amountCents;
+    // A transfer, unless the budget says otherwise. A rule that rewrites the
+    // payee leaves the row pointing somewhere else and nothing is written in
+    // the other account: measured, `transfer_id` comes back null and that
+    // account is empty, while this table announced a matching row. With no
+    // row to read, it falls back to what was asked for.
+    const linked = actual ? actual.transferId !== null : true;
     const effect = transferEffect({
-      amountCents: row.amountCents,
+      amountCents,
       sourceOffBudget: row.transfer!.sourceOffBudget,
       targetOffBudget: row.transfer!.targetOffBudget,
     });
@@ -716,79 +748,148 @@ function describeTransfers(written: ResolvedRow[]): string[] {
     // came from. Reading it the other way says the opposite of what the engine
     // did, which is the mistake #137 made twice.
     const route =
-      row.amountCents >= 0
+      amountCents >= 0
         ? `${row.transfer!.targetName} -> ${row.accountName}`
         : `${row.accountName} -> ${row.transfer!.targetName}`;
-    return { index: row.index, route, amount: Math.abs(row.amountCents), effect, row };
+    return { index: row.index, route, amount: Math.abs(amountCents), effect, linked, row };
   });
 
+  // Both tables are measured together so the columns line up across them.
   const routeWidth = Math.max(...entries.map((e) => e.route.length));
   const amountWidth = Math.max(...entries.map((e) => formatMoney(e.amount).length));
+  const tableRow = (e: (typeof entries)[number], tail: string) =>
+    `  row ${e.index + 1}  ${e.route.padEnd(routeWidth)}  ` +
+    `${formatMoney(e.amount).padStart(amountWidth)}${tail}`;
 
-  const count = entries.length;
-  const lines = [
-    '',
-    `${count} of them named one of your accounts, so ${count === 1 ? 'it was' : 'they were'} ` +
-      `recorded as ${count === 1 ? 'a transfer' : 'transfers'} and a matching row was created ` +
-      `in the other account:`,
-    '',
-    ...entries.map(
-      (e) =>
-        `  row ${e.index + 1}  ${e.route.padEnd(routeWidth)}  ` +
-        `${formatMoney(e.amount).padStart(amountWidth)}  ${EFFECT_LABEL[e.effect]}`,
-    ),
-  ];
+  const made = entries.filter((e) => e.linked);
+  const missed = entries.filter((e) => !e.linked);
 
-  // One paragraph per kind that happened, in a fixed order so two replies about
-  // the same batch read the same way.
-  const kinds: TransferEffect[] = ['inside', 'outgoing', 'incoming', 'outside'];
-  for (const kind of kinds) {
-    if (entries.some((e) => e.effect === kind)) {
-      lines.push('', EFFECT_PARAGRAPH[kind]);
+  const lines: string[] = [];
+
+  if (made.length > 0) {
+    const count = made.length;
+    lines.push(
+      '',
+      `${count} of them named one of your accounts, so ${count === 1 ? 'it was' : 'they were'} ` +
+        `recorded as ${count === 1 ? 'a transfer' : 'transfers'} and a matching row was created ` +
+        `in the other account:`,
+      '',
+      ...made.map((e) => tableRow(e, `  ${EFFECT_LABEL[e.effect]}`)),
+    );
+
+    // One paragraph per kind that happened, in a fixed order so two replies about
+    // the same batch read the same way.
+    const kinds: TransferEffect[] = ['inside', 'outgoing', 'incoming', 'outside'];
+    for (const kind of kinds) {
+      if (made.some((e) => e.effect === kind)) {
+        lines.push('', EFFECT_PARAGRAPH[kind]);
+      }
+    }
+
+    // Only when there is a category to talk about, and the two cases are not the
+    // same thing. On a row that crosses the edge of the budget the category is
+    // kept where it was asked for; between two off-budget accounts Actual
+    // removes it, which #137 recorded the other way round because it read the
+    // row before the engine had finished with it.
+    const crossing = made.filter(
+      (e) => (e.effect === 'incoming' || e.effect === 'outgoing') && e.row.categoryId,
+    );
+    // Split by where the category actually landed, rather than left as a
+    // condition for the reader to apply. "Counts only if that row is in your
+    // budget" is true and makes someone work out which case they are in, and
+    // the whole point of saying anything is that they should not have to.
+    const counted = crossing.filter((e) => !e.row.transfer!.sourceOffBudget);
+    const notCounted = crossing.filter((e) => e.row.transfer!.sourceOffBudget);
+    if (counted.length > 0) {
+      lines.push(
+        '',
+        `The category on ${counted.length === 1 ? 'that row counts' : 'those rows counts'} where ` +
+          'you asked for it, since that side is in your budget.',
+      );
+    }
+    if (notCounted.length > 0) {
+      const names = [...new Set(notCounted.map((e) => e.row.accountName))].join(', ');
+      lines.push(
+        '',
+        `The category stayed on the ${names} row, but ${names} is off budget, so it does not ` +
+          'count anywhere. To make this count, put a category on the row in the other account.',
+      );
+    }
+
+    const outside = made.filter((e) => e.effect === 'outside' && e.row.categoryId);
+    if (outside.length > 0) {
+      lines.push(
+        '',
+        `The category on ${outside.length === 1 ? 'the row that is outside your budget was' : 'the rows that are outside your budget were'} ` +
+          'not kept: Actual discards a category on a transfer where neither account is in the ' +
+          'budget, since nothing could count it.',
+      );
     }
   }
 
-  // Only when there is a category to talk about, and the two cases are not the
-  // same thing. On a row that crosses the edge of the budget the category is
-  // kept where it was asked for; between two off-budget accounts Actual
-  // removes it, which #137 recorded the other way round because it read the
-  // row before the engine had finished with it.
-  const crossing = entries.filter(
-    (e) => (e.effect === 'incoming' || e.effect === 'outgoing') && e.row.categoryId,
-  );
-  // Split by where the category actually landed, rather than left as a
-  // condition for the reader to apply. "Counts only if that row is in your
-  // budget" is true and makes someone work out which case they are in, and
-  // the whole point of saying anything is that they should not have to.
-  const counted = crossing.filter((e) => !e.row.transfer!.sourceOffBudget);
-  const notCounted = crossing.filter((e) => e.row.transfer!.sourceOffBudget);
-  if (counted.length > 0) {
+  if (missed.length > 0) {
+    const count = missed.length;
     lines.push(
       '',
-      `The category on ${counted.length === 1 ? 'that row counts' : 'those rows counts'} where ` +
-        'you asked for it, since that side is in your budget.',
-    );
-  }
-  if (notCounted.length > 0) {
-    const names = [...new Set(notCounted.map((e) => e.row.accountName))].join(', ');
-    lines.push(
+      `${count} of them named one of your accounts but ${count === 1 ? 'was' : 'were'} not recorded as ` +
+        `${count === 1 ? 'a transfer' : 'transfers'}. The saved ${count === 1 ? 'row is' : 'rows are'} ` +
+        `not linked to one, so nothing was created in the other account and ` +
+        `${count === 1 ? 'it is an ordinary transaction' : 'they are ordinary transactions'}:`,
       '',
-      `The category stayed on the ${names} row, but ${names} is off budget, so it does not ` +
-        'count anywhere. To make this count, put a category on the row in the other account.',
-    );
-  }
-
-  const outside = entries.filter((e) => e.effect === 'outside' && e.row.categoryId);
-  if (outside.length > 0) {
-    lines.push(
-      '',
-      `The category on ${outside.length === 1 ? 'the row that is outside your budget was' : 'the rows that are outside your budget were'} ` +
-        'not kept: Actual discards a category on a transfer where neither account is in the ' +
-        'budget, since nothing could count it.',
+      ...missed.map((e) => tableRow(e, '')),
     );
   }
 
   return lines;
+}
+
+/**
+ * What the rules changed, row by row, once at the end.
+ *
+ * The batch says how many rows went in and what each transfer did, and
+ * nothing else about the individual rows, so until now a rule could rewrite
+ * an amount and the reply would not be wrong, only silent. Silent is its own
+ * problem: the figure in the budget is not the figure that was sent, and the
+ * only way to find out was to read the account afterwards.
+ *
+ * Only the rows a rule touched are listed, so a batch nothing happened to
+ * reads exactly as it did before.
+ */
+function describeRuleChanges(
+  written: ResolvedRow[],
+  saved: Map<string, SavedRow> | null,
+): string[] {
+  if (!saved) return [];
+
+  const changed: Array<{ index: number; what: string }> = [];
+  for (const row of written) {
+    const actual = saved.get(row.marker);
+    if (!actual) continue;
+    const asked: AskedRow = {
+      date: row.date,
+      amountCents: row.amountCents,
+      payee: row.payee,
+      transferPayeeId: row.transfer?.payeeId,
+      notes: row.notes,
+      cleared: row.cleared,
+    };
+    const changes = listChanges(changesMadeByRules(asked, actual));
+    if (changes.length === 0) continue;
+    changed.push({
+      index: row.index,
+      what: changes.map(describeChange).join(', '),
+    });
+  }
+
+  if (changed.length === 0) return [];
+
+  return [
+    '',
+    `Your rules changed ${changed.length} of these rows while ${changed.length === 1 ? 'it was' : 'they were'} ` +
+      `being written. The budget holds what is on the right of each line, not what was sent:`,
+    '',
+    ...changed.map((e) => `  row ${e.index + 1}  ${e.what}`),
+  ];
 }
 
 export function registerCreateTransactions(server: McpServer): void {

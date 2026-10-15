@@ -10,6 +10,7 @@ vi.mock('../../../connection.js', () => ({
 
 import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './actual-engine.js';
 import { createTransaction } from '../../write/create-transaction.js';
+import { createTransactions } from '../../write/create-transactions.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
 
@@ -265,5 +266,62 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
 
     expect(text).not.toContain('Category: Fun');
     expect(text).toContain('the category you asked for was not applied');
+  });
+
+  it('names the rows a rule changed in a batch, and stays quiet about the rest', async () => {
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -20, payee: 'Shop', date: '2026-10-13' },
+        { account: 'Checking', amount: -4.4, payee: 'Shop', notes: 'amount-me', date: '2026-10-13' },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('Your rules changed 1 of these rows');
+    expect(text).toContain('row 2  Amount: -5.50 (asked for -4.40)');
+    expect(text, 'the row nothing happened to has nothing to say').not.toContain('row 1  Amount');
+  });
+
+  it('says nothing about rules in a batch no rule touched', async () => {
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -21, payee: 'Shop', date: '2026-10-14' },
+        { account: 'Checking', amount: -22, payee: 'Shop', date: '2026-10-14' },
+      ],
+    } as never);
+
+    expect(lines.join('\n')).not.toContain('Your rules changed');
+  });
+
+  it('does not list a batch transfer a rule stopped as a transfer', async () => {
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -23, payee: 'Savings', date: '2026-10-15' },
+        { account: 'Checking', amount: -24, payee: 'Savings', notes: 'xfer-me', date: '2026-10-15' },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('1 of them named one of your accounts');
+    expect(text).toContain('1 of them named one of your accounts but was not recorded as a transfer');
+    expect(text).toContain('row 2');
+    // The one that did happen is still described as one.
+    expect((await rowsIn(savingsId)).map((r) => r.amount)).toContain(2300);
+    expect((await rowsIn(savingsId)).map((r) => r.amount)).not.toContain(2400);
+  });
+
+  it('prints the amount the budget holds in the batch transfer table', async () => {
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -4.4, payee: 'Savings', notes: 'amount-me', date: '2026-10-16' },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    // The table line itself. Looking for "5.50" anywhere passes on the list
+    // of changes below it, which names the same figure and would leave the
+    // table free to go on printing the one that was sent.
+    expect(text).toContain('row 1  Checking -> Savings  5.50  left your budget');
+    expect(text).not.toContain('4.40  left your budget');
   });
 });
