@@ -233,11 +233,18 @@ export function describeSplitCategories(
     // The parts could not be read. The split is a fact of the parent row.
     return 'A rule split this into parts, so its category lives on them.';
   }
+  // Said rather than left to be inferred from a part having no category: the
+  // caller asked for one and it is not on that part, and the reason is the
+  // engine's, not the rule's.
+  const discarded =
+    cleared.size > 0 && asked !== undefined
+      ? ` The category you asked for was not kept on ${cleared.size === count ? (count === 1 ? 'it' : 'any of them') : `${cleared.size} of them`}: Actual discards it on a part that moves between two accounts on the same side of your budget.`
+      : '';
   const head = `A rule split this into ${count} part${count === 1 ? '' : 's'}`;
   const named = parts.filter((part) => part.categoryName !== null);
   const names = [...new Set(named.map((part) => part.categoryName as string))].sort();
   if (names.length === 0) {
-    return `${head}, and ${count === 1 ? 'it has no category' : 'none of them has one'}.`;
+    return `${head}, and ${count === 1 ? 'it has no category' : 'none of them has one'}.${discarded}`;
   }
   const list = (of: string[]) =>
     of.length === 1 ? of[0] : `${of.slice(0, -1).join(', ')} and ${of[of.length - 1]}`;
@@ -256,8 +263,8 @@ export function describeSplitCategories(
         ? ' (set by your rules)'
         : ` (${list(fromRules)} set by ${fromRules.length === 1 ? 'a rule' : 'your rules'})`;
   if (named.length === count) {
-    return `${head}, under ${list(names)}${credit}.`;
+    return `${head}, under ${list(names)}${credit}.${discarded}`;
   }
-  return `${head}, ${named.length} of them under ${list(names)}${credit} and the rest with no category.`;
+  return `${head}, ${named.length} of them under ${list(names)}${credit} and the rest with no category.${discarded}`;
 }
 

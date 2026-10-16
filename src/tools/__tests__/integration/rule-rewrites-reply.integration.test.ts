@@ -558,7 +558,12 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
       date: '2026-10-12',
     } as never);
 
-    expect(lines.join('\n')).not.toContain('under Fun');
+    const text = lines.join('\n');
+    expect(text).not.toContain('under Fun');
+    // And why, which otherwise has to be inferred from a part simply having
+    // no category.
+    expect(text).toContain('The category you asked for was not kept');
+    expect(text).toContain('two accounts on the same side of your budget');
   });
 
   it('says the category was not kept when a rule redirects into the budget', async () => {
@@ -659,6 +664,9 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
 
     expect(text).toContain('1 of them named one of your accounts');
     expect(text).toContain('1 of them named one of your accounts but was not recorded as a transfer');
+    // The older wording stays on a batch whose rows each moved once and went
+    // where they were sent, which is every batch nothing happened to.
+    expect(text).toContain('a matching row was created in the other account:');
     expect(text).toContain('row 2');
     // The one that did happen is still described as one.
     expect((await rowsIn(savingsId)).map((r) => r.amount)).toContain(2300);

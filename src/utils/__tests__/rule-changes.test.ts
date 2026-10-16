@@ -153,10 +153,21 @@ describe('what the parts of a split are filed under', () => {
     // of the budget loses its category after the row can first be read, so
     // the read is as early here as it is for a plain row.
     const parts = [part('a', 'c1', 'Fun'), part('b', 'c1', 'Fun')];
+    // And why, rather than leaving it to be inferred from a part having no
+    // category: the caller asked for one, and the reason it is not there is
+    // the engine's rather than the rule's.
     expect(describeSplitCategories(parts, 'c1', new Set(['b']))).toBe(
-      'A rule split this into 2 parts, 1 of them under Fun and the rest with no category.',
+      'A rule split this into 2 parts, 1 of them under Fun and the rest with no category.' +
+        ' The category you asked for was not kept on 1 of them: Actual discards it on a part' +
+        ' that moves between two accounts on the same side of your budget.',
     );
     expect(describeSplitCategories(parts, 'c1', new Set(['a', 'b']))).toBe(
+      'A rule split this into 2 parts, and none of them has one.' +
+        ' The category you asked for was not kept on any of them: Actual discards it on a part' +
+        ' that moves between two accounts on the same side of your budget.',
+    );
+    // Nothing was asked for, so there is nothing to say was not kept.
+    expect(describeSplitCategories(parts, undefined, new Set(['a', 'b']))).toBe(
       'A rule split this into 2 parts, and none of them has one.',
     );
   });

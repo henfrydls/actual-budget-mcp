@@ -802,11 +802,16 @@ function describeTransfers(
       })),
     );
     const count = made.length;
+    // The older wording whenever every row moved once and went where it was
+    // sent, which is every batch nothing happened to: "the account each one
+    // reached" is there for the rows that moved twice or landed somewhere
+    // else, and it should not change a reply that has neither.
+    const plain = movements.length === made.length && movements.every((m) => !m.note);
     lines.push(
       '',
       `${count} of them named one of your accounts, so ${count === 1 ? 'it was' : 'they were'} ` +
         `recorded as ${count === 1 ? 'a transfer' : 'transfers'} and a matching row was created ` +
-        `in the account each one reached:`,
+        (plain ? `in the other account:` : `in the account each one reached:`),
       '',
       ...legTable(movements),
       ...effectParagraphs(movements.map((m) => m.leg)),
