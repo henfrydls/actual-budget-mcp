@@ -384,7 +384,13 @@ describe('when a rule turns the transaction into a split', () => {
         if ('parent_id' in filter) {
           return {
             data: [
-              { id: 'part-1', amount: -5000, 'category.name': 'Alimentación', 'payee.name': 'Vendor' },
+              {
+                id: 'part-1',
+                amount: -5000,
+                category: 'cat-1',
+                'category.name': 'Alimentación',
+                'payee.name': 'Vendor',
+              },
             ],
           } as never;
         }

@@ -643,6 +643,17 @@ async function writeBatch(
     // and a rule that sets its own on a part wins there. The warning this
     // printed said the category had not been applied, which is false.
     if (actual.isParent) continue;
+    // And nothing to force on a transfer between two accounts on the same
+    // side of the budget. `clearCategory` takes the category off both rows
+    // and runs again on every update, so this would buy one more clear; the
+    // paragraph in the reply already says it was not kept.
+    if (
+      actual.transferId !== null &&
+      row.transfer &&
+      row.transfer.sourceOffBudget === row.transfer.targetOffBudget
+    ) {
+      continue;
+    }
     if (actual.category !== row.categoryId) {
       await updatePreservingChildAmount(row.marker, {
         category: row.categoryId,

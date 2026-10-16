@@ -87,6 +87,19 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
       { op: 'set', field: 'category', value: bills, options: { splitIndex: 1 } },
     ]);
     await rule('to-other', [{ op: 'set', field: 'payee', value: otherTransferPayee }]);
+    await rule('split-xfer', [
+      { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'remainder' } },
+    ]);
+    // Two parts, and a payee on one of them only, so the parts disagree.
+    await rule('split-two-payees', [
+      { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'fixed-percent' } },
+      { op: 'set-split-amount', value: 0, options: { splitIndex: 2, method: 'remainder' } },
+      { op: 'set', field: 'payee', value: theatre, options: { splitIndex: 1 } },
+    ]);
+    await rule('split-to-other', [
+      { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'remainder' } },
+      { op: 'set', field: 'payee', value: otherTransferPayee, options: { splitIndex: 1 } },
+    ]);
     // The notes rule is keyed on the payee, since a rule keyed on the notes
     // would be deciding what it reads.
     await api.createRule({
@@ -100,6 +113,21 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
   afterAll(async () => {
     await shutdownTestEngine();
   });
+
+  /** Count what the tool writes while it runs, without changing what it does. */
+  async function countingUpdates<T>(run: () => Promise<T>): Promise<{ result: T; updates: number }> {
+    const real = api.updateTransaction;
+    let updates = 0;
+    (api as { updateTransaction: unknown }).updateTransaction = async (...args: unknown[]) => {
+      updates += 1;
+      return (real as (...a: unknown[]) => Promise<unknown>)(...args);
+    };
+    try {
+      return { result: await run(), updates };
+    } finally {
+      (api as { updateTransaction: unknown }).updateTransaction = real;
+    }
+  }
 
   const rowsIn = async (accountId: string) =>
     (await api.getTransactions(accountId, '2000-01-01', '2100-01-01')) as Array<{
@@ -323,7 +351,10 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
       date: '2026-10-12',
     } as never);
 
-    expect(lines.join('\n')).toContain('A rule split this into 1 part, under Bills.');
+    // And named as the rule's doing, not as the category that was asked for.
+    expect(lines.join('\n')).toContain(
+      'A rule split this into 1 part, under Bills (set by your rules).',
+    );
   });
 
   it('names the account a rule sent the transfer to, not the one asked for', async () => {
@@ -368,30 +399,117 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
     expect((await rowsIn(otherId)).map((r) => r.amount)).not.toContain(2900);
   });
 
-  it('agrees with the row about a category that crossed out of the budget', async () => {
-    // Both accounts are off budget. The reply announced `Category: Fun` and
-    // then said the category had not been kept, in that order, without having
-    // looked at either.
+  it('does not announce a category Actual is about to take off a transfer', async () => {
+    // Both accounts are off budget, which is what `clearCategory` goes by:
+    // the two sides on the same side of the budget. It clears both rows, and
+    // it does it after the row can first be read, so a reply built from that
+    // read announced `Category: Fun` and the budget dropped it seconds later.
+    // Forcing it back only triggered the clear again.
+    const { result: lines, updates } = await countingUpdates(() =>
+      createTransaction({
+        account: 'Cash',
+        amount: -30,
+        payee: 'Savings',
+        category: 'Fun',
+        date: '2026-10-12',
+      } as never),
+    );
+    const text = lines.join('\n');
+
+    // No category line at all, rather than one saying it is there or one
+    // saying it is not: the paragraph below says it once, and a line built
+    // from the read is a coin toss while the engine is still working.
+    expect(text).not.toMatch(/^ *Category:/m);
+    expect(text).toContain('The category was not kept');
+    // And nothing was written to put it back. Forcing it only triggers the
+    // clear again, which is what made the first version of this contradict
+    // the budget two seconds later.
+    expect(updates, 'nothing to force when Actual is going to clear it').toBe(0);
+
+    // And the budget, once the engine has finished with it. Read in a loop
+    // rather than once: reading it straight away is what made the first
+    // version of this agree with a reply that was wrong.
+    let category: string | null | undefined = 'not read yet';
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const row = (await rowsIn(cashId)).find((r) => r.amount === -3000) as
+        | { category?: string | null }
+        | undefined;
+      category = row?.category ?? null;
+      if (category === null) break;
+      await new Promise((resume) => setTimeout(resume, 100));
+    }
+    expect(category, 'Actual takes it off both rows of this transfer').toBeNull();
+  });
+
+  it('announces the transfer when a rule splits it', async () => {
+    // `addTransfer` returns early on a split parent, so the part becomes the
+    // transfer. Reading the parent said the row was linked to nothing and
+    // that no row had been created in the other account, while the matching
+    // row was sitting there.
     const lines = await createTransaction({
-      account: 'Cash',
-      amount: -30,
+      account: 'Checking',
+      amount: -50,
       payee: 'Savings',
-      category: 'Fun',
+      notes: 'split-xfer',
       date: '2026-10-12',
     } as never);
     const text = lines.join('\n');
 
-    const row = (await rowsIn(cashId)).find((r) => r.amount === -3000) as
-      | { category?: string | null }
-      | undefined;
-    expect(
-      text.includes('Category: Fun'),
-      'the reply and the row have to agree about the category',
-    ).toBe(Boolean(row?.category));
-    // And the paragraph about it has to agree with both. It said the category
-    // had not been kept whatever the row held, right under a line announcing
-    // it.
-    expect(text.includes('The category was not kept')).toBe(!row?.category);
+    expect(text).toContain('Transfer created:');
+    expect(text).toContain('A matching row was created there.');
+    expect(text).not.toContain('nothing was created in Savings');
+    expect((await rowsIn(savingsId)).map((r) => r.amount)).toContain(5000);
+  });
+
+  it('says which payee came from a rule when the parts disagree', async () => {
+    // Naming all of them as a rule's doing takes credit away from the one the
+    // caller asked for, which is usually among them.
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -36,
+      payee: 'Shop',
+      notes: 'split-two-payees',
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toMatch(/Payee: +.*Theatre/);
+    expect(text).toContain('Theatre set by a rule, you asked for Shop');
+  });
+
+  it('says when a rule leaves a part of a split pointing at an account', async () => {
+    // The dangling payee used to be looked for on the parent only, and a
+    // split parent never carries one.
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -37,
+      payee: 'Shop',
+      notes: 'split-to-other',
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('nothing was created there and the row is not linked to anything');
+    expect((await rowsIn(otherId)).map((r) => r.amount)).not.toContain(3700);
+  });
+
+  it('names the category rather than echoing the id it was given', async () => {
+    // Given by id, the sentence about where it counts printed the uuid back.
+    // This is the one transfer where a category survives: the two accounts
+    // are on opposite sides of the budget, and Actual only clears it when
+    // they are on the same one.
+    const fun = (await api.getCategories()).find((c) => c.name === 'Fun')!.id;
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -38,
+      payee: 'Savings',
+      category: fun,
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('It counts in Checking, under Fun.');
+    expect(text, 'the id is what nobody can read').not.toContain(fun);
   });
 
   it('says so when it could not read the transaction back', async () => {
@@ -506,6 +624,21 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
     expect(text, 'no arrow for a movement that did not happen').not.toMatch(
       /row 1 {2}Checking -> Savings/,
     );
+  });
+
+  it('does not force a category Actual is about to clear, in a batch either', async () => {
+    // The same rule as the single tool, and the batch reply already says the
+    // category was not kept. Forcing it back buys one more clear.
+    const { result: lines, updates } = await countingUpdates(() =>
+      createTransactions({
+        transactions: [
+          { account: 'Cash', amount: -39, payee: 'Savings', category: 'Fun', date: '2026-10-20' },
+        ],
+      } as never),
+    );
+
+    expect(lines.join('\n')).toContain('not kept');
+    expect(updates, 'nothing to force when Actual is going to clear it').toBe(0);
   });
 
   it('says so when a batch could not be read back', async () => {
