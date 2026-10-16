@@ -9,12 +9,14 @@ import { transactionsQuery } from '../../utils/transaction-query.js';
 import {
   newWriteMarker,
   findSavedRowsByMarker,
+  findSavedParts,
   type SavedRow,
 } from '../../utils/write-marker.js';
 import {
   changesMadeByRules,
   describeChange,
   listChanges,
+  rowForComparison,
   type AskedRow,
 } from '../../utils/rule-changes.js';
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
@@ -521,13 +523,14 @@ export async function createTransactions(input: {
       return lines;
     }
 
-    return await writeBatch(resolved, rows.length);
+    return await writeBatch(resolved, rows.length, accounts);
   });
 }
 
 async function writeBatch(
   resolved: ResolvedRow[],
   total: number,
+  accounts: Array<{ id: string; name: string; offbudget?: boolean }>,
 ): Promise<string[]> {
   // Grouped because `addTransactions` writes to the account it is given, not
   // to one named on the row: measured, a row carrying its own `account` went
@@ -617,22 +620,29 @@ async function writeBatch(
   // budget: a batch that landed would have been reported as an error, which
   // is the one answer that invites resending it.
   const saved = await findSavedRowsByMarker(written.map((row) => row.marker));
-  if (!saved && written.length > 0) {
-    console.error(
-      `[create_transactions] warning: the ${written.length} rows that were written could not be read back, so an explicit category may not have been enforced and the reply describes what was asked for.`,
-    );
+
+  // The parts of whichever rows a rule split, in one more query and only when
+  // there is a split in the batch. A split parent carries neither payee nor
+  // category: measured, the parts carry both.
+  const splitParents = [...(saved?.values() ?? [])].filter((row) => row.isParent);
+  const parts = splitParents.length > 0 ? ((await findSavedParts(splitParents.map((r) => r.id))) ?? []) : [];
+  const partsByParent = new Map<string, SavedRow[]>();
+  for (const part of parts) {
+    if (!part.parentId) continue;
+    const group = partsByParent.get(part.parentId);
+    if (group) group.push(part);
+    else partsByParent.set(part.parentId, [part]);
   }
 
   for (const row of written) {
     if (!row.categoryId) continue;
     const actual = saved?.get(row.marker);
     if (!actual) continue;
-    if (actual.isParent) {
-      console.error(
-        `[create_transactions] warning: a rule turned row ${row.index + 1} into a split, and a split's category lives on its parts, so the category asked for was not applied.`,
-      );
-      continue;
-    }
+    // Nothing to force on a split, and nothing to warn about: measured
+    // against the engine, the parts carry the category that was asked for,
+    // and a rule that sets its own on a part wins there. The warning this
+    // printed said the category had not been applied, which is false.
+    if (actual.isParent) continue;
     if (actual.category !== row.categoryId) {
       await updatePreservingChildAmount(row.marker, {
         category: row.categoryId,
@@ -679,8 +689,18 @@ async function writeBatch(
     'Transactions on each account, before and after:',
     ...counts,
   );
-  lines.push(...describeTransfers(written, saved));
-  lines.push(...describeRuleChanges(written, saved));
+  lines.push(...describeTransfers(written, saved, accounts));
+  lines.push(...describeRuleChanges(written, saved, partsByParent));
+  if (!saved && written.length > 0) {
+    // Said in the reply, not only on stderr, which the caller never sees. The
+    // counts above are read from the budget and stand; everything said about
+    // the individual rows would be what was asked for.
+    lines.push(
+      '',
+      'The budget could not be read back just now, so nothing above describes what your rules ' +
+        'did to these rows, and a category asked for may not have been enforced.',
+    );
+  }
   return lines;
 }
 
@@ -724,6 +744,7 @@ const EFFECT_PARAGRAPH: Record<TransferEffect, string> = {
 function describeTransfers(
   written: ResolvedRow[],
   saved: Map<string, SavedRow> | null,
+  accounts: Array<{ id: string; name: string; offbudget?: boolean }>,
 ): string[] {
   const asked = written.filter((row) => row.transfer?.payeeId);
   if (asked.length === 0) return [];
@@ -738,10 +759,21 @@ function describeTransfers(
     // account is empty, while this table announced a matching row. With no
     // row to read, it falls back to what was asked for.
     const linked = actual ? actual.transferId !== null : true;
+    // And which account it went to is read from the row too. The payee on the
+    // row is what links the two sides, so a rule that points it at another
+    // account's transfer payee sends the money there: measured, the table
+    // named the account that had been asked for while the matching row was in
+    // a third one, and classified the movement by the wrong account.
+    const landedIn = actual?.payeeTransferAccount
+      ? accounts.find((a) => a.id === actual.payeeTransferAccount)
+      : undefined;
+    const targetName = landedIn?.name ?? row.transfer!.targetName;
+    const targetOffBudget = landedIn ? isOffBudget(landedIn) : row.transfer!.targetOffBudget;
+    const redirected = linked && actual !== undefined && actual.payee !== row.transfer!.payeeId;
     const effect = transferEffect({
       amountCents,
       sourceOffBudget: row.transfer!.sourceOffBudget,
-      targetOffBudget: row.transfer!.targetOffBudget,
+      targetOffBudget,
     });
     // Direction from the sign, not from which account the row was written to:
     // a positive amount is money arriving, so the other account is where it
@@ -749,9 +781,19 @@ function describeTransfers(
     // did, which is the mistake #137 made twice.
     const route =
       amountCents >= 0
-        ? `${row.transfer!.targetName} -> ${row.accountName}`
-        : `${row.accountName} -> ${row.transfer!.targetName}`;
-    return { index: row.index, route, amount: Math.abs(amountCents), effect, linked, row };
+        ? `${targetName} -> ${row.accountName}`
+        : `${row.accountName} -> ${targetName}`;
+    return {
+      index: row.index,
+      route,
+      amount: Math.abs(amountCents),
+      effect,
+      linked,
+      redirected,
+      targetName,
+      targetOffBudget,
+      row,
+    };
   });
 
   // Both tables are measured together so the columns line up across them.
@@ -774,7 +816,13 @@ function describeTransfers(
         `recorded as ${count === 1 ? 'a transfer' : 'transfers'} and a matching row was created ` +
         `in the other account:`,
       '',
-      ...made.map((e) => tableRow(e, `  ${EFFECT_LABEL[e.effect]}`)),
+      ...made.map((e) =>
+        tableRow(
+          e,
+          `  ${EFFECT_LABEL[e.effect]}` +
+            (e.redirected ? `  (a rule sent it to ${e.targetName}, not ${e.row.transfer!.targetName})` : ''),
+        ),
+      ),
     );
 
     // One paragraph per kind that happened, in a fixed order so two replies about
@@ -829,14 +877,23 @@ function describeTransfers(
 
   if (missed.length > 0) {
     const count = missed.length;
+    // No route on these. An arrow between two accounts says the money went
+    // from one to the other, and the whole point of this table is that it did
+    // not: the row sits in its own account and nothing was written anywhere
+    // else.
+    const accountWidth = Math.max(...missed.map((e) => e.row.accountName.length));
     lines.push(
       '',
       `${count} of them named one of your accounts but ${count === 1 ? 'was' : 'were'} not recorded as ` +
         `${count === 1 ? 'a transfer' : 'transfers'}. The saved ${count === 1 ? 'row is' : 'rows are'} ` +
         `not linked to one, so nothing was created in the other account and ` +
-        `${count === 1 ? 'it is an ordinary transaction' : 'they are ordinary transactions'}:`,
+        `${count === 1 ? 'it stayed an ordinary transaction' : 'they stayed ordinary transactions'}:`,
       '',
-      ...missed.map((e) => tableRow(e, '')),
+      ...missed.map(
+        (e) =>
+          `  row ${e.index + 1}  ${e.row.accountName.padEnd(accountWidth)}  ` +
+          `${formatMoney(e.amount).padStart(amountWidth)}  asked for ${e.row.transfer!.targetName}`,
+      ),
     );
   }
 
@@ -858,13 +915,18 @@ function describeTransfers(
 function describeRuleChanges(
   written: ResolvedRow[],
   saved: Map<string, SavedRow> | null,
+  partsByParent: Map<string, SavedRow[]>,
 ): string[] {
   if (!saved) return [];
 
   const changed: Array<{ index: number; what: string }> = [];
   for (const row of written) {
-    const actual = saved.get(row.marker);
-    if (!actual) continue;
+    const found = saved.get(row.marker);
+    if (!found) continue;
+    // A split's payee lives on its parts, so the parent is the wrong row to
+    // compare: reading it reported every split as having kept the payee that
+    // was asked for, whatever a rule had put on the parts.
+    const actual = rowForComparison(found, partsByParent.get(found.id) ?? []);
     const asked: AskedRow = {
       date: row.date,
       amountCents: row.amountCents,

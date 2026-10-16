@@ -365,9 +365,13 @@ describe('the second lookup, through the tool', () => {
 });
 
 describe('when a rule turns the transaction into a split', () => {
-  it('says the category was not applied instead of printing it', async () => {
-    // Actual ignores the category on a split parent, so setting it does
-    // nothing and reporting it would be a lie.
+  it('reads the parts, which is where a split keeps its category', async () => {
+    // This used to warn that the category asked for had not been applied, and
+    // the reply said so too. Measured against the engine, the opposite is
+    // true: `makeChild` copies the parent's category onto every part, so it
+    // is applied, on the parts, and the parent is simply the wrong row to
+    // ask. A rule that sets its own category on a part wins there, which is
+    // why the reply reads them rather than repeating the request.
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
     vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
@@ -375,21 +379,37 @@ describe('when a rule turns the transaction into a split', () => {
     vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
     vi.mocked(api.runQuery)
       .mockReset()
-      .mockImplementation(
-        answerByFilter({
-          byId: { data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }] },
-        }) as never,
-      );
+      .mockImplementation(async () => {
+        const filter = (lastQuery.filter ?? {}) as Record<string, unknown>;
+        if ('parent_id' in filter) {
+          return {
+            data: [
+              { id: 'part-1', amount: -5000, 'category.name': 'Alimentación', 'payee.name': 'Vendor' },
+            ],
+          } as never;
+        }
+        if ('id' in filter) {
+          return {
+            data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }],
+          } as never;
+        }
+        return { data: [] } as never;
+      });
 
-    await createTransaction({
+    const lines = await createTransaction({
       account: 'Checking',
       amount: -50,
       date: '2026-09-21',
       category: 'Alimentación',
     });
+    const text = lines.join('\n');
 
+    // Nothing is forced onto the parent: Actual keeps no category there, and
+    // the parts already carry one.
     expect(api.updateTransaction).not.toHaveBeenCalled();
-    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/turned the new transaction.*into a split/i));
+    expect(text).toContain('A rule split this into 1 part, under Alimentación.');
+    expect(text, 'the category was applied, to the parts').not.toMatch(/was not applied/);
+    expect(stderr, 'there is nothing wrong to warn about').not.toHaveBeenCalled();
     stderr.mockRestore();
   });
 });

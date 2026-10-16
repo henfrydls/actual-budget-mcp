@@ -125,12 +125,22 @@ export interface SavedRow {
   amount: number;
   payee: string | null;
   payeeName: string | null;
+  /**
+   * The account this row's payee transfers to, when it is a transfer payee.
+   *
+   * Which account a transfer went to is decided by the payee on the row, not
+   * by the one that was sent: a rule can point it at a different account's
+   * transfer payee and the engine links it there instead (#184).
+   */
+  payeeTransferAccount: string | null;
   notes: string | null;
   cleared: boolean;
   category: string | null;
   categoryName: string | null;
   /** True when a rule turned this into a split; the parts carry its category and payee. */
   isParent: boolean;
+  /** The split this row is a part of, when it is one. */
+  parentId: string | null;
   /** The row on the other side, set only when this really is a transfer. */
   transferId: string | null;
 }
@@ -159,11 +169,13 @@ async function readSavedRows(
           'amount',
           'payee',
           'payee.name',
+          'payee.transfer_acct',
           'notes',
           'cleared',
           'category',
           'category.name',
           'is_parent',
+          'parent_id',
           'transfer_id',
         ]),
     );
@@ -184,11 +196,13 @@ async function readSavedRows(
         amount: Number(row.amount ?? 0),
         payee: text('payee'),
         payeeName: text('payee.name'),
+        payeeTransferAccount: text('payee.transfer_acct'),
         notes: text('notes'),
         cleared: row.cleared === true,
         category: text('category'),
         categoryName: text('category.name'),
         isParent: row.is_parent === true,
+        parentId: text('parent_id'),
         transferId: text('transfer_id'),
       };
     });
@@ -208,6 +222,19 @@ async function readSavedRows(
 export async function findSavedRow(marker: string): Promise<SavedRow | null> {
   const rows = await readSavedRows({ id: marker });
   return rows?.[0] ?? null;
+}
+
+/**
+ * The parts of these splits, or null if the budget could not be read.
+ *
+ * A split parent carries neither payee nor category: measured against the
+ * engine, the parts carry both, and a rule can set either on a part, so the
+ * parent is the wrong row to ask what the transaction says (#184). One query
+ * for however many parents there are.
+ */
+export async function findSavedParts(parentIds: string[]): Promise<SavedRow[] | null> {
+  if (parentIds.length === 0) return [];
+  return await readSavedRows({ parent_id: { $oneof: parentIds } });
 }
 
 /**

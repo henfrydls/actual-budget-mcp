@@ -171,3 +171,40 @@ export function describeChange(change: RuleChange): string {
     change.asked === undefined ? 'nothing was asked for' : `asked for ${change.asked}`;
   return `${FIELD_LABEL[change.field]}: ${change.actual} (${asked})`;
 }
+
+/**
+ * The payee the parts of a split agree on, when they agree on one.
+ *
+ * A split parent carries no payee: measured against the engine, the engine
+ * copies the parent's onto every part and leaves the parent with none, and a
+ * rule can then set another one on the parts. So the parent is the wrong row
+ * to ask, and reading it reported every split as a rule having removed the
+ * payee, or as having left the one that was asked for, depending on which way
+ * it was read.
+ */
+export function splitPayee(parts: SavedRow[]): {
+  /** The part whose payee stands for the whole, or undefined if they differ. */
+  agreed: SavedRow | undefined;
+  /** Every payee the parts carry, in the order they came back. */
+  names: Array<string | null>;
+} {
+  const names = [...new Set(parts.map((part) => part.payeeName))];
+  return {
+    agreed: names.length === 1 ? parts.find((part) => part.payeeName === names[0]) : undefined,
+    names,
+  };
+}
+
+/**
+ * The row that stands for the transaction, for comparing against the request.
+ *
+ * The same row for anything that is not a split. For a split, the parts' payee
+ * when they agree on one; when they do not, the parent is returned unchanged
+ * and the payee is left uncompared, because nothing single stands for it.
+ */
+export function rowForComparison(saved: SavedRow, parts: SavedRow[]): SavedRow {
+  if (!saved.isParent) return saved;
+  const { agreed } = splitPayee(parts);
+  if (!agreed) return saved;
+  return { ...saved, isParent: false, payee: agreed.payee, payeeName: agreed.payeeName };
+}

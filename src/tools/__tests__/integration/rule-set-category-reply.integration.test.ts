@@ -93,8 +93,9 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
     const text = lines.join('\n');
 
     // The sentence, not the word: the notes say "split-me", so /split/ passes
-    // whether or not the line is there at all.
-    expect(text).toContain('A rule split this into parts');
+    // whether or not the line is there at all. The count and what the part
+    // holds come from the part itself, which is where a split keeps them.
+    expect(text).toContain('A rule split this into 1 part, and it has no category.');
     expect(text, 'the parts hold the category, so naming one here would be wrong').not.toMatch(
       /set by one of your rules/,
     );
