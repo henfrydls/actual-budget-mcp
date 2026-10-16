@@ -5,6 +5,12 @@ import { ensureConnection } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import { RULE_FIELDS } from '../../utils/rule-fields.js';
+
+/**
+ * What `field` accepts: every field a rule can name, plus the one action
+ * that has no field and would otherwise be unfindable.
+ */
+const FILTERABLE: ReadonlySet<string> = new Set([...RULE_FIELDS, 'link-schedule']);
 import { loadRuleNames, describeRule } from '../../utils/rule-describe.js';
 
 /** How many rules a reply carries when nobody says otherwise. */
@@ -43,13 +49,13 @@ export async function getRules(input: GetRulesInput = {}): Promise<string> {
   if (rules.length === 0) return 'No rules configured.';
 
   const wanted = input.field?.trim().toLowerCase();
-  if (wanted !== undefined && !RULE_FIELDS.has(wanted)) {
+  if (wanted !== undefined && !FILTERABLE.has(wanted)) {
     // Named rather than answered with an empty list, which reads as "you have
     // no rules about that" and is a different thing from "there is no such
     // field".
     return (
       `Actual keeps no rule field called "${input.field}", so no rule can mention one. ` +
-      `The fields a rule uses are ${[...RULE_FIELDS].sort().join(', ')}.`
+      `The fields a rule uses are ${[...FILTERABLE].sort().join(', ')}.`
     );
   }
 
@@ -171,23 +177,36 @@ export async function getRules(input: GetRulesInput = {}): Promise<string> {
     );
   }
 
-
   // What is not in the reply, and how to ask for it. A page that says nothing
   // about the rest invites the reader to believe they have seen it all.
-  const rest = matching.length - offset - shown.length;
-  if (rest > 0) {
-    const unseen = matching
-      .slice(offset + shown.length)
-      .filter((entry) => entry.described.flagged > 0).length;
+  const after = matching.length - offset - shown.length;
+  if (after > 0 || offset > 0) {
+    // Everything outside this page, not only what comes after it: on the
+    // second page the rules before it are no more listed than the ones
+    // after, and counting only the tail called them seen.
+    const elsewhere = [...matching.slice(0, offset), ...matching.slice(offset + shown.length)];
+    const unseen = elsewhere.filter((entry) => entry.described.flagged > 0).length;
+    // The arguments that got this page, so the next one can be asked for
+    // without working out which of them to repeat.
+    const keep = [
+      input.flagged_only ? 'flagged_only: true' : '',
+      wanted !== undefined ? `field: "${wanted}"` : '',
+      limit !== PAGE ? `limit: ${limit}` : '',
+    ].filter(Boolean);
+    const again = keep.length > 0 ? `, with ${keep.join(' and ')}` : '';
     lines.push(
-      `Showing ${shown.length} of ${matching.length}${filtered ? ' matching' : ''} rules. ` +
-        `Pass offset: ${offset + shown.length} for the next ${Math.min(limit, rest)}.`,
+      '',
+      `Showing ${offset + 1} to ${offset + shown.length} of ${matching.length}` +
+        `${filtered ? ' matching' : ''} rules.` +
+        (after > 0
+          ? ` Pass offset: ${offset + shown.length} for the next ${Math.min(limit, after)}${again}.`
+          : ''),
     );
     if (unseen > 0 && !input.flagged_only) {
       // The one thing paging must not bury. The order is the engine's, so a
       // marked rule can be anywhere in it.
       lines.push(
-        `${unseen} of the ${rest} not listed ${unseen === 1 ? 'carries a warning' : 'carry a warning'}. ` +
+        `${unseen} of the ${elsewhere.length} not listed ${unseen === 1 ? 'carries a warning' : 'carry a warning'}. ` +
           `Pass flagged_only: true to see ${unseen === 1 ? 'it' : 'them'}, wherever in the list ${unseen === 1 ? 'it is' : 'they are'}.`,
       );
     }

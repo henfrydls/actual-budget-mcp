@@ -94,7 +94,7 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     await budgetOf('paging-boundary', 100, [marked('poison')]);
     const text = await getRules();
 
-    expect(text).toContain('Showing 100 of 101 rules. Pass offset: 100 for the next 1.');
+    expect(text).toContain('Showing 1 to 100 of 101 rules. Pass offset: 100 for the next 1.');
   }, 120_000);
 
   it('says how many of the rules it did not list are marked', async () => {
@@ -106,6 +106,10 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     const text = await getRules({ limit: 1 });
 
     expect(text).toContain('2 of the 21 not listed carry a warning');
+    expect(text).toContain('Showing 1 to 1 of 22 rules.');
+    // The arguments that got this page, so the next one can be asked for
+    // without working out which of them to repeat.
+    expect(text).toContain('with limit: 1.');
     expect(text).toContain('Pass flagged_only: true to see them');
   }, 120_000);
 
@@ -113,7 +117,9 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     await budgetOf('paging-unseen-flagged', 20, [marked('poison'), marked('poison-two')]);
     const text = await getRules({ flagged_only: true, limit: 1 });
 
-    expect(text).toContain('Showing 1 of 2 matching rules. Pass offset: 1 for the next 1.');
+    expect(text).toContain(
+      'Showing 1 to 1 of 2 matching rules. Pass offset: 1 for the next 1, with flagged_only: true and limit: 1.',
+    );
     expect(text, 'they are already asking for the marked ones').not.toContain(
       'Pass flagged_only: true',
     );
@@ -130,6 +136,77 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     expect(text, 'nothing is left unlisted, so there is nothing to page to').not.toContain(
       'Pass offset',
     );
+  }, 120_000);
+
+  it('counts the marked rules on both sides of the page', async () => {
+    // On the second page the rules before it are no more listed than the ones
+    // after, and counting only the tail called them seen. The marked rule
+    // inside the page is seen, so it is not among them.
+    await budgetOf('paging-both-sides', 0, [
+      marked('before-one'),
+      marked('before-two'),
+      marked('inside'),
+      marked('after'),
+      marked('after-two'),
+    ]);
+    const text = await getRules({ limit: 1, offset: 2 });
+
+    expect(text).toContain('Showing 3 to 3 of 5 rules.');
+    expect(text).toContain('4 of the 4 not listed carry a warning');
+  }, 120_000);
+
+  it('keeps the header counting the whole budget when the list is filtered', async () => {
+    // The header is the size of the budget; the line under it says what is
+    // being shown. Making the header count the filtered ones would hide how
+    // many rules there are from the only reply that lists them.
+    await budgetOf('paging-header', 4, [marked('poison')]);
+    const text = await getRules({ flagged_only: true });
+
+    expect(text.split('\n')[0]).toBe('=== Rules (5) ===');
+    expect(text).toContain('Showing the 1 rule carrying a warning.');
+  }, 120_000);
+
+  it('reads a field however it is capitalised', async () => {
+    // One rule out of three, so the filter has to have done something: with
+    // every rule matching there is nothing left out and nothing to say.
+    await budgetOf('paging-field-case', 2, [
+      {
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [{ op: 'is', field: 'payee', value: payeeId }],
+        actions: [{ op: 'set', field: 'notes', value: 'seen' }],
+      },
+    ]);
+    const text = await getRules({ field: '  Payee ' });
+
+    expect(text).toContain('Showing the 1 rule that mentions payee.');
+    expect(text.match(/^Rule: /gm) ?? []).toHaveLength(1);
+  }, 120_000);
+
+  it('finds the actions that carry no field of their own', async () => {
+    // `set-split-amount` and `link-schedule` have no field, so the listing
+    // prints the operation in its place and nothing would have found them.
+    await budgetOf('paging-fieldless', 1, [
+      {
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [{ op: 'is', field: 'notes', value: 'split-me' }],
+        actions: [
+          { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'remainder' } },
+        ],
+      },
+      {
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [{ op: 'is', field: 'notes', value: 'link-me' }],
+        actions: [{ op: 'link-schedule', value: 'sched-1' }],
+      },
+    ]);
+
+    // What a split writes is the amount, so that is the field to find it by.
+    expect((await getRules({ field: 'amount' })).match(/^Rule: /gm) ?? []).toHaveLength(1);
+    // And `link-schedule` by its own name, since nothing else would reach it.
+    expect((await getRules({ field: 'link-schedule' })).match(/^Rule: /gm) ?? []).toHaveLength(1);
   }, 120_000);
 
   it('gives the rules that mention one field', async () => {
@@ -164,7 +241,12 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     const first = await getRules({ limit: 2 });
     const second = await getRules({ limit: 2, offset: 2 });
 
-    expect(first).toContain('Showing 2 of 5 rules. Pass offset: 2 for the next 2.');
+    expect(first).toContain(
+      'Showing 1 to 2 of 5 rules. Pass offset: 2 for the next 2, with limit: 2.',
+    );
+    // The offset that gets the next page, not the size of this one: they are
+    // the same number until the second page, which is where it was wrong.
+    expect(second).toContain('Showing 3 to 4 of 5 rules. Pass offset: 4 for the next 1');
     expect(first.match(/^Rule: /gm) ?? []).toHaveLength(2);
     // The order is the engine's, so the pages follow one another.
     const ids = (await api.getRules()).map((rule) => rule.id);

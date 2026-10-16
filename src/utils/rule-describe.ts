@@ -511,6 +511,8 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // operation twice: `THEN link-schedule link-schedule = "<id>"`. Its value
     // is a schedule, so it is named like one.
     if (!action.field && action.op === 'link-schedule') {
+      // Its own name, since it has no field and nothing else would find it.
+      fields.add('link-schedule');
       usesIds = true;
       const id = String(action.value ?? '');
       const named = names.schedules.get(id);
@@ -524,6 +526,9 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // operation twice, with the figure in the smallest unit and nothing about
     // which part it is for: `set-split-amount set-split-amount = 5000`.
     if (!action.field && action.op === 'set-split-amount') {
+      // It has no field either, and what it writes is the amount, so that is
+      // the field to find it by.
+      fields.add('amount');
       actionLines.push(`  THEN ${describeSplitAmount(names, action)}`);
       continue;
     }
