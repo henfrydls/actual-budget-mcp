@@ -18,6 +18,7 @@ import {
 import {
   changesMadeByRules,
   byRule,
+  describeSplitCategories,
   rowForComparison,
   splitPayee,
   type AskedRow,
@@ -32,11 +33,14 @@ import {
 import { updatePreservingChildAmount } from '../../utils/transactions.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { findTransferTarget, isOffBudget, transferEffect } from '../../utils/transfer-rule.js';
 import {
-  findTransferTarget,
-  isOffBudget,
-  transferEffect,
-} from '../../utils/transfer-rule.js';
+  transferLegs,
+  clearsCategory,
+  effectParagraphs,
+  legTable,
+  type TransferLeg,
+} from '../../utils/transfer-legs.js';
 
 export interface CreateTransactionInput {
   /** Go ahead even though a transaction with the same account, date and amount exists. */
@@ -187,6 +191,8 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // Whether Actual is going to take the category off this transfer, which it
   // does after the row can first be read.
   let categoryCleared = false;
+  // Every movement this transaction made. More than one when a rule split it.
+  let legs: TransferLeg[] = [];
   // What a rule did to the row, for the reply. Both are about a transaction
   // that is not what the caller described, which is the part worth saying.
   let categoryFromRule: string | undefined;
@@ -228,16 +234,18 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
     // Worked out before anything is decided about the category, and from the
     // engine's rule rather than from the row, because the row answers this
-    // one too early.
-    const link = linkedRow(saved, parts);
-    const landedIn = link?.payeeTransferAccount
-      ? accounts.find((a) => a.id === link.payeeTransferAccount)
-      : undefined;
-    categoryCleared = transferClearsCategory(
-      link?.transferId != null,
+    // one too early. A split's category lives on its parts, so only a plain
+    // row has one to lose here.
+    legs = transferLegs({
+      saved,
+      parts,
+      accounts,
       sourceOffBudget,
-      landedIn ? isOffBudget(landedIn) : transferTargetOffBudget,
-    );
+      fallbackName: transferTargetName,
+      fallbackOffBudget: transferTargetOffBudget,
+    });
+    categoryCleared =
+      !splitByRule && legs.length === 1 && clearsCategory(legs[0], sourceOffBudget);
 
     if (!splitByRule && !categoryId && !categoryCleared && saved?.categoryName) {
       // Nobody asked for a category, so anything the row ended up with was put
@@ -347,21 +355,28 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   // leaves the row pointing nowhere: `transfer_id` is null and that account
   // is empty, while the reply announced a transfer and a matching row. With
   // no row to read, it falls back to what was asked for, as it did before.
-  const linkRow = linkedRow(saved, parts);
-  const isTransfer = Boolean(transferPayeeId) && (saved ? linkRow?.transferId != null : true);
-
-  // And which account it went to is read from the row as well. The payee on
-  // the row is what links the two sides, so a rule that points it at another
-  // account's transfer payee sends the money there: measured, the matching
-  // row was in a third account while the reply named the one that had been
-  // asked for, and called an on-budget movement a departure from the budget.
-  const transferAccount = linkRow?.payeeTransferAccount
-    ? accounts.find((a) => a.id === linkRow.payeeTransferAccount)
-    : undefined;
-  const transferName = transferAccount?.name ?? transferTargetName;
-  const transferOffBudget = transferAccount ? isOffBudget(transferAccount) : transferTargetOffBudget;
+  const isTransfer = Boolean(transferPayeeId) && (saved ? legs.length > 0 : true);
+  // One leg and no split is the ordinary transfer, and it reads as it always
+  // did. Anything else is described as the list of movements it is.
+  const onlyLeg = !splitByRule && legs.length === 1 ? legs[0] : undefined;
+  const transferName = onlyLeg?.accountName ?? transferTargetName;
+  const transferOffBudget = onlyLeg?.offBudget ?? transferTargetOffBudget;
   const transferRedirected =
-    isTransfer && linkRow !== undefined && linkRow.payee !== transferPayeeId;
+    onlyLeg?.row !== undefined && onlyLeg.row.payee !== transferPayeeId;
+  // The list shape, for a transaction that moved more than once or whose
+  // movement is on a part. One leg and no split reads as it always did.
+  const manyLegs = legs.length > 1 || (splitByRule && legs.length > 0);
+
+  // A rule can put another account's transfer payee on a row nobody asked to
+  // transfer. The row points at that account and nothing was written there,
+  // which is a transfer with one side: measured, the other account is empty
+  // and `transfer_id` is null.
+  const dangling = (saved?.isParent ? parts : saved ? [saved] : []).find(
+    (row) => row.payeeTransferAccount && row.transferId === null,
+  );
+  const danglingAccount = dangling
+    ? accounts.find((a) => a.id === dangling.payeeTransferAccount)
+    : undefined;
 
   const lines = [
     isTransfer ? 'Transfer created:' : 'Transaction created:',
@@ -369,7 +384,11 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     `  Date:     ${shownDate}${byRule(changes.date)}`,
     `  Amount:   ${formatMoney(shownAmount)}${byRule(changes.amount)}`,
   ];
-  if (isTransfer) {
+  if (isTransfer && manyLegs) {
+    // No single destination to name. The table below names each one, and a
+    // header reading "Transfer to: Savings" above a part that went somewhere
+    // else is what this was reported for.
+  } else if (isTransfer) {
     // Direction from the sign, not from the argument. A positive amount is
     // money arriving, so the other account is where it came from; calling that
     // a transfer "to" them says the opposite of what the engine just did.
@@ -408,7 +427,15 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   if (splitByRule) {
     // First, because a split answers the category question whichever way it
     // was asked, and it answers it from the parts.
-    lines.push(`  ${describeSplitCategories(parts, categoryId)}`);
+    // A part that is itself a transfer between two accounts on the same side
+    // of the budget loses its category the same way a plain row does, and
+    // the read is just as early, so those parts are read as having none.
+    const clearedParts = new Set(
+      legs
+        .filter((leg) => leg.row && clearsCategory(leg, sourceOffBudget))
+        .map((leg) => leg.row!.id),
+    );
+    lines.push(`  ${describeSplitCategories(parts, categoryId, clearedParts)}`);
   } else if (categoryCleared) {
     // Not printed at all, however the row reads right now. Actual takes the
     // category off both rows of a transfer between two accounts on the same
@@ -442,19 +469,37 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         `the saved transaction is not linked to one and nothing was created in ` +
         `${transferTargetName}. It is an ordinary transaction.`,
     );
-  } else if (!transferPayeeId && transferAccount && linkRow?.transferId == null) {
-    // A rule put another account's transfer payee on an ordinary row. The row
-    // points at that account and nothing was written there, which is a
-    // transfer with one side: measured, the other account is empty and
-    // `transfer_id` is null.
+  } else if (!transferPayeeId && danglingAccount) {
     lines.push(
       '',
-      `The payee a rule put on this is the one Actual uses for transfers to ${transferAccount.name}, ` +
+      `The payee a rule put on this is the one Actual uses for transfers to ${danglingAccount.name}, ` +
         `but nothing was created there and the row is not linked to anything. It is not a ` +
         `transfer, and it points at an account rather than at someone you paid.`,
     );
   }
-  if (isTransfer) {
+  if (isTransfer && manyLegs) {
+    // More than one movement, or a split that made one: described as the list
+    // it is, rather than as a sentence about a single destination. A rule can
+    // split a transfer and send the parts to different accounts, and then
+    // nothing about "the other account" is true (#184).
+    const acctName = acct?.name || accountId;
+    const count = legs.length;
+    lines.push(
+      '',
+      `${transferTargetName} is one of your accounts, so this was sent as a transfer. A rule ` +
+        `split it, and ${count === 1 ? 'the part that moved did so' : 'each part moved'} on ` +
+        `its own, with a matching row in the account it reached:`,
+      '',
+      ...legTable(
+        legs.map((leg, index) => ({
+          label: count === 1 ? 'part' : `part ${index + 1}`,
+          from: acctName,
+          leg,
+        })),
+      ),
+      ...effectParagraphs(legs),
+    );
+  } else if (isTransfer) {
     // Said out loud, because the caller asked for a payee and got a transfer,
     // and in #137 the person did not find out until they went looking for the
     // spending they thought they had recorded.
@@ -469,14 +514,16 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
         `${direction} it.`,
       `A matching row was created there.`,
     );
-    // What this did to the budget, worked out from the two rows rather than
-    // from which accounts are off budget. Same classification the batch
-    // reports per row, from the same place.
-    const kind = transferEffect({
-      amountCents: shownAmount,
-      sourceOffBudget,
-      targetOffBudget: transferOffBudget,
-    });
+    // What this did to the budget, read from the leg rather than from which
+    // accounts were asked for. With no row to read there is no leg, and it
+    // falls back to what was asked for, as it did before.
+    const kind =
+      onlyLeg?.effect ??
+      transferEffect({
+        amountCents: shownAmount,
+        sourceOffBudget,
+        targetOffBudget: transferOffBudget,
+      });
     const acctName = acct?.name || accountId;
     // Where the category landed, measured: on the row it was asked for, which
     // is this account's. It counts only if this account is in the budget.
@@ -484,11 +531,23 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
     const otherName = transferName ?? '';
 
     if (kind === 'inside') {
-      lines.push(
-        'The money moved between accounts inside your budget, so it is not spending.',
-        'To record a purchase instead, give it a category, or use a payee that is not an',
-        'account name.',
-      );
+      lines.push('The money moved between accounts inside your budget, so it is not spending.');
+      if (input.category) {
+        // A category was given, so asking for one is the wrong advice. It is
+        // also gone: `clearCategory` fires when the two accounts are on the
+        // same side of the budget, which is what this is, and a rule that
+        // redirects the transfer to an on-budget account lands here without
+        // the caller doing anything.
+        lines.push(
+          'The category was not kept: Actual discards it on a transfer between two accounts',
+          'on the same side of your budget.',
+        );
+      } else {
+        lines.push(
+          'To record a purchase instead, give it a category, or use a payee that is not an',
+          'account name.',
+        );
+      }
     } else if (kind === 'outside') {
       lines.push(
         `${acctName} and ${otherName} are both off budget, so this does not affect your ` +
@@ -584,82 +643,6 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
   }
 
   return lines;
-}
-
-/**
- * The row that carries the transfer link, which is not always the one written.
- *
- * `addTransfer` returns early on a split parent, so when a rule splits the
- * transaction the part becomes the transfer and the parent is linked to
- * nothing. Reading the parent reported a transfer that had happened as one
- * that had not, while the matching row sat in the other account.
- */
-function linkedRow(saved: SavedRow | null, parts: SavedRow[]): SavedRow | undefined {
-  if (!saved) return undefined;
-  if (!saved.isParent) return saved;
-  return parts.find((part) => part.transferId !== null) ?? parts.find((part) => part.payeeTransferAccount);
-}
-
-/**
- * Whether Actual will take the category off this transfer.
- *
- * Read from the engine rather than from the row, because the row answers too
- * early. `clearCategory` runs when the two accounts are on the same side of
- * the budget, and it clears the category on both of them; it runs again on
- * every update, so forcing the asked category back only produces one more
- * clear. Measured: the row holds the category on the first read and is null
- * two seconds later, which is how a reply announcing it and a budget without
- * it both looked right.
- */
-function transferClearsCategory(
-  isTransfer: boolean,
-  sourceOffBudget: boolean,
-  targetOffBudget: boolean,
-): boolean {
-  return isTransfer && sourceOffBudget === targetOffBudget;
-}
-
-/**
- * What a split's parts are filed under, said from the parts.
- *
- * Measured against the engine: `makeChild` copies the parent's category onto
- * every part, so a category asked for is applied, on the parts, and the
- * parent comes back with none. A rule can then set its own category on a
- * part, and that part keeps the rule's. The reply used to say the category
- * had not been applied, which was false either way.
- */
-function describeSplitCategories(parts: SavedRow[], asked: string | undefined): string {
-  const count = parts.length;
-  if (count === 0) {
-    // The parts could not be read. The split is a fact of the parent row.
-    return 'A rule split this into parts, so its category lives on them.';
-  }
-  const head = `A rule split this into ${count} part${count === 1 ? '' : 's'}`;
-  const named = parts.filter((part) => part.categoryName !== null);
-  const names = [...new Set(named.map((part) => part.categoryName as string))].sort();
-  if (names.length === 0) {
-    return `${head}, and ${count === 1 ? 'it has no category' : 'none of them has one'}.`;
-  }
-  const list = (of: string[]) =>
-    of.length === 1 ? of[0] : `${of.slice(0, -1).join(', ')} and ${of[of.length - 1]}`;
-  // Which of them a rule chose, told apart by the id rather than by the name,
-  // and said out loud: a category the caller asked for and one a rule put
-  // there are different things, and a rule can be wrong.
-  const fromRules = [
-    ...new Set(
-      named.filter((part) => part.category !== asked).map((part) => part.categoryName as string),
-    ),
-  ].sort();
-  const credit =
-    fromRules.length === 0
-      ? ''
-      : fromRules.length === names.length
-        ? ' (set by your rules)'
-        : ` (${list(fromRules)} set by ${fromRules.length === 1 ? 'a rule' : 'your rules'})`;
-  if (named.length === count) {
-    return `${head}, under ${list(names)}${credit}.`;
-  }
-  return `${head}, ${named.length} of them under ${list(names)}${credit} and the rest with no category.`;
 }
 
 export function registerCreateTransaction(server: McpServer): void {

@@ -32,10 +32,15 @@ import { syncNow } from '../../utils/sync-clock.js';
 import {
   findTransferTarget,
   isOffBudget,
-  transferEffect,
   transferPairKey,
-  type TransferEffect,
 } from '../../utils/transfer-rule.js';
+import {
+  transferLegs,
+  requestedLeg,
+  clearsCategory,
+  effectParagraphs,
+  legTable,
+} from '../../utils/transfer-legs.js';
 import { pairCounterparts } from '../../utils/counterpart-pairing.js';
 
 /**
@@ -647,10 +652,20 @@ async function writeBatch(
     // side of the budget. `clearCategory` takes the category off both rows
     // and runs again on every update, so this would buy one more clear; the
     // paragraph in the reply already says it was not kept.
+    //
+    // The side is read from the account the row reached, not from the one it
+    // was sent to: a rule can redirect it, and the skip then missed.
+    const movements = transferLegs({
+      saved: actual,
+      parts: partsByParent.get(actual.id) ?? [],
+      accounts,
+      sourceOffBudget: row.transfer?.sourceOffBudget ?? false,
+      fallbackName: row.transfer?.targetName,
+      fallbackOffBudget: row.transfer?.targetOffBudget,
+    });
     if (
-      actual.transferId !== null &&
       row.transfer &&
-      row.transfer.sourceOffBudget === row.transfer.targetOffBudget
+      movements.some((leg) => clearsCategory(leg, row.transfer!.sourceOffBudget))
     ) {
       continue;
     }
@@ -700,7 +715,7 @@ async function writeBatch(
     'Transactions on each account, before and after:',
     ...counts,
   );
-  lines.push(...describeTransfers(written, saved, accounts));
+  lines.push(...describeTransfers(written, saved, partsByParent, accounts));
   lines.push(...describeRuleChanges(written, saved, partsByParent));
   if (!saved && written.length > 0) {
     // Said in the reply, not only on stderr, which the caller never sees. The
@@ -715,30 +730,6 @@ async function writeBatch(
   return lines;
 }
 
-/** What each label in the summary means, said once however many rows earned it. */
-const EFFECT_LABEL: Record<TransferEffect, string> = {
-  inside: 'inside your budget',
-  outside: 'outside your budget',
-  incoming: 'came into your budget',
-  outgoing: 'left your budget',
-};
-
-const EFFECT_PARAGRAPH: Record<TransferEffect, string> = {
-  inside:
-    'Inside your budget means the money only changed account, so it is not spending. To ' +
-    'record a purchase instead, give the row a category, or use a payee that is not an ' +
-    'account name.',
-  outside:
-    'Outside your budget means both accounts are off budget, so your budget is not ' +
-    'affected at all.',
-  incoming:
-    'Came into your budget means one of the two accounts is off budget and the money came ' +
-    'from there.',
-  outgoing:
-    'Left your budget means one of the two accounts is off budget and the money went that ' +
-    'way.',
-};
-
 /**
  * Name the rows that turned into transfers, at the end, once.
  *
@@ -748,117 +739,95 @@ const EFFECT_PARAGRAPH: Record<TransferEffect, string> = {
  * times in one reply, so the rows are listed and the explanation follows once
  * per kind of effect that actually occurred.
  *
- * A row that asked to be a transfer and was not is listed separately. A rule
- * that rewrites the payee leaves it pointing elsewhere and the other account
- * gets nothing, and this table used to announce a matching row for it (#184).
+ * Each row's movements are read from the budget, as a list: a rule can split
+ * a row and send the parts to different accounts, so one row can move more
+ * than once and the parts can land on opposite sides of the budget. A row
+ * that asked to be a transfer and made no movement is listed apart (#184).
  */
 function describeTransfers(
   written: ResolvedRow[],
   saved: Map<string, SavedRow> | null,
+  partsByParent: Map<string, SavedRow[]>,
   accounts: Array<{ id: string; name: string; offbudget?: boolean }>,
 ): string[] {
   const asked = written.filter((row) => row.transfer?.payeeId);
   if (asked.length === 0) return [];
 
   const entries = asked.map((row) => {
-    const actual = saved?.get(row.marker);
-    // The amount on the row, which a rule can have changed on the way in.
-    const amountCents = actual?.amount ?? row.amountCents;
-    // A transfer, unless the budget says otherwise. A rule that rewrites the
-    // payee leaves the row pointing somewhere else and nothing is written in
-    // the other account: measured, `transfer_id` comes back null and that
-    // account is empty, while this table announced a matching row. With no
-    // row to read, it falls back to what was asked for.
-    const linked = actual ? actual.transferId !== null : true;
-    // And which account it went to is read from the row too. The payee on the
-    // row is what links the two sides, so a rule that points it at another
-    // account's transfer payee sends the money there: measured, the table
-    // named the account that had been asked for while the matching row was in
-    // a third one, and classified the movement by the wrong account.
-    const landedIn = actual?.payeeTransferAccount
-      ? accounts.find((a) => a.id === actual.payeeTransferAccount)
-      : undefined;
-    const targetName = landedIn?.name ?? row.transfer!.targetName;
-    const targetOffBudget = landedIn ? isOffBudget(landedIn) : row.transfer!.targetOffBudget;
-    const redirected = linked && actual !== undefined && actual.payee !== row.transfer!.payeeId;
-    const effect = transferEffect({
-      amountCents,
-      sourceOffBudget: row.transfer!.sourceOffBudget,
-      targetOffBudget,
-    });
-    // Direction from the sign, not from which account the row was written to:
-    // a positive amount is money arriving, so the other account is where it
-    // came from. Reading it the other way says the opposite of what the engine
-    // did, which is the mistake #137 made twice.
-    const route =
-      amountCents >= 0
-        ? `${targetName} -> ${row.accountName}`
-        : `${row.accountName} -> ${targetName}`;
-    return {
-      index: row.index,
-      route,
-      amount: Math.abs(amountCents),
-      effect,
-      linked,
-      redirected,
-      targetName,
-      targetOffBudget,
-      row,
-    };
+    const found = saved?.get(row.marker);
+    const legs = found
+      ? transferLegs({
+          saved: found,
+          parts: partsByParent.get(found.id) ?? [],
+          accounts,
+          sourceOffBudget: row.transfer!.sourceOffBudget,
+          fallbackName: row.transfer!.targetName,
+          fallbackOffBudget: row.transfer!.targetOffBudget,
+        })
+      : // With no row to read, the reply describes what was asked for, as it
+        // did before.
+        [
+          requestedLeg({
+            accountId: row.transfer!.targetId,
+            accountName: row.transfer!.targetName,
+            offBudget: row.transfer!.targetOffBudget,
+            amountCents: row.amountCents,
+            sourceOffBudget: row.transfer!.sourceOffBudget,
+          }),
+        ];
+    return { row, legs };
   });
 
-  // Both tables are measured together so the columns line up across them.
-  const routeWidth = Math.max(...entries.map((e) => e.route.length));
-  const amountWidth = Math.max(...entries.map((e) => formatMoney(e.amount).length));
-  const tableRow = (e: (typeof entries)[number], tail: string) =>
-    `  row ${e.index + 1}  ${e.route.padEnd(routeWidth)}  ` +
-    `${formatMoney(e.amount).padStart(amountWidth)}${tail}`;
-
-  const made = entries.filter((e) => e.linked);
-  const missed = entries.filter((e) => !e.linked);
+  const made = entries.filter((entry) => entry.legs.length > 0);
+  const missed = entries.filter((entry) => entry.legs.length === 0);
 
   const lines: string[] = [];
 
   if (made.length > 0) {
+    const movements = made.flatMap((entry) =>
+      entry.legs.map((leg, index) => ({
+        label:
+          entry.legs.length === 1
+            ? `row ${entry.row.index + 1}`
+            : `row ${entry.row.index + 1} part ${index + 1}`,
+        from: entry.row.accountName,
+        leg,
+        // A rule can point the row at another account's transfer payee, and
+        // the engine links it there. The route names the account it reached;
+        // this says the caller did not choose it.
+        note:
+          leg.row && leg.row.payee !== entry.row.transfer!.payeeId
+            ? `(a rule sent it to ${leg.accountName}, not ${entry.row.transfer!.targetName})`
+            : undefined,
+      })),
+    );
     const count = made.length;
     lines.push(
       '',
       `${count} of them named one of your accounts, so ${count === 1 ? 'it was' : 'they were'} ` +
         `recorded as ${count === 1 ? 'a transfer' : 'transfers'} and a matching row was created ` +
-        `in the other account:`,
+        `in the account each one reached:`,
       '',
-      ...made.map((e) =>
-        tableRow(
-          e,
-          `  ${EFFECT_LABEL[e.effect]}` +
-            (e.redirected ? `  (a rule sent it to ${e.targetName}, not ${e.row.transfer!.targetName})` : ''),
-        ),
-      ),
+      ...legTable(movements),
+      ...effectParagraphs(movements.map((m) => m.leg)),
     );
 
-    // One paragraph per kind that happened, in a fixed order so two replies about
-    // the same batch read the same way.
-    const kinds: TransferEffect[] = ['inside', 'outgoing', 'incoming', 'outside'];
-    for (const kind of kinds) {
-      if (made.some((e) => e.effect === kind)) {
-        lines.push('', EFFECT_PARAGRAPH[kind]);
-      }
-    }
-
-    // Only when there is a category to talk about, and the two cases are not the
-    // same thing. On a row that crosses the edge of the budget the category is
-    // kept where it was asked for; between two off-budget accounts Actual
-    // removes it, which #137 recorded the other way round because it read the
-    // row before the engine had finished with it.
+    // Only when there is a category to talk about, and the two cases are not
+    // the same thing. On a row that crosses the edge of the budget the
+    // category is kept where it was asked for; between two accounts on the
+    // same side Actual removes it, which #137 recorded the other way round
+    // because it read the row before the engine had finished with it.
     const crossing = made.filter(
-      (e) => (e.effect === 'incoming' || e.effect === 'outgoing') && e.row.categoryId,
+      (entry) =>
+        entry.row.categoryId &&
+        entry.legs.some((leg) => leg.effect === 'incoming' || leg.effect === 'outgoing'),
     );
     // Split by where the category actually landed, rather than left as a
     // condition for the reader to apply. "Counts only if that row is in your
     // budget" is true and makes someone work out which case they are in, and
     // the whole point of saying anything is that they should not have to.
-    const counted = crossing.filter((e) => !e.row.transfer!.sourceOffBudget);
-    const notCounted = crossing.filter((e) => e.row.transfer!.sourceOffBudget);
+    const counted = crossing.filter((entry) => !entry.row.transfer!.sourceOffBudget);
+    const notCounted = crossing.filter((entry) => entry.row.transfer!.sourceOffBudget);
     if (counted.length > 0) {
       lines.push(
         '',
@@ -867,7 +836,7 @@ function describeTransfers(
       );
     }
     if (notCounted.length > 0) {
-      const names = [...new Set(notCounted.map((e) => e.row.accountName))].join(', ');
+      const names = [...new Set(notCounted.map((entry) => entry.row.accountName))].join(', ');
       lines.push(
         '',
         `The category stayed on the ${names} row, but ${names} is off budget, so it does not ` +
@@ -875,13 +844,20 @@ function describeTransfers(
       );
     }
 
-    const outside = made.filter((e) => e.effect === 'outside' && e.row.categoryId);
-    if (outside.length > 0) {
+    // Both accounts on the same side of the budget, which is what
+    // `clearCategory` goes by. Read from the engine's rule rather than from
+    // the row, because it runs after the row can first be read.
+    const sameSide = made.filter(
+      (entry) =>
+        entry.row.categoryId &&
+        entry.legs.some((leg) => clearsCategory(leg, entry.row.transfer!.sourceOffBudget)),
+    );
+    if (sameSide.length > 0) {
       lines.push(
         '',
-        `The category on ${outside.length === 1 ? 'the row that is outside your budget was' : 'the rows that are outside your budget were'} ` +
-          'not kept: Actual discards a category on a transfer where neither account is in the ' +
-          'budget, since nothing could count it.',
+        `The category on ${sameSide.length === 1 ? 'the row that moved' : 'the rows that moved'} ` +
+          `between two accounts on the same side of your budget was not kept: Actual discards ` +
+          `it there, since nothing could count it.`,
       );
     }
   }
@@ -893,6 +869,9 @@ function describeTransfers(
     // not: the row sits in its own account and nothing was written anywhere
     // else.
     const accountWidth = Math.max(...missed.map((e) => e.row.accountName.length));
+    const amountWidth = Math.max(
+      ...missed.map((e) => formatMoney(Math.abs(e.row.amountCents)).length),
+    );
     lines.push(
       '',
       `${count} of them named one of your accounts but ${count === 1 ? 'was' : 'were'} not recorded as ` +
@@ -902,8 +881,9 @@ function describeTransfers(
       '',
       ...missed.map(
         (e) =>
-          `  row ${e.index + 1}  ${e.row.accountName.padEnd(accountWidth)}  ` +
-          `${formatMoney(e.amount).padStart(amountWidth)}  asked for ${e.row.transfer!.targetName}`,
+          `  row ${e.row.index + 1}  ${e.row.accountName.padEnd(accountWidth)}  ` +
+          `${formatMoney(Math.abs(e.row.amountCents)).padStart(amountWidth)}  ` +
+          `asked for ${e.row.transfer!.targetName}`,
       ),
     );
   }

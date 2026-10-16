@@ -3,6 +3,7 @@ import {
   changesMadeByRules,
   byRule,
   describeChange,
+  describeSplitCategories,
   listChanges,
   type AskedRow,
 } from '../rule-changes.js';
@@ -110,5 +111,59 @@ describe('what a rule changed between asking and saving', () => {
       'Payee: Theatre (nothing was asked for)',
     );
     expect(byRule(undefined), 'a value the caller chose says nothing').toBe('');
+  });
+});
+
+/**
+ * What a split's parts are filed under.
+ *
+ * The parent carries no category: measured against the engine, the engine
+ * copies the parent's onto every part, so a category asked for is applied, on
+ * the parts, and a rule that sets its own on a part wins there.
+ */
+describe('what the parts of a split are filed under', () => {
+  const part = (id: string, category: string | null, name: string | null): SavedRow =>
+    savedRow({ id, category, categoryName: name, isParent: false, parentId: 'parent' });
+
+  it('names what every part carries, and who chose it', () => {
+    expect(describeSplitCategories([part('a', 'c1', 'Fun')], 'c1')).toBe(
+      'A rule split this into 1 part, under Fun.',
+    );
+    // Told apart by the id: a category a rule chose and one the caller asked
+    // for are different things, and a rule can be wrong.
+    expect(describeSplitCategories([part('a', 'c2', 'Bills')], 'c1')).toBe(
+      'A rule split this into 1 part, under Bills (set by your rules).',
+    );
+    expect(
+      describeSplitCategories([part('a', 'c1', 'Fun'), part('b', 'c2', 'Bills')], 'c1'),
+    ).toBe('A rule split this into 2 parts, under Bills and Fun (Bills set by a rule).');
+  });
+
+  it('says when the parts have no category rather than inventing one', () => {
+    expect(describeSplitCategories([part('a', null, null)], 'c1')).toBe(
+      'A rule split this into 1 part, and it has no category.',
+    );
+    expect(
+      describeSplitCategories([part('a', null, null), part('b', null, null)], undefined),
+    ).toBe('A rule split this into 2 parts, and none of them has one.');
+  });
+
+  it('reads a part Actual is about to clear as having no category', () => {
+    // A part that is itself a transfer between two accounts on the same side
+    // of the budget loses its category after the row can first be read, so
+    // the read is as early here as it is for a plain row.
+    const parts = [part('a', 'c1', 'Fun'), part('b', 'c1', 'Fun')];
+    expect(describeSplitCategories(parts, 'c1', new Set(['b']))).toBe(
+      'A rule split this into 2 parts, 1 of them under Fun and the rest with no category.',
+    );
+    expect(describeSplitCategories(parts, 'c1', new Set(['a', 'b']))).toBe(
+      'A rule split this into 2 parts, and none of them has one.',
+    );
+  });
+
+  it('says only that it was split when the parts could not be read', () => {
+    expect(describeSplitCategories([], 'c1')).toBe(
+      'A rule split this into parts, so its category lives on them.',
+    );
   });
 });

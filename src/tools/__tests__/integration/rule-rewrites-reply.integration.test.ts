@@ -90,6 +90,14 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
     await rule('split-xfer', [
       { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'remainder' } },
     ]);
+    // Two parts, and the second one pointed at another account, so one
+    // transaction leaves the budget on one side and stays inside it on the
+    // other.
+    await rule('split-two-ways', [
+      { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'fixed-percent' } },
+      { op: 'set-split-amount', value: 0, options: { splitIndex: 2, method: 'remainder' } },
+      { op: 'set', field: 'payee', value: otherTransferPayee, options: { splitIndex: 2 } },
+    ]);
     // Two parts, and a payee on one of them only, so the parts disagree.
     await rule('split-two-payees', [
       { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'fixed-percent' } },
@@ -456,7 +464,8 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
     const text = lines.join('\n');
 
     expect(text).toContain('Transfer created:');
-    expect(text).toContain('A matching row was created there.');
+    // Described as the movement it is, from the part that made it.
+    expect(text).toContain('part  Checking -> Savings  50.00  left your budget');
     expect(text).not.toContain('nothing was created in Savings');
     expect((await rowsIn(savingsId)).map((r) => r.amount)).toContain(5000);
   });
@@ -510,6 +519,82 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
 
     expect(text).toContain('It counts in Checking, under Fun.');
     expect(text, 'the id is what nobody can read').not.toContain(fun);
+  });
+
+  it('describes every movement when a rule splits a transfer two ways', async () => {
+    // One transaction, two destinations, and they land on opposite sides of
+    // the budget. The reply named one account and called the whole amount a
+    // departure from the budget.
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -52,
+      payee: 'Savings',
+      notes: 'split-two-ways',
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('part 1  Checking -> Savings  26.00  left your budget');
+    expect(text).toContain('part 2  Checking -> Other    26.00  inside your budget');
+    expect(text, 'the whole amount did not leave the budget').not.toContain('52.00  left');
+    expect(text, 'there is no single destination to name').not.toMatch(/Transfer to:/);
+    expect((await rowsIn(savingsId)).map((r) => r.amount)).toContain(2600);
+    expect((await rowsIn(otherId)).map((r) => r.amount)).toContain(2600);
+  });
+
+  it('does not file a split part under a category Actual is about to clear', async () => {
+    // The part is a transfer between two accounts on the same side of the
+    // budget, so it loses its category the same way a plain row does, and the
+    // read is just as early.
+    // Both accounts off budget, so this stays a transfer even with a
+    // category: Actual keeps it a transfer whenever money crosses the edge of
+    // the budget, and between two off-budget accounts it clears the category.
+    const lines = await createTransaction({
+      account: 'Cash',
+      amount: -55,
+      payee: 'Savings',
+      category: 'Fun',
+      notes: 'split-xfer',
+      date: '2026-10-12',
+    } as never);
+
+    expect(lines.join('\n')).not.toContain('under Fun');
+  });
+
+  it('says the category was not kept when a rule redirects into the budget', async () => {
+    // The rule sends it to an on-budget account, so both sides are on the
+    // same side and Actual drops the category. The reply said nothing about
+    // it and told the caller to give it a category, which they had.
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -22,
+      payee: 'Savings',
+      category: 'Fun',
+      notes: 'to-other',
+      date: '2026-10-12',
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).not.toMatch(/^ *Category:/m);
+    expect(text).toContain('The category was not kept');
+    expect(text, 'the category was given').not.toContain('give it a category');
+  });
+
+  it('describes a batch row a rule split into a transfer', async () => {
+    // The batch read the parent's link, found none, and said the row had not
+    // been recorded as a transfer while its parts were linked and the counts
+    // in the same reply showed the other account growing.
+    const before = (await rowsIn(savingsId)).length;
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -33, payee: 'Savings', notes: 'split-me', date: '2026-10-21' },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).not.toContain('not recorded as a transfer');
+    expect(text).toContain('row 1  Checking -> Savings  33.00  left your budget');
+    expect((await rowsIn(savingsId)).length).toBeGreaterThan(before);
   });
 
   it('says so when it could not read the transaction back', async () => {
@@ -638,6 +723,30 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
     );
 
     expect(lines.join('\n')).toContain('not kept');
+    expect(updates, 'nothing to force when Actual is going to clear it').toBe(0);
+  });
+
+  it('reads the side from the account a batch row reached, not the one asked for', async () => {
+    // The rule sends it to an on-budget account, so both sides end up on the
+    // same side and Actual clears the category. Going by the accounts that
+    // were asked for, Checking and Savings are on opposite sides, so the
+    // skip missed and the batch wrote an update that bought one more clear.
+    const { result: lines, updates } = await countingUpdates(() =>
+      createTransactions({
+        transactions: [
+          {
+            account: 'Checking',
+            amount: -41,
+            payee: 'Savings',
+            category: 'Fun',
+            notes: 'to-other',
+            date: '2026-10-22',
+          },
+        ],
+      } as never),
+    );
+
+    expect(lines.join('\n')).toContain('was not kept');
     expect(updates, 'nothing to force when Actual is going to clear it').toBe(0);
   });
 

@@ -208,3 +208,56 @@ export function rowForComparison(saved: SavedRow, parts: SavedRow[]): SavedRow {
   if (!agreed) return saved;
   return { ...saved, isParent: false, payee: agreed.payee, payeeName: agreed.payeeName };
 }
+
+/**
+ * What a split's parts are filed under, said from the parts.
+ *
+ * Measured against the engine: `makeChild` copies the parent's category onto
+ * every part, so a category asked for is applied, on the parts, and the
+ * parent comes back with none. A rule can then set its own category on a
+ * part, and that part keeps the rule's. The reply used to say the category
+ * had not been applied, which was false either way.
+ */
+export function describeSplitCategories(
+  allParts: SavedRow[],
+  asked: string | undefined,
+  cleared: Set<string> = new Set(),
+): string {
+  // A part Actual is about to take the category off has none, however it
+  // reads right now.
+  const parts = allParts.map((part) =>
+    cleared.has(part.id) ? { ...part, category: null, categoryName: null } : part,
+  );
+  const count = parts.length;
+  if (count === 0) {
+    // The parts could not be read. The split is a fact of the parent row.
+    return 'A rule split this into parts, so its category lives on them.';
+  }
+  const head = `A rule split this into ${count} part${count === 1 ? '' : 's'}`;
+  const named = parts.filter((part) => part.categoryName !== null);
+  const names = [...new Set(named.map((part) => part.categoryName as string))].sort();
+  if (names.length === 0) {
+    return `${head}, and ${count === 1 ? 'it has no category' : 'none of them has one'}.`;
+  }
+  const list = (of: string[]) =>
+    of.length === 1 ? of[0] : `${of.slice(0, -1).join(', ')} and ${of[of.length - 1]}`;
+  // Which of them a rule chose, told apart by the id rather than by the name,
+  // and said out loud: a category the caller asked for and one a rule put
+  // there are different things, and a rule can be wrong.
+  const fromRules = [
+    ...new Set(
+      named.filter((part) => part.category !== asked).map((part) => part.categoryName as string),
+    ),
+  ].sort();
+  const credit =
+    fromRules.length === 0
+      ? ''
+      : fromRules.length === names.length
+        ? ' (set by your rules)'
+        : ` (${list(fromRules)} set by ${fromRules.length === 1 ? 'a rule' : 'your rules'})`;
+  if (named.length === count) {
+    return `${head}, under ${list(names)}${credit}.`;
+  }
+  return `${head}, ${named.length} of them under ${list(names)}${credit} and the rest with no category.`;
+}
+

@@ -418,6 +418,55 @@ describe('when a rule turns the transaction into a split', () => {
     expect(stderr, 'there is nothing wrong to warn about').not.toHaveBeenCalled();
     stderr.mockRestore();
   });
+
+  it('reads a part Actual is about to clear as having no category', async () => {
+    // The part is itself a transfer between two accounts on the same side of
+    // the budget, so `clearCategory` takes its category off after the row can
+    // first be read. Against the engine this is a race and the read can win
+    // it; here the read is fixed, so the wiring is what is under test.
+    vi.mocked(api.getAccounts).mockResolvedValue([
+      { id: 'acc-1', name: 'Checking', closed: false, offbudget: false },
+      { id: 'acc-2', name: 'Other', closed: false, offbudget: false },
+    ] as never);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as never);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as never);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as never);
+    vi.mocked(api.runQuery)
+      .mockReset()
+      .mockImplementation(async () => {
+        const filter = (lastQuery.filter ?? {}) as Record<string, unknown>;
+        if ('parent_id' in filter) {
+          return {
+            data: [
+              {
+                id: 'part-1',
+                amount: -5000,
+                category: 'cat-1',
+                'category.name': 'Alimentación',
+                transfer_id: 'the-other-row',
+                'payee.transfer_acct': 'acc-2',
+              },
+            ],
+          } as never;
+        }
+        if ('id' in filter) {
+          return {
+            data: [{ id: 'ours', category: null, amount: -5000, is_parent: true }],
+          } as never;
+        }
+        return { data: [] } as never;
+      });
+
+    const lines = await createTransaction({
+      account: 'Checking',
+      amount: -50,
+      date: '2026-09-21',
+      category: 'Alimentación',
+    });
+
+    expect(lines.join('\n')).toContain('A rule split this into 1 part, and it has no category.');
+  });
 });
 
 /**
