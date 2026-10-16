@@ -417,6 +417,11 @@ export interface DescribedRule {
   flagged: number;
   /** Whether anything in the rule is stored as an id, and so needs a name. */
   usesIds: boolean;
+  /**
+   * Every field the rule names, in a condition or an action, so a caller can
+   * ask for the rules that touch one of them (#177).
+   */
+  fields: Set<string>;
   /** Which kinds of warning were given, for whatever closes the reply. */
   kinds: Set<string>;
 }
@@ -440,6 +445,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
   const conditionLines: string[] = [];
   const actionLines: string[] = [];
   let usesIds = false;
+  const fields = new Set<string>();
   let flagged = 0;
   const kinds = new Set<string>();
   const mark = (into: string[], kind: string, text: string) => {
@@ -454,6 +460,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // 4,500 or more is `gte 450000` with `outflow`. Printed without it, and
     // now with the figure formatted as money, it reads as a rule about income
     // (#182).
+    fields.add(cond.field);
     if (ID_FIELDS.has(cond.field)) usesIds = true;
     const options = cond.options as { inflow?: unknown; outflow?: unknown } | undefined;
     const flow = options?.outflow ? ' (outflow)' : options?.inflow ? ' (inflow)' : '';
@@ -504,6 +511,8 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // operation twice: `THEN link-schedule link-schedule = "<id>"`. Its value
     // is a schedule, so it is named like one.
     if (!action.field && action.op === 'link-schedule') {
+      // Its own name, since it has no field and nothing else would find it.
+      fields.add('link-schedule');
       usesIds = true;
       const id = String(action.value ?? '');
       const named = names.schedules.get(id);
@@ -517,10 +526,14 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // operation twice, with the figure in the smallest unit and nothing about
     // which part it is for: `set-split-amount set-split-amount = 5000`.
     if (!action.field && action.op === 'set-split-amount') {
+      // It has no field either, and what it writes is the amount, so that is
+      // the field to find it by.
+      fields.add('amount');
       actionLines.push(`  THEN ${describeSplitAmount(names, action)}`);
       continue;
     }
     const field = action.field || action.op;
+    fields.add(field);
     if (ID_FIELDS.has(field)) usesIds = true;
     // A value that comes from a template or a formula is not stored on the
     // action, so the line read `= (none)` and the rule looked broken. The
@@ -587,6 +600,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     stage: detail.stage || 'default',
     conditionsOp: detail.conditionsOp || 'and',
     usesIds,
+    fields,
     flagged,
     kinds,
   };
