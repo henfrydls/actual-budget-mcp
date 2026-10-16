@@ -179,6 +179,10 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
  * it is enumerable rather than a guess. What it does not cover is a name
  * holding the separator a list uses, since every separator can appear in a
  * name and bracketing every value costs more than the case is worth.
+ *
+ * A figure is the whole name and nothing else, which is why the test is
+ * anchored: `Super 24` is a payee, not an amount, and quoting it would say it
+ * is the text of something rather than the name of somebody.
  */
 function confusable(name: string): boolean {
   return (
@@ -186,7 +190,12 @@ function confusable(name: string): boolean {
     name === '(empty list)' ||
     name === 'true' ||
     name === 'false' ||
+    // The forms a value that is not text comes back in: a quoted string, and
+    // the stored config of an object or a list, which is written out as JSON
+    // when there is nothing better to say about it.
     name.startsWith('"') ||
+    name.startsWith('{') ||
+    name.startsWith('[') ||
     /^-?[\d,]*\d(\.\d+)?$/.test(name)
   );
 }

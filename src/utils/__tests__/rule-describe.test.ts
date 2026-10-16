@@ -78,6 +78,9 @@ describe('a rule value, as the person who wrote it would read it', () => {
         ['p3', '(none)'],
         ['p4', '"Netflix"'],
         ['p5', 'Jo"e'],
+        ['p6', 'Super 24'],
+        ['p7', '{x}'],
+        ['p8', '[x]'],
       ]),
       schedules: new Map(),
       known: true,
@@ -86,9 +89,18 @@ describe('a rule value, as the person who wrote it would read it', () => {
     expect(readable(odd, 'payee', 'p2')).toBe('"123"');
     expect(readable(odd, 'payee', 'p3')).toBe('"(none)"');
     expect(readable(odd, 'payee', 'p4')).toBe('"\\"Netflix\\""');
+    // The stored config of an object is written out as JSON when there is
+    // nothing better to say about it, so a name shaped like one reads as that.
+    expect(readable(odd, 'payee', 'p7')).toBe('"{x}"');
+    expect(readable(odd, 'payee', 'p8')).toBe('"[x]"');
     // An ordinary name with a quote in the middle reads as nothing else, so
     // it is left alone.
     expect(readable(odd, 'payee', 'p5')).toBe('Jo"e');
+    // And a name that merely holds digits is a name. A figure is the whole
+    // value and nothing else, so the test for one is anchored; loosened to
+    // "has a digit in it", this shop would come back quoted, which says the
+    // rule is holding the text of something rather than naming somebody.
+    expect(readable(odd, 'payee', 'p6')).toBe('Super 24');
   });
 
   it('tells nothing apart from the empty text, which is a value', () => {
