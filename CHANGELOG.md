@@ -1,5 +1,131 @@
 # Changelog
 
+## 0.10.6
+
+Three replies that were not describing your budget. `create_transaction` read
+your request back to you, `delete_rule` showed you the rule as the engine
+stores it, and `get_rules` handed over everything whether or not you could
+read it. Nothing was written wrongly in any of the three; what they told you
+about it was wrong, or was too much to use.
+
+### The reply says what was saved, not what was asked for (#184)
+
+Actual runs your rules on every transaction it takes in, so the row that lands
+can differ from the one you sent. The reply repeated the request, except for
+one line: the category, which has read the row since 0.10.4. One sentence
+spoke for the budget and the rest spoke for you, with nothing to say which was
+which.
+
+Found in the live test of 0.10.5. A rule that sets `amount` put the
+transaction into the budget at -5.50, and the reply said `Amount: -4.40`, the
+figure in the request. The budget had the right number and the reply did not.
+
+Every value in the reply is now the one on the saved row, and a value a rule
+decided says so, the way the category line already did:
+
+    Amount:   -5.50 (set by one of your rules, asked for -4.40)
+
+That covers the amount, the date, the payee, the notes and the cleared flag.
+`Cleared` only appears when a rule decided it, since nothing has ever printed
+it otherwise.
+
+Three things the reply used to claim that had not happened:
+
+A transfer a rule stopped. When you name one of your accounts as the payee,
+the transaction is linked to a matching row there. A rule that then rewrites
+the payee leaves it linked to nothing and the other account empty, while the
+reply announced the transfer, the matching row and what the movement did to
+your budget.
+
+A transfer that went somewhere else, or in more than one direction. A rule can
+point a transaction at a different account, and it can split one into parts
+that each move on their own. The reply named one account and described one
+movement. It describes each of them now, with the account each one reached and
+what it did to your budget.
+
+A category on a split. The reply said a category you asked for had not been
+applied; Actual copies it onto every part, so it is applied, and the parts are
+where it lives. The parts are read, and the reply says what each of them is
+filed under and which of those a rule chose.
+
+When the budget cannot be read back at all, the reply says that too, instead
+of letting the request pass for a description of what is there.
+
+`create_transactions` takes the figures in its transfer summary from the rows
+as well, lists separately the rows that asked to be transfers and did not
+become them, and ends with one line per row a rule changed. A batch nothing
+happened to reads exactly as it did before.
+
+### Deleting a rule shows you the rule (#186)
+
+`delete_rule` prints what it is about to delete so you can check it is the
+right one, and it printed the values as the engine stores them: an amount a
+hundred times larger than the figure it means, a schedule's recurrence as its
+stored configuration, and a payee as an id. The one thing that confirmation
+exists for was the part that could not be read.
+
+It now says it in the same words as `get_rules`, through the same code, so the
+two cannot describe one rule differently again. The warnings come with it:
+when the rule you are about to delete is one that breaks your imports, that is
+worth knowing before you decide.
+
+In both of them, quotes now mean one thing: this is the text your budget is
+holding. A figure, a true or false, a recurrence in words and the name an id
+stands for are printed as themselves. That puts a working rule and a broken
+one on different lines for the first time:
+
+    THEN set cleared = false        THEN set cleared = "false"
+    THEN set amount  = -5.50        THEN set amount  = "-5.50"
+    IF payee is Netflix             IF payee is "Netflix"
+
+The left column works. The right column is a rule that means the opposite of
+what it says, one that takes your next import down, and one that has never
+matched anything. All three used to print like the left.
+
+Two more things in the listing read properly now. A split action printed its
+operation twice with the figure in cents and nothing about which part it was
+for. A value written as a template printed as though the rule had none, since
+the stored value is empty and the engine reads the template instead.
+
+### Asking get_rules for fewer rules (#177)
+
+The listing is around 161 bytes a rule, so a budget with 1500 of them answered
+with 242 KB, which is a large part of an assistant's context spent on a list
+nobody reads all of.
+
+**If you have more than 100 rules, this changes the reply you get.** It
+returns the first 100, and says how many there are, where the next page
+starts, and how many of the rules it did not list carry a warning, so a page
+cannot bury one. With 100 rules or fewer and no arguments, the reply is the
+same as before, to the byte.
+
+Three ways to ask for less:
+
+- `flagged_only` gives the rules carrying a warning, wherever they are. This
+  is the only way to find the ones 0.10.5 learned to warn about.
+- `field` gives the rules that mention one field, such as payee, amount or
+  category.
+- `limit` and `offset` page through the rest.
+
+### What Actual does, which this cannot change
+
+Two things were measured against the engine while fixing the above, and
+neither is something this server can decide:
+
+- A rule that sets `account` does not move a new transaction. Actual writes
+  the account you sent over whatever the rule chose, so the transaction stays
+  where you put it. Such a rule does nothing on the way in.
+- Actual takes the category off a transfer whose two accounts are both inside
+  your budget, or both outside it, and it does so after the transaction is
+  written. A category on that kind of transfer is not kept, whatever you ask
+  for, and the reply says so rather than announcing one that is about to go.
+
+### Known, and not fixed here
+
+- `allow_duplicate` in a batch is still all or nothing. To let one legitimate
+  repeat through, it switches off the approximate checks for every row in the
+  call. The `imported_id` checks stay on. (#175)
+
 ## 0.10.5
 
 Rules again, and amounts. The thread running through it is a value saved as

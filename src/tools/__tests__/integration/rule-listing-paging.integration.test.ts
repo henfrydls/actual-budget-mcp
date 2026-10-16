@@ -105,7 +105,14 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     await budgetOf('paging-unseen', 20, [marked('poison'), marked('poison-two')]);
     const text = await getRules({ limit: 1 });
 
-    expect(text).toContain('2 of the 21 not listed carry a warning');
+    // Counted against the page rather than assumed: the order is the
+    // engine's, so which rule the page lands on is not this test's to decide,
+    // and asserting a fixed number made it pass or fail by luck.
+    const inPage = (text.match(/Actual keeps no transfer column/g) ?? []).length;
+    const unseen = 2 - inPage;
+    expect(text).toMatch(
+      new RegExp(`${unseen} of the 21 not listed carr(y|ies) a warning`),
+    );
     expect(text).toContain('Showing 1 to 1 of 22 rules.');
     // The arguments that got this page, so the next one can be asked for
     // without working out which of them to repeat.
