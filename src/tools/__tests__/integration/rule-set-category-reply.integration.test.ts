@@ -93,8 +93,9 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
     const text = lines.join('\n');
 
     // The sentence, not the word: the notes say "split-me", so /split/ passes
-    // whether or not the line is there at all.
-    expect(text).toContain('A rule split this into parts');
+    // whether or not the line is there at all. The count and what the part
+    // holds come from the part itself, which is where a split keeps them.
+    expect(text).toContain('A rule split this into 1 part, and it has no category.');
     expect(text, 'the parts hold the category, so naming one here would be wrong').not.toMatch(
       /set by one of your rules/,
     );
@@ -145,14 +146,21 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
   });
 
   it('still says the transaction was created when the lookup fails', async () => {
-    // The write has already happened by then. `getCategories` throwing landed
-    // in the catch that decides a failed write may not have been applied, so
-    // the reply said Error, skipped the sync, and the row was sitting in the
-    // budget with its category the whole time. Measured that way before the
-    // fix, with the read rejecting.
+    // The write has already happened by then. A throw from the read-back used
+    // to land in the catch that decides a failed write may not have been
+    // applied, so the reply said Error, skipped the sync, and the row was
+    // sitting in the budget with its category the whole time. Measured that
+    // way before the fix, with the read rejecting.
+    //
+    // It is `runQuery` that is broken here, which is the read the reply is
+    // built from. Breaking `getCategories` was what this did before, and the
+    // names now come back as joins inside that one query, so that version
+    // would have gone on passing while testing nothing. `allow_duplicate`
+    // keeps the break on the far side of the write: the duplicate check reads
+    // through the same function, and refusing there would never reach it.
     vi.mocked(api.sync).mockClear();
-    const real = api.getCategories;
-    (api as { getCategories: unknown }).getCategories = async () => {
+    const real = api.runQuery;
+    (api as { runQuery: unknown }).runQuery = async () => {
       throw new Error('database is locked');
     };
     try {
@@ -161,6 +169,7 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
         amount: -44,
         payee: 'Cinema',
         date: '2026-10-12',
+        allow_duplicate: true,
       } as never);
       const text = lines.join('\n');
 
@@ -178,7 +187,7 @@ describe.skipIf(skip)('what a rule did, in the reply', () => {
       // visible in the reply at all.
       expect(vi.mocked(api.sync), 'the write was not synced').toHaveBeenCalled();
     } finally {
-      (api as { getCategories: unknown }).getCategories = real;
+      (api as { runQuery: unknown }).runQuery = real;
     }
 
     // The row really is there, which is what made the old reply a lie.
