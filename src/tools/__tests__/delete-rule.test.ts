@@ -79,13 +79,35 @@ describe('deleteRuleGuarded', () => {
     vi.mocked(api.getPayees).mockRejectedValueOnce(new Error('database is locked'));
 
     const preview = await deleteRuleGuarded({ rule_id: 'r1' });
+    const text = preview.lines.join('\n');
 
     expect(preview.deleted).toBe(false);
-    expect(preview.lines.join('\n')).toContain('IF payee is "p1"');
-    expect(preview.lines.join('\n')).toContain('could not be read just now');
+    expect(text).toContain('IF payee is "p1"');
+    expect(text).toContain('could not be read just now');
+    // And it does not accuse the rule of anything. With an empty map and no
+    // way to tell a missing id from an unanswered question, every id in a
+    // healthy rule was marked as pointing at something that is no longer in
+    // the budget, which is the one fault whose advice is to delete the rule.
+    expect(text, 'nothing is known to be broken when nothing is known').not.toMatch(/warning:/);
 
     const result = await deleteRuleGuarded({ rule_id: 'r1', confirm: true });
     expect(result.deleted).toBe(true);
+  });
+
+  it('says nothing about names for a rule that holds no ids', async () => {
+    vi.mocked(api.getPayees).mockRejectedValueOnce(new Error('database is locked'));
+    vi.mocked(api.getRules).mockResolvedValue([
+      {
+        id: 'r3',
+        stage: 'default',
+        conditions: [{ field: 'notes', op: 'is', value: 'rent' }],
+        actions: [{ field: 'notes', op: 'set', value: 'seen' }],
+      },
+    ] as never);
+
+    const preview = await deleteRuleGuarded({ rule_id: 'r3' });
+
+    expect(preview.lines.join('\n')).not.toContain('could not be read just now');
   });
 
   it('says what is wrong with the rule it is about to delete', async () => {

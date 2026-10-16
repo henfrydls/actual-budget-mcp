@@ -17,6 +17,7 @@ const names: RuleNames = {
     ['c1', 'Fun'],
   ]),
   schedules: new Map([['s1', 'Rent']]),
+  known: true,
 };
 
 /**
@@ -64,6 +65,30 @@ describe('a rule value, as the person who wrote it would read it', () => {
 
   it('escapes a quote inside a value, so one value cannot read as two', () => {
     expect(readable(names, 'notes', 'a", "b')).toBe('"a\\", \\"b"');
+  });
+
+  it('quotes a name that would read as something else', () => {
+    // A name goes bare, which is what tells a payee apart from a rule holding
+    // the text of one. A payee called `true` or `123` would then read as a
+    // boolean or a figure, so those few get the quotes back.
+    const odd: RuleNames = {
+      byId: new Map([
+        ['p1', 'true'],
+        ['p2', '123'],
+        ['p3', '(none)'],
+        ['p4', '"Netflix"'],
+        ['p5', 'Jo"e'],
+      ]),
+      schedules: new Map(),
+      known: true,
+    };
+    expect(readable(odd, 'payee', 'p1')).toBe('"true"');
+    expect(readable(odd, 'payee', 'p2')).toBe('"123"');
+    expect(readable(odd, 'payee', 'p3')).toBe('"(none)"');
+    expect(readable(odd, 'payee', 'p4')).toBe('"\\"Netflix\\""');
+    // An ordinary name with a quote in the middle reads as nothing else, so
+    // it is left alone.
+    expect(readable(odd, 'payee', 'p5')).toBe('Jo"e');
   });
 
   it('tells nothing apart from the empty text, which is a value', () => {

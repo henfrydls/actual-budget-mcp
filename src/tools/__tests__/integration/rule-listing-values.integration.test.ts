@@ -58,7 +58,20 @@ describe.skipIf(skip)('what a rule value looks like in the listing', () => {
         { op: 'set-split-amount', value: 50, options: { splitIndex: 1, method: 'fixed-percent' } },
         { op: 'set-split-amount', value: 0, options: { splitIndex: 2, method: 'remainder' } },
         { op: 'set-split-amount', value: 2500, options: { splitIndex: 3, method: 'fixed-amount' } },
+        // The two a split value used to print through `String()`: nothing at
+        // all, and the text of a figure.
+        { op: 'set-split-amount', value: null, options: { splitIndex: 4, method: 'fixed-amount' } },
+        { op: 'set-split-amount', value: '12.50', options: { splitIndex: 5, method: 'fixed-amount' } },
+        // A percentage written as text, which is the same fault one method
+        // along and printed as though it were a number.
+        { op: 'set-split-amount', value: '50', options: { splitIndex: 6, method: 'fixed-percent' } },
       ],
+    );
+    // An empty template is not a template: the engine falls through to the
+    // stored value, and the warning under this line says so.
+    await rule(
+      [{ op: 'is', field: 'notes', value: 'e' }],
+      [{ op: 'set', field: 'cleared', value: 'yes', options: { template: '' } }],
     );
     // A note holding a quote, which could be read as two values.
     await rule([{ op: 'is', field: 'notes', value: 'a", "b' }], [{ op: 'set', field: 'notes', value: 'z' }]);
@@ -99,6 +112,22 @@ describe.skipIf(skip)('what a rule value looks like in the listing', () => {
     expect(text).toContain('THEN set-split-amount = what is left (split 2)');
     expect(text).toContain('THEN set-split-amount = 25.00 (split 3)');
     expect(text).not.toContain('set-split-amount set-split-amount');
+  });
+
+  it('reads a split value the way every other value is read', () => {
+    // This was the one value printed with `String()`, so nothing came out as
+    // the word `null` and the text of a figure came out as a figure.
+    expect(text).toContain('THEN set-split-amount = (none) (split 4)');
+    expect(text).toContain('THEN set-split-amount = "12.50" (split 5)');
+    expect(text).toContain('THEN set-split-amount = "50"% of what is left (split 6)');
+  });
+
+  it('does not call an empty template a template', () => {
+    // The warning underneath goes by the same truth test, so this said the
+    // value came from a template while the warning said the stored value is
+    // what applies.
+    expect(text).toContain('THEN set cleared = "yes"');
+    expect(text).not.toContain('the template ""');
   });
 
   it('escapes a quote in a value, so one value cannot read as two', () => {

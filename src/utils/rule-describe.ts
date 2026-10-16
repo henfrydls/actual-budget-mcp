@@ -28,6 +28,17 @@ export interface RuleNames {
   byId: Map<string, string>;
   /** Schedule ids, which only `link-schedule` carries. */
   schedules: Map<string, string>;
+  /**
+   * Whether these are the budget's names or a stand-in for names that could
+   * not be read.
+   *
+   * It decides whether an id this cannot resolve is a broken rule or an
+   * unanswered question. With an empty map and no way to tell them apart,
+   * every id in a healthy rule was marked as pointing at something that is no
+   * longer in the budget, and that is the sentence someone reads while
+   * deciding whether to delete the rule.
+   */
+  known: boolean;
 }
 
 /**
@@ -66,7 +77,7 @@ export async function loadRuleNames(): Promise<RuleNames> {
     // budget with no schedules reaches here with nothing to lose.
   }
 
-  return { byId, schedules };
+  return { byId, schedules, known: true };
 }
 
 /**
@@ -143,7 +154,7 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
     // matching anything. The quotes are what tell the two apart on the line
     // itself.
     const named = ID_FIELDS.has(field) ? names.byId.get(text) : undefined;
-    if (named !== undefined) return named;
+    if (named !== undefined) return confusable(named) ? JSON.stringify(named) : named;
     // `JSON.stringify` rather than a pair of quotes, so a value holding one
     // is escaped instead of closing the pair early.
     return JSON.stringify(text);
@@ -152,6 +163,32 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
     return value.length === 0 ? '(empty list)' : value.map(one).join(', ');
   }
   return one(value);
+}
+
+/**
+ * Whether a name would read as one of the other things this listing prints.
+ *
+ * A name goes without quotes, which is what tells a payee apart from a rule
+ * holding the text of one. A payee called `true`, `123` or `(none)` would
+ * then read as a boolean, a figure or an absent value, and one whose name
+ * begins with a quote would read as the broken kind. Those few get the quotes
+ * and the escaping back, which is the smaller surprise: a name that needs
+ * them is already unusual.
+ *
+ * The list is the forms this listing uses for something other than text, so
+ * it is enumerable rather than a guess. What it does not cover is a name
+ * holding the separator a list uses, since every separator can appear in a
+ * name and bracketing every value costs more than the case is worth.
+ */
+function confusable(name: string): boolean {
+  return (
+    name === '(none)' ||
+    name === '(empty list)' ||
+    name === 'true' ||
+    name === 'false' ||
+    name.startsWith('"') ||
+    /^-?[\d,]*\d(\.\d+)?$/.test(name)
+  );
 }
 
 /**
@@ -164,6 +201,10 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
  */
 function brokenValues(names: RuleNames, field: string, value: unknown): string[] {
   if (!ID_FIELDS.has(field)) return [];
+  // Nothing is known to be broken when nothing is known. Marking every id as
+  // missing because the lookup failed accuses healthy rules of the one fault
+  // whose advice is to delete them.
+  if (!names.known) return [];
   const list = Array.isArray(value) ? value : [value];
   return (
     list
@@ -338,15 +379,21 @@ function describeBroken(names: RuleNames, field: string, bad: string[]): string 
  * stored, without being renumbered into something that reads like a position
  * the app would show.
  */
-function describeSplitAmount(action: { value?: unknown; options?: unknown }): string {
+function describeSplitAmount(
+  names: RuleNames,
+  action: { value?: unknown; options?: unknown },
+): string {
   const options = action.options as { method?: unknown; splitIndex?: unknown } | undefined;
   const part = typeof options?.splitIndex === 'number' ? ` (split ${options.splitIndex})` : '';
   if (options?.method === 'remainder') return `set-split-amount = what is left${part}`;
   if (options?.method === 'fixed-percent') {
-    return `set-split-amount = ${String(action.value)}% of what is left${part}`;
+    // Through `readable` like every other value, with a field that is in no
+    // set, so a percentage written as text keeps its quotes and nothing is
+    // read as money. This was the one value printed with `String()`, which
+    // showed `null` as the word and the text of a figure as a figure.
+    return `set-split-amount = ${readable(names, 'set-split-amount', action.value)}% of what is left${part}`;
   }
-  const amount = typeof action.value === 'number' ? formatMoney(action.value) : String(action.value);
-  return `set-split-amount = ${amount}${part}`;
+  return `set-split-amount = ${readable(names, 'amount', action.value)}${part}`;
 }
 
 /** One rule, written out, with whatever is wrong with it said beside it. */
@@ -359,6 +406,8 @@ export interface DescribedRule {
   conditionsOp: string;
   /** How many lines carry a warning. */
   flagged: number;
+  /** Whether anything in the rule is stored as an id, and so needs a name. */
+  usesIds: boolean;
   /** Which kinds of warning were given, for whatever closes the reply. */
   kinds: Set<string>;
 }
@@ -381,6 +430,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
   };
   const conditionLines: string[] = [];
   const actionLines: string[] = [];
+  let usesIds = false;
   let flagged = 0;
   const kinds = new Set<string>();
   const mark = (into: string[], kind: string, text: string) => {
@@ -395,6 +445,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // 4,500 or more is `gte 450000` with `outflow`. Printed without it, and
     // now with the figure formatted as money, it reads as a rule about income
     // (#182).
+    if (ID_FIELDS.has(cond.field)) usesIds = true;
     const options = cond.options as { inflow?: unknown; outflow?: unknown } | undefined;
     const flow = options?.outflow ? ' (outflow)' : options?.inflow ? ' (inflow)' : '';
     conditionLines.push(
@@ -444,6 +495,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // operation twice: `THEN link-schedule link-schedule = "<id>"`. Its value
     // is a schedule, so it is named like one.
     if (!action.field && action.op === 'link-schedule') {
+      usesIds = true;
       const id = String(action.value ?? '');
       const named = names.schedules.get(id);
       // The name without quotes, the id with them, for the same reason every
@@ -456,20 +508,23 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // operation twice, with the figure in the smallest unit and nothing about
     // which part it is for: `set-split-amount set-split-amount = 5000`.
     if (!action.field && action.op === 'set-split-amount') {
-      actionLines.push(`  THEN ${describeSplitAmount(action)}`);
+      actionLines.push(`  THEN ${describeSplitAmount(names, action)}`);
       continue;
     }
     const field = action.field || action.op;
+    if (ID_FIELDS.has(field)) usesIds = true;
     // A value that comes from a template or a formula is not stored on the
     // action, so the line read `= (none)` and the rule looked broken. The
     // engine reads the template instead, so that is what the rule says.
     const written = action.options as { template?: unknown; formula?: unknown } | undefined;
-    const source =
-      typeof written?.template === 'string'
-        ? `the template ${JSON.stringify(written.template)}`
-        : typeof written?.formula === 'string'
-          ? `the formula ${JSON.stringify(written.formula)}`
-          : readable(names, field, action.value);
+    // The same truth test `hasOwnTemplate` uses, because the warning below
+    // goes by that one: an empty template is not a template, the engine falls
+    // through to the stored value, and this said the value came from one.
+    const source = written?.template
+      ? `the template ${JSON.stringify(String(written.template))}`
+      : written?.formula
+        ? `the formula ${JSON.stringify(String(written.formula))}`
+        : readable(names, field, action.value);
     actionLines.push(`  THEN ${action.op} ${field} = ${source}`);
     if (isEmptyList(action.value)) {
       mark(actionLines, 'nothing', 'warning: an empty list sets nothing.');
@@ -522,6 +577,7 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     actions: actionLines,
     stage: detail.stage || 'default',
     conditionsOp: detail.conditionsOp || 'and',
+    usesIds,
     flagged,
     kinds,
   };

@@ -57,7 +57,7 @@ export async function deleteRuleGuarded(
   // cannot be read is a budget whose rules can still be deleted, and throwing
   // would leave the caller unable to remove a rule because of the lookup that
   // was only there to name it.
-  let names: RuleNames = { byId: new Map(), schedules: new Map() };
+  let names: RuleNames = { byId: new Map(), schedules: new Map(), known: false };
   let namesFailed = false;
   try {
     names = await loadRuleNames();
@@ -73,7 +73,7 @@ export async function deleteRuleGuarded(
     losses: [
       `    Stage: ${described.stage} | Conditions: ${described.conditionsOp}`,
       ...[...described.conditions, ...described.actions].map((line) => `  ${line}`),
-      ...(namesFailed
+      ...(namesFailed && described.usesIds
         ? [
             '    The names behind these ids could not be read just now, so the ids are shown',
             '    as they are stored.',
