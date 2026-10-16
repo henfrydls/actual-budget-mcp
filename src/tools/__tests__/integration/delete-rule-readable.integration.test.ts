@@ -39,7 +39,7 @@ function listing(): Handler {
  * engine stores them: an amount a hundred times larger than the figure it
  * means, a recurrence as its stored config, and a payee as a uuid. The one
  * reply someone says yes to before a rule is gone was the part that could not
- * be read, while `get_rules` had been translating all three since 0.10.4.
+ * be read, while `get_rules` had been translating all three since 0.10.5.
  *
  * Written against rules the engine itself wrote for a schedule, because all
  * three shapes are the engine's.

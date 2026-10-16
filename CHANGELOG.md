@@ -12,7 +12,7 @@ about it was wrong, or was too much to use.
 
 Actual runs your rules on every transaction it takes in, so the row that lands
 can differ from the one you sent. The reply repeated the request, except for
-one line: the category, which has read the row since 0.10.4. One sentence
+one line: the category, which has read the row since 0.10.5. One sentence
 spoke for the budget and the rest spoke for you, with nothing to say which was
 which.
 

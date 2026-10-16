@@ -148,7 +148,7 @@ export function listChanges(changes: RuleChanges): RuleChange[] {
  * What to put after a value a rule decided, and nothing at all after one the
  * caller chose.
  *
- * The wording follows the category line, which has said this since 0.10.4: a
+ * The wording follows the category line, which has said this since 0.10.5: a
  * rule's choice is something that happened to the transaction, not something
  * that was asked for, and a rule can be wrong.
  */
