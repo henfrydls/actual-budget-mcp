@@ -509,10 +509,11 @@ export function registerCreateRule(server: McpServer): void {
           'Field to set: category, payee, payee_name, notes, account, amount, date, ' +
             'imported_payee, cleared, reconciled. Not category_group, which does nothing, ' +
             'and not transfer, parent or saved, which make every import that matches the ' +
-            'rule fail as a whole. Setting ' +
-            'account moves the transaction, which a later import of the same movement ' +
-            'does not recognise, so ' +
-            'a bank sync can leave a duplicate; a row moved off budget also loses its ' +
+            'rule fail as a whole. Setting account moves a transaction that arrives ' +
+            'through a file import or a bank sync, and one you apply the rule to by hand, ' +
+            'but not one recorded through this server, which keeps the account it was ' +
+            'given. A later import of the same movement does not recognise the moved row, ' +
+            'so a bank sync can leave a duplicate; a row moved off budget also loses its ' +
             'category.',
         ),
       action_value: RULE_VALUE.describe(

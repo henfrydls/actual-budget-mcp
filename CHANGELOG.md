@@ -112,9 +112,18 @@ Three ways to ask for less:
 Two things were measured against the engine while fixing the above, and
 neither is something this server can decide:
 
-- A rule that sets `account` does not move a new transaction. Actual writes
-  the account you sent over whatever the rule chose, so the transaction stays
-  where you put it. Such a rule does nothing on the way in.
+- A rule that sets `account` depends on how the transaction arrives, which
+  nothing said before. Measured on all three routes: a transaction recorded
+  through this server stays in the account you named, because Actual writes
+  that account over whatever the rule chose; one that arrives through a file
+  import or a bank sync is moved by the rule; and so is one you apply the rule
+  to by hand. So such a rule is not idle, it just does nothing to what this
+  server writes, and the replies here are right to keep naming the account
+  they were given.
+
+  The note in `create_rule` has warned since 0.10.4 that moving a transaction
+  this way can leave a duplicate after a later import. That warning is about
+  the import route and it stands; it now says which route it is about.
 - Actual takes the category off a transfer whose two accounts are both inside
   your budget, or both outside it, and it does so after the transaction is
   written. A category on that kind of transfer is not kept, whatever you ask

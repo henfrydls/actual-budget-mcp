@@ -337,9 +337,10 @@ export async function createTransaction(input: CreateTransactionInput): Promise<
 
   // The account is not among them, and not by omission: `addTransactions`
   // writes the account argument over whatever the rules left, so a rule
-  // cannot move a new transaction elsewhere. An integration test holds the
-  // engine to that, and if it ever goes red the account has to start being
-  // read off the row like everything else.
+  // cannot move a transaction written through here. It does move one that
+  // arrives through an import or a bank sync, which is a different route and
+  // has its own test. If the one for this route ever goes red, the account
+  // has to start being read off the row like everything else.
 
   // The two the reply opens with, read off the row.
   const shownDate = saved?.date ?? txnDate;

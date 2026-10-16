@@ -15,12 +15,14 @@ import type { SavedRow } from './write-marker.js';
  *  - `set amount`, `set date`, `set payee`, `set cleared`, `set notes`,
  *    `prepend-notes` and `append-notes` all land before the row is saved, so
  *    the first read after the write already shows them.
- *  - `set account` does not. `addTransactions` builds the row it inserts as
- *    `{ id, ...trans, account: acctId }`, so the account argument is written
- *    over whatever the rule chose, and a transaction cannot be moved to
- *    another account on the way in. That is the engine's doing and not a
- *    coincidence, so there is no account comparison here; an integration test
- *    holds the engine to it.
+ *  - `set account` does not, on this route. `addTransactions` builds the row
+ *    it inserts as `{ id, ...trans, account: acctId }`, so the account
+ *    argument is written over whatever the rule chose. That is the engine's
+ *    doing and not a coincidence, so there is no account comparison here.
+ *    The rule is not idle, it just does nothing here: measured, the same rule
+ *    moves a transaction that arrives through an import or a bank sync, and
+ *    one it is applied to by hand. An integration test holds the engine to
+ *    all three.
  */
 export interface AskedRow {
   date: string;
