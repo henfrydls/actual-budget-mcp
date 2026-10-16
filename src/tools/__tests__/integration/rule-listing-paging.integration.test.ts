@@ -105,19 +105,24 @@ describe.skipIf(skip)('asking get_rules for fewer rules', () => {
     await budgetOf('paging-unseen', 20, [marked('poison'), marked('poison-two')]);
     const text = await getRules({ limit: 1 });
 
-    // Counted against the page rather than assumed: the order is the
-    // engine's, so which rule the page lands on is not this test's to decide,
-    // and asserting a fixed number made it pass or fail by luck.
+    // Read out of the reply and checked against the page, rather than
+    // assumed: the order is the engine's, so which rule a page of one lands
+    // on is not this test's to decide. Asserting a fixed number made it pass
+    // or fail by luck, and so did asserting the plural after fixing the
+    // number, which is how this got through twice.
+    const said = text.match(/(\d+) of the 21 not listed (carry|carries) a warning/);
+    expect(said, 'the line about what is not listed has to be there').not.toBeNull();
+    const unseen = Number(said![1]);
     const inPage = (text.match(/Actual keeps no transfer column/g) ?? []).length;
-    const unseen = 2 - inPage;
-    expect(text).toMatch(
-      new RegExp(`${unseen} of the 21 not listed carr(y|ies) a warning`),
+    expect(unseen + inPage, 'every marked rule is either in the page or not').toBe(2);
+    expect(said![2]).toBe(unseen === 1 ? 'carries' : 'carry');
+    expect(text).toContain(
+      `Pass flagged_only: true to see ${unseen === 1 ? 'it' : 'them'}`,
     );
     expect(text).toContain('Showing 1 to 1 of 22 rules.');
     // The arguments that got this page, so the next one can be asked for
     // without working out which of them to repeat.
     expect(text).toContain('with limit: 1.');
-    expect(text).toContain('Pass flagged_only: true to see them');
   }, 120_000);
 
   it('does not offer the marked ones to someone already asking for them', async () => {
