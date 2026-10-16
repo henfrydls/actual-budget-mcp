@@ -72,12 +72,21 @@ export async function loadRuleNames(): Promise<RuleNames> {
 /**
  * A stored value, as the person who wrote the rule would recognise it.
  *
- * Quotes mean one thing: the budget is holding text. A figure, a true or
- * false and a recurrence are printed as themselves, and `"-5.55"` beside
- * `-5.55` is the difference between a rule that works and one that takes the
- * next import down (#183, #185). The quotes used to go round everything, so
- * the listing showed both the same way and the only tool that told them apart
- * was the one nobody reads.
+ * Quotes mean one thing: this is the text the budget is holding, printed back
+ * as it is. Everything that stands for something else goes without them: a
+ * figure, a true or false, a recurrence in words, the name an id resolves to,
+ * and the two words for a value that is not there.
+ *
+ * That is the whole point of the rule rather than a matter of taste. `"-5.55"`
+ * beside `-5.55` is a rule that takes the next import down beside one that
+ * works (#183), `"false"` beside `false` is a rule that means the opposite of
+ * what it says (#185), and `"Netflix"` beside `Netflix` is a payee that was
+ * never saved as one beside a payee that was. The quotes used to go round
+ * everything, so each pair printed the same way and only the warning
+ * underneath told them apart.
+ *
+ * The text is escaped, so a note holding a quote cannot be read as two
+ * values: `a", "b` and the list of `a` and `b` printed identically.
  *
  * Lists as well as single values: `oneOf` holds an array, and printing it raw
  * was a row of UUIDs separated by commas.
@@ -88,7 +97,13 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
     // matches transactions with no category, and printing it as the word
     // "null" reads like a value someone typed by mistake. Not quoted: it
     // stands for the absence of a value rather than for one.
-    if (v === null || v === undefined || v === '') return '(none)';
+    //
+    // The empty string is not that. It is text, and it is the stored value of
+    // two broken rules: `set amount = ""` takes the next import down and
+    // `set cleared = ""` means false. Printing it as `(none)` put it on the
+    // same line as `null`, which on `amount` sets every matching transaction
+    // to zero instead, and only the warning underneath said which was which.
+    if (v === null || v === undefined) return '(none)';
 
     // An amount is stored the way every amount is stored, as an integer in
     // the smallest unit, and it was printed raw: a rule on a rent of 4,500
@@ -120,7 +135,18 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
     if (typeof v === 'object') return JSON.stringify(v);
 
     const text = String(v);
-    return `"${ID_FIELDS.has(field) ? (names.byId.get(text) ?? text) : text}"`;
+    // An id the budget answers to is printed as the thing it names, without
+    // quotes, because the name stands for something rather than being the
+    // stored text. One it does not answer to is the stored text and nothing
+    // more, which is exactly what #167 and #170 left behind: a rule holding
+    // the name where the id belongs, reading perfectly well and never
+    // matching anything. The quotes are what tell the two apart on the line
+    // itself.
+    const named = ID_FIELDS.has(field) ? names.byId.get(text) : undefined;
+    if (named !== undefined) return named;
+    // `JSON.stringify` rather than a pair of quotes, so a value holding one
+    // is escaped instead of closing the pair early.
+    return JSON.stringify(text);
   };
   if (Array.isArray(value)) {
     return value.length === 0 ? '(empty list)' : value.map(one).join(', ');
@@ -301,6 +327,28 @@ function describeBroken(names: RuleNames, field: string, bad: string[]): string 
   );
 }
 
+/**
+ * A split action, which carries no field and whose value means three
+ * different things.
+ *
+ * Read from the engine: `fixed-percent` takes that percentage of what is left
+ * after the fixed amounts, `remainder` divides what is left between the
+ * actions that ask for it, and anything else sets the amount outright, in the
+ * smallest unit like every other amount. The index is printed as it is
+ * stored, without being renumbered into something that reads like a position
+ * the app would show.
+ */
+function describeSplitAmount(action: { value?: unknown; options?: unknown }): string {
+  const options = action.options as { method?: unknown; splitIndex?: unknown } | undefined;
+  const part = typeof options?.splitIndex === 'number' ? ` (split ${options.splitIndex})` : '';
+  if (options?.method === 'remainder') return `set-split-amount = what is left${part}`;
+  if (options?.method === 'fixed-percent') {
+    return `set-split-amount = ${String(action.value)}% of what is left${part}`;
+  }
+  const amount = typeof action.value === 'number' ? formatMoney(action.value) : String(action.value);
+  return `set-split-amount = ${amount}${part}`;
+}
+
 /** One rule, written out, with whatever is wrong with it said beside it. */
 export interface DescribedRule {
   /** The `IF` lines, each followed by its warning when it has one. */
@@ -397,11 +445,32 @@ export function describeRule(rule: unknown, names: RuleNames): DescribedRule {
     // is a schedule, so it is named like one.
     if (!action.field && action.op === 'link-schedule') {
       const id = String(action.value ?? '');
-      actionLines.push(`  THEN link-schedule = "${names.schedules.get(id) ?? id}"`);
+      const named = names.schedules.get(id);
+      // The name without quotes, the id with them, for the same reason every
+      // other value follows: one stands for a schedule in the budget and the
+      // other is the text that is stored.
+      actionLines.push(`  THEN link-schedule = ${named ?? JSON.stringify(id)}`);
+      continue;
+    }
+    // A split action carries no field either, and `field || op` printed the
+    // operation twice, with the figure in the smallest unit and nothing about
+    // which part it is for: `set-split-amount set-split-amount = 5000`.
+    if (!action.field && action.op === 'set-split-amount') {
+      actionLines.push(`  THEN ${describeSplitAmount(action)}`);
       continue;
     }
     const field = action.field || action.op;
-    actionLines.push(`  THEN ${action.op} ${field} = ${readable(names, field, action.value)}`);
+    // A value that comes from a template or a formula is not stored on the
+    // action, so the line read `= (none)` and the rule looked broken. The
+    // engine reads the template instead, so that is what the rule says.
+    const written = action.options as { template?: unknown; formula?: unknown } | undefined;
+    const source =
+      typeof written?.template === 'string'
+        ? `the template ${JSON.stringify(written.template)}`
+        : typeof written?.formula === 'string'
+          ? `the formula ${JSON.stringify(written.formula)}`
+          : readable(names, field, action.value);
+    actionLines.push(`  THEN ${action.op} ${field} = ${source}`);
     if (isEmptyList(action.value)) {
       mark(actionLines, 'nothing', 'warning: an empty list sets nothing.');
       continue;

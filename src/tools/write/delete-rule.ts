@@ -5,7 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
 import { requireConfirmation } from '../../utils/confirm.js';
 import { syncNow } from '../../utils/sync-clock.js';
-import { loadRuleNames, describeRule } from '../../utils/rule-describe.js';
+import { loadRuleNames, describeRule, type RuleNames } from '../../utils/rule-describe.js';
 
 export interface DeleteRuleInput {
   rule_id: string;
@@ -51,7 +51,19 @@ export async function deleteRuleGuarded(
   // coming, and a guard each tool re-implements is a guard the next tool
   // forgets, which is why `requireConfirmation` exists at all. Five local
   // reads on a tool nobody calls in a loop.
-  const names = await loadRuleNames();
+  //
+  // And a failure here degrades to ids rather than taking the delete with
+  // it. These reads exist to make the preview readable; a budget whose payees
+  // cannot be read is a budget whose rules can still be deleted, and throwing
+  // would leave the caller unable to remove a rule because of the lookup that
+  // was only there to name it.
+  let names: RuleNames = { byId: new Map(), schedules: new Map() };
+  let namesFailed = false;
+  try {
+    names = await loadRuleNames();
+  } catch {
+    namesFailed = true;
+  }
   const described = describeRule(rule, names);
 
   const confirmation = requireConfirmation({
@@ -61,6 +73,12 @@ export async function deleteRuleGuarded(
     losses: [
       `    Stage: ${described.stage} | Conditions: ${described.conditionsOp}`,
       ...[...described.conditions, ...described.actions].map((line) => `  ${line}`),
+      ...(namesFailed
+        ? [
+            '    The names behind these ids could not be read just now, so the ids are shown',
+            '    as they are stored.',
+          ]
+        : []),
     ],
     input,
   });

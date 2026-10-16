@@ -44,22 +44,35 @@ describe('a rule value, as the person who wrote it would read it', () => {
     expect(readable(names, 'cleared', 'false')).toBe('"false"');
   });
 
-  it('names an id and quotes the name, because a name is text', () => {
-    expect(readable(names, 'payee', 'p1')).toBe('"Cinema"');
-    // An id nothing answers to is printed as it is, which is what the warning
-    // beside it is about.
+  it('names an id without quotes, and quotes text that is not one', () => {
+    // The name stands for something in the budget, so it is not the stored
+    // text. A value the budget does not answer to is the stored text and
+    // nothing more, which is what #167 and #170 left behind: a rule holding
+    // the name where the id belongs, reading perfectly well and never
+    // matching anything. On the line itself, the quotes are what tell them
+    // apart.
+    expect(readable(names, 'payee', 'p1')).toBe('Cinema');
+    expect(readable(names, 'payee', 'Cinema')).toBe('"Cinema"');
     expect(readable(names, 'payee', 'p9')).toBe('"p9"');
   });
 
-  it('quotes each value in a list, not the list', () => {
+  it('reads each value in a list on its own', () => {
     // `"Cinema, Theatre"` reads as one payee with a comma in its name.
-    expect(readable(names, 'payee', ['p1', 'p2'])).toBe('"Cinema", "Theatre"');
+    expect(readable(names, 'payee', ['p1', 'p2'])).toBe('Cinema, Theatre');
+    expect(readable(names, 'payee', ['p1', 'Spotify'])).toBe('Cinema, "Spotify"');
   });
 
-  it('says nothing and an empty list in words, and does not quote either', () => {
-    // Neither is a value, so quoting them reads as text somebody typed.
+  it('escapes a quote inside a value, so one value cannot read as two', () => {
+    expect(readable(names, 'notes', 'a", "b')).toBe('"a\\", \\"b"');
+  });
+
+  it('tells nothing apart from the empty text, which is a value', () => {
+    // `null` and `""` are two different broken rules: on `amount` the first
+    // sets every matching transaction to zero and the second takes the next
+    // import down. They printed the same line.
     expect(readable(names, 'category', null)).toBe('(none)');
-    expect(readable(names, 'category', '')).toBe('(none)');
+    expect(readable(names, 'category', undefined)).toBe('(none)');
+    expect(readable(names, 'notes', '')).toBe('""');
     expect(readable(names, 'payee', [])).toBe('(empty list)');
   });
 

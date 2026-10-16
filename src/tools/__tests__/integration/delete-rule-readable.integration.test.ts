@@ -48,6 +48,8 @@ describe.skipIf(skip)('what delete_rule shows before deleting', () => {
   let accountId = '';
   let payeeId = '';
   let categoryId = '';
+  let markedRuleId = '';
+  let scheduleRuleId = '';
 
   beforeAll(async () => {
     await initTestEngine();
@@ -83,6 +85,29 @@ describe.skipIf(skip)('what delete_rule shows before deleting', () => {
         { op: 'is', field: 'amount', value: -450000 },
       ],
     } as never);
+
+    // The rule Actual wrote for that schedule, caught before anything else
+    // is created, since the order rules come back in is not this test's to
+    // assume.
+    scheduleRuleId = (await api.getRules())[0].id;
+
+    // One rule carrying warnings as well as values, for the comparison
+    // below: a rule with nothing wrong with it would not test that the
+    // warnings travel with the lines.
+    markedRuleId = (
+      (await api.createRule({
+        stage: null,
+        conditionsOp: 'and',
+        conditions: [
+          { op: 'contains', field: 'payee', value: 'Land' },
+          { op: 'is', field: 'amount', value: -450000 },
+        ],
+        actions: [
+          { op: 'set', field: 'cleared', value: 'false' },
+          { op: 'set', field: 'notes', value: 'seen' },
+        ],
+      } as never)) as unknown as { id: string }
+    ).id;
   }, 60_000);
 
   afterAll(async () => {
@@ -96,34 +121,41 @@ describe.skipIf(skip)('what delete_rule shows before deleting', () => {
   }
 
   it('reads the rule back the way get_rules does, line for line', async () => {
-    // The strongest form this can take: the same lines, from the same code.
-    // Two tools describing one rule in two ways is what #185 found, where the
-    // listing said `false` and the confirmation said `"false"` about one
-    // stored value, and the one that looked right was wrong.
-    const rule = (await api.getRules())[0];
-    const text = await listing()();
-    const listed = text.content[0].text
-      .split('\n')
-      .filter((line) => line.startsWith('  IF ') || line.startsWith('  THEN '));
-    expect(listed.length, 'the schedule rule has conditions to compare').toBeGreaterThan(0);
+    // The strongest form this can take: the same lines, in the same order,
+    // from the same code. Two tools describing one rule in two ways is what
+    // #185 found, where the listing said `false` and the confirmation said
+    // `"false"` about one stored value, and the one that looked right was
+    // wrong.
+    //
+    // Compared as a block rather than line by line with `toContain`: that
+    // version asked only whether each line appeared somewhere, so it passed
+    // with the order shuffled, with a warning missing and with the
+    // indentation changed, which is most of what could go wrong.
+    const listed = (await listing()()).content[0].text.split('\n');
+    const from = listed.indexOf(`Rule: ${markedRuleId}`);
+    expect(from, 'the rule has to be in the listing to compare against').toBeGreaterThanOrEqual(0);
+    // Everything under its header until the blank line that ends the rule.
+    const body = listed.slice(from + 2, listed.indexOf('', from + 2));
+    expect(body.length, 'the schedule rule has lines to compare').toBeGreaterThan(3);
+    expect(
+      body.some((line) => line.includes('warning:')),
+      'a rule with no warning would not test that they travel with the lines',
+    ).toBe(true);
 
-    const preview = await previewOf(rule.id);
-    for (const line of listed) {
-      expect(preview).toContain(line.trim());
-    }
+    const preview = await previewOf(markedRuleId);
+    // Two spaces deeper, and nothing else different.
+    expect(preview).toContain(body.map((line) => `  ${line}`).join('\n'));
   });
 
   it('shows the amount as money, not as the integer the engine stores', async () => {
-    const rule = (await api.getRules())[0];
-    const preview = await previewOf(rule.id);
+    const preview = await previewOf(scheduleRuleId);
 
     expect(preview).toContain('-4,500.00');
     expect(preview, 'the stored integer is the figure times a hundred').not.toContain('-450000');
   });
 
   it('says when the schedule runs, instead of printing its stored config', async () => {
-    const rule = (await api.getRules())[0];
-    const preview = await previewOf(rule.id);
+    const preview = await previewOf(scheduleRuleId);
 
     expect(preview).toContain('every month, from 2026-11-01');
     expect(preview).not.toContain('weekendSolveMode');
@@ -131,11 +163,10 @@ describe.skipIf(skip)('what delete_rule shows before deleting', () => {
   });
 
   it('names the payee and the account instead of their ids', async () => {
-    const rule = (await api.getRules())[0];
-    const preview = await previewOf(rule.id);
+    const preview = await previewOf(scheduleRuleId);
 
-    expect(preview).toContain('"Landlord"');
-    expect(preview).toContain('"Checking"');
+    expect(preview).toContain('IF payee is Landlord');
+    expect(preview).toContain('IF account is Checking');
     expect(preview).not.toContain(payeeId);
     expect(preview).not.toContain(accountId);
   });

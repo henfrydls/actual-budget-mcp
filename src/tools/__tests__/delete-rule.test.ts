@@ -66,9 +66,26 @@ describe('deleteRuleGuarded', () => {
     const result = await deleteRuleGuarded({ rule_id: 'r1' });
     const text = result.lines.join('\n');
 
-    expect(text).toContain('IF payee is "Cinema"');
-    expect(text).toContain('THEN set category = "Fun"');
-    expect(text, 'the ids are what nobody can read').not.toMatch(/"p1"|"c1"/);
+    expect(text).toContain('IF payee is Cinema');
+    expect(text).toContain('THEN set category = Fun');
+    expect(text, 'the ids are what nobody can read').not.toMatch(/\bp1\b|\bc1\b/);
+  });
+
+  it('still deletes when the names cannot be read', async () => {
+    // The lookups are there to make the preview readable. A budget whose
+    // payees cannot be read is a budget whose rules can still be deleted, and
+    // throwing here left the caller unable to remove a rule because of a read
+    // that was only there to name it.
+    vi.mocked(api.getPayees).mockRejectedValueOnce(new Error('database is locked'));
+
+    const preview = await deleteRuleGuarded({ rule_id: 'r1' });
+
+    expect(preview.deleted).toBe(false);
+    expect(preview.lines.join('\n')).toContain('IF payee is "p1"');
+    expect(preview.lines.join('\n')).toContain('could not be read just now');
+
+    const result = await deleteRuleGuarded({ rule_id: 'r1', confirm: true });
+    expect(result.deleted).toBe(true);
   });
 
   it('says what is wrong with the rule it is about to delete', async () => {

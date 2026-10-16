@@ -182,8 +182,8 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
 
     const text = (await handlerFor()()).content[0].text;
 
-    expect(text).toContain('IF payee oneOf "Netflix", "Spotify"');
-    expect(text).toContain('THEN set category = "Fun"');
+    expect(text).toContain('IF payee oneOf Netflix, Spotify');
+    expect(text).toContain('THEN set category = Fun');
     // On the IF and THEN lines only: the rule's own id is on its header line
     // and belongs there, since delete_rule takes it.
     const conditionsAndActions = text
@@ -212,8 +212,8 @@ describe.skipIf(skip)('listing rules that compare text against an id', () => {
 
     const text = (await handlerFor()()).content[0].text;
 
-    expect(text).toContain('IF category_group is "Spending"');
-    expect(text).toContain('THEN set account = "Checking"');
+    expect(text).toContain('IF category_group is Spending');
+    expect(text).toContain('THEN set account = Checking');
   }, 60_000);
 
   it('marks a rule that holds a name where an id belongs', async () => {
