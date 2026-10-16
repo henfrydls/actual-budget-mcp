@@ -146,7 +146,7 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
   it('says when the schedule runs instead of [object Object]', async () => {
     const text = await listing();
     expect(text).not.toContain('[object Object]');
-    expect(text).toContain('IF date isapprox "every month, from 2026-11-01"');
+    expect(text).toContain('IF date isapprox every month, from 2026-11-01');
   });
 
   it('describes a weekly by the day it falls on, not by a pattern it ignores', async () => {
@@ -172,23 +172,23 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
     // Stored positive with `outflow` beside it, so "amount gte 4,500.00"
     // reads as a rule about income when it is about spending.
     const text = await listing();
-    expect(text).toContain('IF amount (outflow) gte "4,500.00"');
+    expect(text).toContain('IF amount (outflow) gte 4,500.00');
   });
 
   it('shows an amount as an amount', async () => {
     const text = await listing();
-    expect(text).toContain('IF amount is "-4,500.00"');
+    expect(text).toContain('IF amount is -4,500.00');
     expect(text, 'the raw integer should be gone').not.toContain('-450000');
   });
 
   it('shows both bounds of a range', async () => {
     const text = await listing();
-    expect(text).toContain('IF amount isbetween "-2,000.00 and -1,000.00"');
+    expect(text).toContain('IF amount isbetween -2,000.00 and -1,000.00');
   });
 
   it('names the schedule the rule links to, once', async () => {
     const text = await listing();
-    expect(text).toContain('THEN link-schedule = "Rent"');
+    expect(text).toContain('THEN link-schedule = Rent');
     expect(text, 'the operation was printed twice').not.toContain('link-schedule link-schedule');
   });
 
@@ -197,7 +197,12 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
     // The id is no use to the reader, but inventing a name would be worse,
     // and the rule's own conditions say what it is for.
     const text = await listing();
-    const links = [...text.matchAll(/THEN link-schedule = "([^"]+)"/g)].map((m) => m[1]);
+    // An id comes back quoted, because nothing in the budget answers to it;
+    // a name does not. The quotes are stripped here so the test can ask what
+    // the value is rather than how it is written.
+    const links = [...text.matchAll(/THEN link-schedule = (.+)/g)].map((m) =>
+      m[1].replace(/^"|"$/g, ''),
+    );
     expect(links).toHaveLength(3);
     expect(links).toContain('Rent');
     expect(links).toContain('Card payment');
@@ -209,8 +214,8 @@ describe.skipIf(skip)('listing a schedule rule (#182)', () => {
     // The rest of the line keeps working: a schedule rule holds ids in the
     // same fields as any other rule.
     const text = await listing();
-    expect(text).toContain('IF account is "Checking"');
-    expect(text).toContain('IF payee is "Landlord"');
+    expect(text).toContain('IF account is Checking');
+    expect(text).toContain('IF payee is Landlord');
   });
 
   it('marks nothing on a rule Actual wrote itself', async () => {

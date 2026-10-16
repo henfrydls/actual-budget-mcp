@@ -154,6 +154,15 @@ describe.skipIf(skip)('listing a rule that was saved broken (#185)', () => {
     await shutdownTestEngine();
   });
 
+  it('tells the word apart from the value on the line itself', () => {
+    // Both rules are in this budget: one stores the string "false" and one
+    // stores the boolean. The quotes used to go round every value, so the
+    // listing printed the two identically and only the warning underneath
+    // said which was which (#186).
+    expect(text).toContain('THEN set cleared = "false"');
+    expect(text).toContain('THEN set cleared = false');
+  });
+
   it('marks a word stored where Actual keeps true or false', () => {
     expect(text).toContain('this holds the word "false"');
     // The reading, not just the shape: this is the rule that marks

@@ -69,7 +69,8 @@ describe('listing rules with a part that cannot be worked out', () => {
     const text = reply.content[0].text;
 
     expect(reply.isError, 'losing a name is not an error').toBeFalsy();
-    expect(text).toContain('IF account is "Checking"');
+    expect(text).toContain('IF account is Checking');
+    // The id, quoted, because nothing in the budget answers to it.
     expect(text).toContain('THEN link-schedule = "sched-1"');
   });
 
@@ -119,6 +120,6 @@ describe('listing rules with a part that cannot be worked out', () => {
     getSchedules.mockResolvedValue([{ id: 'sched-1', name: 'Rent' }]);
 
     const text = (await handler()()).content[0].text;
-    expect(text).toContain('THEN link-schedule = "Rent"');
+    expect(text).toContain('THEN link-schedule = Rent');
   });
 });
