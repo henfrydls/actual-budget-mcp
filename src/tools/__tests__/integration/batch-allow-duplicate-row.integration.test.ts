@@ -98,6 +98,57 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
     expect(await rowsIn(cardId), 'the money would have gone in twice').toHaveLength(0);
   }, 60_000);
 
+  it('does not let a marked row take the transfer an unmarked one needed', async () => {
+    // A transfer accounts for one row, and the matching takes the nearest
+    // date. The marked row on the 12th is closer to the transfer than the
+    // unmarked one on the 13th, so it took the pairing, the unmarked row was
+    // never matched and never reported, and Card ended up with the transfer's
+    // leg, the marked row and the unmarked one: the last of those twice.
+    for (const order of ['marked first', 'unmarked first'] as const) {
+      await freshBudget(`allow-row-steals-${order.replace(/ /g, '-')}`);
+      const marked = {
+        account: 'Card',
+        amount: 600,
+        payee: 'Cashback',
+        date: '2026-10-12',
+        allow_duplicate: true,
+      };
+      const unmarked = { account: 'Card', amount: 600, payee: 'PAYMENT', date: '2026-10-13' };
+      const lines = await createTransactions({
+        transactions: [
+          { account: 'Checking', amount: -600, payee: 'Card', date: '2026-10-12' },
+          ...(order === 'marked first' ? [marked, unmarked] : [unmarked, marked]),
+        ],
+      } as never);
+      const text = lines.join('\n');
+
+      expect(text, `${order}: the unmarked row has to be reported`).toContain(
+        'Nothing was created.',
+      );
+      expect(text).toContain('is the other side of the transfer in row 1');
+      expect(await rowsIn(cardId), `${order}: nothing goes in`).toHaveLength(0);
+    }
+  }, 120_000);
+
+  it('tells a repeated transfer from one account apart from the pair of one movement', async () => {
+    // The key is the two accounts in the direction the money runs, so it
+    // catches the same movement written from each side, and it also catches
+    // the same transfer sent twice from one side. "Written from the other
+    // account" is false about the second, and sends somebody looking for a
+    // row that is not there.
+    await freshBudget('allow-row-same-side');
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -600, payee: 'Card', date: '2026-10-12' },
+        { account: 'Checking', amount: -600, payee: 'Card', date: '2026-10-12' },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('the same transfer, from the same account to the same one');
+    expect(text).not.toContain('written from the other account');
+  }, 60_000);
+
   it('lists every finding about a row it let through', async () => {
     // One finding per row is a rule about what to fix, and there is nothing
     // to fix on a row that is going in: the second thing found about it was
@@ -254,6 +305,37 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
     // One for the imported ids, then one per row the budget is still asked
     // about, which is two of the three.
     expect(queries).toBeLessThanOrEqual(3);
+  }, 60_000);
+
+  it('lists both the budget and the other account for one marked row', async () => {
+    // The budget check used to end the row's turn, so the one after it never
+    // ran: the note said the budget already had this, and said nothing about
+    // the transfer putting a second row in the other account as well.
+    await freshBudget('allow-row-both-findings');
+    await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -50, payee: 'Shop', date: '2026-10-01' },
+        { account: 'Card', amount: 50, payee: 'PAYMENT', date: '2026-10-01' },
+      ],
+    } as never);
+
+    const lines = await createTransactions({
+      transactions: [
+        {
+          account: 'Checking',
+          amount: -50,
+          payee: 'Card',
+          date: '2026-10-01',
+          allow_duplicate: true,
+        },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('already has a transaction on 2026-10-01');
+    expect(text).toContain('already has a transaction for');
+    // One line per finding, and there are at least these two.
+    expect((text.match(/^ {2}row 1 {2}/gm) ?? []).length).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
   it('says nothing about a flag on a row the checks found nothing about', async () => {
