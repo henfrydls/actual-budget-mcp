@@ -1,6 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as api from '@actual-app/api';
 import { refreshBudgetDecimalPlaces } from './currency.js';
-import { reauthenticate, type ReauthOutcome } from '../connection.js';
+import { reauthenticate, type Reauthentication } from '../connection.js';
 
 /**
  * When this process last managed to sync, in one place (#126).
@@ -23,12 +24,6 @@ import { reauthenticate, type ReauthOutcome } from '../connection.js';
 
 let lastGood: number | undefined;
 let lastTrouble: { at: number; error: unknown } | undefined;
-/** When this process last had to sign in again, for the reply to mention it. */
-let lastReauth: number | undefined;
-
-export function lastReauthentication(): number | undefined {
-  return lastReauth;
-}
 
 /** Record a sync that worked, which also clears any recorded failure. */
 export function markGoodSync(at: number = Date.now()): void {
@@ -53,7 +48,6 @@ export function lastFailedSync(): { at: number; error: unknown } | undefined {
 export function resetSyncClock(): void {
   lastGood = undefined;
   lastTrouble = undefined;
-  lastReauth = undefined;
 }
 
 /** What a sync did, for the caller that has to say something about it. */
@@ -65,7 +59,51 @@ export interface SyncOutcome {
   /** Whether it took signing in again to get there, which is worth saying. */
   reauthenticated?: boolean;
   /** Why signing in again did not happen or did not work. */
-  recovery?: ReauthOutcome;
+  recovery?: Reauthentication;
+}
+
+/**
+ * What the syncs of **one** tool call did, for that call's reply alone.
+ *
+ * The notice a write carries was first read off the process-wide clock, and
+ * that clock cannot say whose failure it is holding. Measured: a
+ * `create_transaction` that refused a duplicate and wrote nothing still
+ * answered "it did not reach the Actual server... Do not repeat the call",
+ * because an earlier call's sync had failed. Two calls in flight at once gave
+ * the same thing the other way round.
+ *
+ * So the question the notice asks is narrower than the clock can answer:
+ * *this* call, and only the sync it ran **after writing**. The pull a write
+ * does before its duplicate check is not that sync, and a call that refused
+ * everything never reaches one, which is why both now say nothing.
+ *
+ * `AsyncLocalStorage` carries it: the store follows the handler through its
+ * awaits, including across `queueTransactionWrite`, since the continuation is
+ * scheduled inside the handler's own context.
+ */
+export interface SyncScope {
+  /** The push after a write that failed, if one did. */
+  failure?: unknown;
+  /** Whether that push had to sign in again first. */
+  reauthenticated?: boolean;
+  /** Why signing in again did not happen or did not work. */
+  recovery?: Reauthentication;
+}
+
+const scopes = new AsyncLocalStorage<SyncScope>();
+
+/** Run a tool call with a scope of its own, and hand the scope back with it. */
+export async function withSyncScope<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; scope: SyncScope }> {
+  const scope: SyncScope = {};
+  const result = await scopes.run(scope, run);
+  return { result, scope };
+}
+
+/** What this call's own post-write sync did, if it ran one. */
+export function currentSyncScope(): SyncScope | undefined {
+  return scopes.getStore();
 }
 
 async function attempt(): Promise<SyncOutcome> {
@@ -124,8 +162,19 @@ async function attempt(): Promise<SyncOutcome> {
  * Signing in again is tried for one error and one only. `token-expired` is a
  * code on the error, not a sentence to match, which is what makes this safe
  * to hang a recovery on.
+ *
+ * `pulling` marks the syncs that run **before** anything is written, so the
+ * reply does not describe one of those as a write that stayed here: see
+ * `SyncScope`, which is where the answer to "did this call reach the server"
+ * is kept.
  */
-export async function syncNow(): Promise<SyncOutcome> {
+export async function syncNow(options: { pulling?: boolean } = {}): Promise<SyncOutcome> {
+  const outcome = await signInAndSync();
+  if (options.pulling !== true) record(outcome);
+  return outcome;
+}
+
+async function signInAndSync(): Promise<SyncOutcome> {
   const first = await attempt();
   if (first.ok) return first;
 
@@ -133,9 +182,24 @@ export async function syncNow(): Promise<SyncOutcome> {
   if (code !== 'token-expired') return first;
 
   const recovery = await reauthenticate();
-  if (recovery !== 'signed-in') return { ...first, recovery };
+  if (recovery.outcome !== 'signed-in') return { ...first, recovery };
 
-  lastReauth = Date.now();
   const second = await attempt();
   return { ...second, reauthenticated: true };
+}
+
+/**
+ * Keep the latest push in this call's scope, successes included.
+ *
+ * The latest and not the first: a sync pushes everything still pending, so a
+ * second one that worked did send what the first one left behind, and a reply
+ * saying otherwise would send the caller looking for a write that is already
+ * on the server.
+ */
+function record(outcome: SyncOutcome): void {
+  const scope = scopes.getStore();
+  if (scope === undefined) return;
+  scope.failure = outcome.ok ? undefined : outcome.error;
+  scope.recovery = outcome.recovery;
+  scope.reauthenticated = outcome.reauthenticated === true;
 }

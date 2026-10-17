@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeError } from '../errors.js';
+import { alreadyDescribed, describeError } from '../errors.js';
 
 describe('describeError (#40 never surface an empty error)', () => {
   it('returns the message of an ordinary error', () => {
@@ -68,5 +68,31 @@ describe('describeError (#40 never surface an empty error)', () => {
 
   it('still detects out-of-sync inside a thrown plain object', () => {
     expect(describeError({ reason: 'out-of-sync' })).toMatch(/repair_sync/);
+  });
+});
+
+/**
+ * A message that is already an explanation, described twice.
+ *
+ * `repair_sync` builds its own sentence around `describeError` and throws it;
+ * whatever catches it describes what it caught. Measured live against a
+ * disposable server with the session expired: Actual's own "unknown problem
+ * opening" inside the message sent the second pass down the branch for a
+ * server that is not answering, so the reply opened by telling the reader to
+ * check a server that had just answered.
+ */
+describe('alreadyDescribed', () => {
+  it('hands back the message instead of explaining it again', () => {
+    const once = describeError(
+      Object.assign(new Error('We had an unknown problem opening "b"'), { code: 'token-expired' }),
+    );
+
+    expect(describeError(alreadyDescribed(`Repair failed: ${once}`))).toBe(
+      `Repair failed: ${once}`,
+    );
+  });
+
+  it('describes an ordinary error as it always did', () => {
+    expect(describeError(new Error('plain'))).toBe('plain');
   });
 });

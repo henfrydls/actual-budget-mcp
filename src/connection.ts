@@ -1,6 +1,7 @@
 import * as api from '@actual-app/api';
 import type { ConnectionConfig } from './types.js';
 import {
+  activeDataDir,
   claimDataDir,
   forgetActiveDataDir,
   releaseDataDirLock,
@@ -463,7 +464,7 @@ async function warnIfServerIsOlder(): Promise<void> {
 const REAUTH_GAP_MS = 20 * 60_000;
 const REAUTH_MAX_PER_HOUR = 2;
 let reauthAt: number[] = [];
-let reauthenticating: Promise<ReauthOutcome> | null = null;
+let reauthenticating: Promise<Reauthentication> | null = null;
 
 export type ReauthOutcome =
   | 'signed-in'
@@ -474,6 +475,23 @@ export type ReauthOutcome =
   /** The server said the password is wrong. */
   | 'refused'
   | 'failed';
+
+/**
+ * What signing in again did, in enough detail to say it out loud.
+ *
+ * The outcome on its own was not enough. A write whose sync failed said the
+ * sign-in "was tried and did not work, or has been tried too recently",
+ * covering four cases at once, while this function knew which one it was:
+ * measured against a disposable server with the wrong password, the reply
+ * never once said the password had been refused.
+ */
+export interface Reauthentication {
+  outcome: ReauthOutcome;
+  /** What Actual answered when the sign-in itself failed. */
+  error?: unknown;
+  /** The earliest the next attempt is allowed, for `waiting`. */
+  nextAttemptAt?: number;
+}
 
 /** For tests: forget the attempts, as if the process had just started. */
 export function resetReauthClock(): void {
@@ -497,34 +515,54 @@ export function resetReauthClock(): void {
  * Measured too: signing in again does not pile up sessions on the server. The
  * row for a password login is reused, token and all, so four sign-ins leave
  * one session.
+ *
+ * And measured on an **encrypted** budget, because `api.init` reloads the
+ * global store and the encryption keys live in it: against a disposable
+ * server holding an end-to-end encrypted file, with the session expired, the
+ * write that followed the sign-in reached the server, and a third, clean data
+ * directory downloaded the file with the encryption password and read it
+ * back. The keys are written to `global-store.json` when the file is first
+ * decrypted, which is where the new store finds them.
  */
-export async function reauthenticate(): Promise<ReauthOutcome> {
+export async function reauthenticate(): Promise<Reauthentication> {
   if (reauthenticating) return reauthenticating;
 
   const config = getConfig();
-  if (config.sessionToken || !config.password) return 'no-password';
+  if (config.sessionToken || !config.password) return { outcome: 'no-password' };
 
   const now = Date.now();
   reauthAt = reauthAt.filter((at) => now - at < 60 * 60_000);
-  if (reauthAt.length >= REAUTH_MAX_PER_HOUR) return 'waiting';
-  if (reauthAt.length > 0 && now - reauthAt[reauthAt.length - 1] < REAUTH_GAP_MS) return 'waiting';
+  if (reauthAt.length >= REAUTH_MAX_PER_HOUR) {
+    // Both limits bind at once: the oldest attempt has to age out of the hour
+    // *and* the gap since the last one has to pass.
+    return {
+      outcome: 'waiting',
+      nextAttemptAt: Math.max(reauthAt[0] + 60 * 60_000, reauthAt[reauthAt.length - 1] + REAUTH_GAP_MS),
+    };
+  }
+  if (reauthAt.length > 0 && now - reauthAt[reauthAt.length - 1] < REAUTH_GAP_MS) {
+    return { outcome: 'waiting', nextAttemptAt: reauthAt[reauthAt.length - 1] + REAUTH_GAP_MS };
+  }
 
   reauthAt.push(now);
   reauthenticating = (async () => {
     try {
       await api.init({
-        // The directory this process claimed, not the configured one: #71 can
+        // The directory this process holds, not the configured one: #71 can
         // have stepped aside to a sibling, and signing in against the other
-        // one would open a second copy of the budget.
-        dataDir: claimedDataDir ?? config.dataDir,
+        // one would open a second copy of the budget. `activeDataDir` is
+        // where that answer already lives, and asking it is what keeps this
+        // from being a second opinion that can disagree.
+        dataDir: activeDataDir(),
         serverURL: config.serverURL,
         password: config.password,
       });
-      return 'signed-in' as const;
+      return { outcome: 'signed-in' as const };
     } catch (error) {
-      return errorCode(error) === 'invalid-password'
-        ? ('refused' as const)
-        : ('failed' as const);
+      return {
+        outcome: errorCode(error) === 'invalid-password' ? ('refused' as const) : ('failed' as const),
+        error,
+      };
     } finally {
       reauthenticating = null;
     }

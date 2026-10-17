@@ -79,7 +79,12 @@ export async function pullBeforeReading(what: string): Promise<void> {
   // What it does with it has not changed: warn and carry on. The check this
   // guards still sees everything this process wrote, and the write's own
   // sync is still to come and says for itself whether it reached the server.
-  const outcome = await syncNow();
+  //
+  // `pulling` is what keeps this out of that answer. Measured: a duplicate
+  // refused by the check that follows came back saying the write "did not
+  // reach the Actual server" and not to repeat the call, when there had been
+  // no write at all.
+  const outcome = await syncNow({ pulling: true });
   if (outcome.ok) return;
   // stderr: stdout carries JSON-RPC.
   console.error(

@@ -112,10 +112,17 @@ describe('a sync that failed being reported as a problem opening the budget', ()
       expect(described, 'a restart is not the remedy any more').not.toMatch(
         /restart it to sign in/i,
       );
-      // And it says so: the budget is fine. Actual's own sentence in front of
-      // this one is about a problem opening it, which is the one thing that
-      // did not happen.
+      // And it says so: the budget is fine. Actual's own sentence is about a
+      // problem opening it, which is the one thing that did not happen, so
+      // this is the one code where that sentence does not go in front. It is
+      // still there, as the detail, because someone searching for it or
+      // pasting it into an issue needs to find it.
       expect(described).toMatch(/budget itself is open/i);
+      expect(described, 'the explanation first, not the sentence it contradicts').not.toMatch(
+        /^Actual reported:/,
+      );
+      expect(described).toContain("Actual's own words:");
+      expect(described).toContain('unknown problem opening');
       expect(described).not.toMatch(/running and reachable/i);
       // Not the cached copy either: deleting it would cost a download and
       // change nothing.
