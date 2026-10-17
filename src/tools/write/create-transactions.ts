@@ -315,13 +315,19 @@ export async function createTransactions(input: {
     // One complaint per row, whichever check finds it first: two complaints
     // about one row read as two problems and send the reader looking for two
     // fixes.
-    const flagged = new Set<number>();
+    //
+    // Refused and noted are two sets, not one. A row that was only noted is
+    // still going in, so the checks that skip rows already reported must not
+    // skip it: with one set, a noted transfer stopped being paired with the
+    // ordinary row on the other side of it, and the money went into the
+    // budget twice under a reply that said nothing about it.
+    const refused = new Set<number>();
     const allowed: Array<{ index: number; found: string }> = [];
 
     /** A fault with no way round it, whatever the caller passed. */
     const refuse = (index: number, reason: string) => {
-      if (flagged.has(index)) return;
-      flagged.add(index);
+      if (refused.has(index)) return;
+      refused.add(index);
       problems.push({ index, reason });
     };
 
@@ -340,10 +346,15 @@ export async function createTransactions(input: {
      * like one without (#175).
      */
     const complain = (index: number, found: string, advice: string) => {
-      if (flagged.has(index)) return;
-      flagged.add(index);
-      if (byIndexAllowed(index)) allowed.push({ index, found });
-      else problems.push({ index, reason: `${found} ${advice}` });
+      // Every finding, for a row that is going in anyway. One per row is a
+      // rule about what to fix, and there is nothing to fix here.
+      if (byIndexAllowed(index)) {
+        allowed.push({ index, found });
+        return;
+      }
+      if (refused.has(index)) return;
+      refused.add(index);
+      problems.push({ index, reason: `${found} ${advice}` });
     };
     const allowedRows = new Set(resolved.filter((row) => row.allowDuplicate).map((r) => r.index));
     function byIndexAllowed(index: number): boolean {
@@ -406,10 +417,6 @@ export async function createTransactions(input: {
     // until now they could not arrive together. Measured: the engine writes
     // both.
     //
-    // Inside this branch, not before it: the message tells the caller to pass
-    // `allow_duplicate`, and for a turn that advice led nowhere, because the
-    // check ran either way and refused the batch again. A test asking for the
-    // way out is what found it.
     // Both halves of one movement, first. A pay-off read from two statements
     // arrives as `{Bank, -800, payee "Card"}` and `{Card, +800, payee
     // "Bank"}`, and each of those asks for both legs, so writing both put
@@ -431,7 +438,7 @@ export async function createTransactions(input: {
           `is row ${first + 1} again: the same movement between the same two accounts on ` +
             `the same day, written from the other account. One of them records both sides, ` +
             `so only one is needed.`,
-          'If these really are two separate movements, pass allow_duplicate.',
+          `If these really are two separate movements, set allow_duplicate on row ${row.index + 1}.`,
         );
       } else {
         pairs.set(key, row.index);
@@ -446,7 +453,7 @@ export async function createTransactions(input: {
         complain(
           row.index,
           `repeats row ${first + 1}: same account, date and amount.`,
-          'If both really happened, pass allow_duplicate.',
+          `If both really happened, set allow_duplicate on row ${row.index + 1}.`,
         );
       } else {
         seen.set(key, row.index);
@@ -477,7 +484,7 @@ export async function createTransactions(input: {
         transferTargetId: row.transfer?.targetId,
       })),
       COUNTERPART_WINDOW_DAYS,
-      flagged,
+      refused,
     )) {
       const transfer = byIndex.get(pair.transfer)!;
       const ordinary = byIndex.get(pair.ordinary)!;
@@ -487,11 +494,15 @@ export async function createTransactions(input: {
           `${formatMoney(Math.abs(transfer.amountCents))} on ${transfer.date} and writes ` +
           `the matching row in ${ordinary.accountName} itself, and this one records the ` +
           `same money on ${ordinary.date}. Keeping both puts it in twice.`,
-        'Drop this row, or pass allow_duplicate if they really are two movements.',
+        `Drop this row, or set allow_duplicate on row ${ordinary.index + 1} if they ` +
+          `really are two movements.`,
       );
     }
 
     for (const row of resolved) {
+      // Nothing is written when any row is refused, so asking the budget
+      // about one that already has a problem buys an answer nobody reads.
+      if (refused.has(row.index)) continue;
       const existing = await findPossibleDuplicates(
         row.accountId,
         row.date,
@@ -503,7 +514,7 @@ export async function createTransactions(input: {
           row.index,
           `${row.accountName} already has a transaction on ${row.date} for ` +
             `${formatMoney(row.amountCents)}.`,
-          'If this is a second one, pass allow_duplicate.',
+          `If this is a second one, set allow_duplicate on row ${row.index + 1}.`,
         );
         continue;
       }
@@ -530,8 +541,8 @@ export async function createTransactions(input: {
             `${formatMoney(-row.amountCents)} on ${when}, which is not part of a transfer. ` +
             `This row is dated ${row.date}, and the two sides of one movement are often a ` +
             `day apart. The transfer would put a second row there.`,
-          'If that is this same movement, already imported, drop this row; if it is a ' +
-            'different one, pass allow_duplicate.',
+          `If that is this same movement, already imported, drop this row; if it is a ` +
+            `different one, set allow_duplicate on row ${row.index + 1}.`,
         );
       }
     }

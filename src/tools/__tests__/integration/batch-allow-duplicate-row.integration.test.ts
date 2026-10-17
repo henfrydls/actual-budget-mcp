@@ -24,6 +24,7 @@ const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
  */
 describe.skipIf(skip)('allow_duplicate on one row', () => {
   let checkingId = '';
+  let cardId = '';
 
   async function freshBudget(name: string): Promise<void> {
     await createFreshBudget(async () => {
@@ -32,6 +33,7 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
         0,
       )) as string;
       await api.createAccount({ name: 'Savings', offbudget: true } as never, 0);
+      cardId = (await api.createAccount({ name: 'Card', offbudget: false } as never, 0)) as string;
     }, name);
   }
 
@@ -68,6 +70,73 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
     expect((await rowsIn(checkingId)).filter((row) => row.amount === -450)).toHaveLength(2);
   }, 60_000);
 
+  it('does not let a marked row excuse the row on the other side of it', async () => {
+    // The one that writes money twice. Row 2 repeats row 1, so it is noted
+    // and goes in; row 3 is the other side of row 2's transfer and nothing
+    // marked it. With one set for refused and noted rows, the pairing check
+    // skipped row 2 because it had been reported, row 3 was never matched
+    // against it, and Card ended up with the transfer's leg and row 3: the
+    // same money twice, under a reply that said it had created three rows.
+    await freshBudget('allow-row-other-side');
+    const lines = await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -600, payee: 'Shop', date: '2026-10-12' },
+        {
+          account: 'Checking',
+          amount: -600,
+          payee: 'Card',
+          date: '2026-10-12',
+          allow_duplicate: true,
+        },
+        { account: 'Card', amount: 600, payee: 'PAYMENT RECEIVED', date: '2026-10-12' },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('Nothing was created.');
+    expect(text).toContain('is the other side of the transfer in row 2');
+    expect(await rowsIn(cardId), 'the money would have gone in twice').toHaveLength(0);
+  }, 60_000);
+
+  it('lists every finding about a row it let through', async () => {
+    // One finding per row is a rule about what to fix, and there is nothing
+    // to fix on a row that is going in: the second thing found about it was
+    // dropped.
+    await freshBudget('allow-row-two-findings');
+    await createTransactions({
+      transactions: [{ account: 'Checking', amount: -4.5, payee: 'Cafe', date: '2026-10-12' }],
+    } as never);
+
+    // Both marked, so nothing is refused and the batch goes in. Row 2 is the
+    // one with two findings: the row before it in this call, and the one
+    // already in the budget from the call before.
+    const lines = await createTransactions({
+      transactions: [
+        {
+          account: 'Checking',
+          amount: -4.5,
+          payee: 'Cafe',
+          date: '2026-10-12',
+          allow_duplicate: true,
+        },
+        {
+          account: 'Checking',
+          amount: -4.5,
+          payee: 'Cafe',
+          date: '2026-10-12',
+          allow_duplicate: true,
+        },
+      ],
+    } as never);
+    const text = lines.join('\n');
+
+    expect(text).toContain('Created 2 transactions.');
+    expect(text).toContain('repeats row 1');
+    expect(text).toContain('already has a transaction on 2026-10-12');
+    // Row 2 twice, once per finding.
+    expect(text.match(/^ {2}row 2 {2}/gm) ?? []).toHaveLength(2);
+  }, 60_000);
+
   it('still refuses the batch when the repeat is not marked', async () => {
     await freshBudget('allow-row-unmarked');
     const lines = await createTransactions({
@@ -80,8 +149,11 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
 
     expect(text).toContain('Nothing was created.');
     expect(text).toContain('repeats row 1: same account, date and amount.');
-    // And the advice, which belongs to a row that was refused.
-    expect(text).toContain('If both really happened, pass allow_duplicate.');
+    // And the advice, which belongs to a row that was refused, and says
+    // which row to put the flag on: with two places to put it, "pass
+    // allow_duplicate" was an instruction with two readings, and one of them
+    // turns the checks off for the whole call.
+    expect(text).toContain('If both really happened, set allow_duplicate on row 2.');
     expect(await rowsIn(checkingId)).toHaveLength(0);
   }, 60_000);
 
@@ -107,7 +179,7 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
     expect(text).toContain('row 2  Checking  -4.50  2026-10-12');
     expect(text).toContain('repeats row 1: same account, date and amount.');
     // Not the advice: they already did the thing it advises.
-    expect(text).not.toContain('If both really happened, pass allow_duplicate.');
+    expect(text).not.toContain('set allow_duplicate on row');
   }, 60_000);
 
   it('says it for a whole batch let through as well', async () => {
@@ -147,6 +219,41 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
     expect(text).toContain('Nothing was created.');
     expect(text).toContain('same imported_id');
     expect(await rowsIn(checkingId)).toHaveLength(0);
+  }, 60_000);
+
+  it('does not ask the budget about a row it has already refused', async () => {
+    // Nothing is written when any row is refused, so those queries buy an
+    // answer nobody reads. Counted rather than asserted about, because the
+    // only difference it makes is the work.
+    await freshBudget('allow-row-queries');
+    await createTransactions({
+      transactions: [
+        { account: 'Checking', amount: -1, payee: 'Cafe', date: '2026-10-12', imported_id: 'a' },
+      ],
+    } as never);
+
+    const real = api.runQuery;
+    let queries = 0;
+    (api as { runQuery: unknown }).runQuery = async (...args: unknown[]) => {
+      queries += 1;
+      return (real as (...a: unknown[]) => unknown)(...args);
+    };
+    try {
+      await createTransactions({
+        transactions: [
+          // Refused: its id is already in the budget.
+          { account: 'Checking', amount: -1, payee: 'Cafe', date: '2026-10-12', imported_id: 'a' },
+          { account: 'Checking', amount: -2, payee: 'Shop', date: '2026-10-13' },
+          { account: 'Checking', amount: -3, payee: 'Shop', date: '2026-10-14' },
+        ],
+      } as never);
+    } finally {
+      (api as { runQuery: unknown }).runQuery = real;
+    }
+
+    // One for the imported ids, then one per row the budget is still asked
+    // about, which is two of the three.
+    expect(queries).toBeLessThanOrEqual(3);
   }, 60_000);
 
   it('says nothing about a flag on a row the checks found nothing about', async () => {
