@@ -1,5 +1,121 @@
 # Changelog
 
+## 0.10.7
+
+What a reply tells you about what reached your budget. A write whose sync
+failed used to come back as an error with the change already made, which is
+the one answer that invites the retry that writes it twice, and a batch sent
+with `allow_duplicate` read exactly like one with nothing wrong in it.
+
+### A write that stayed on this machine says so (#162)
+
+Actual writes to the copy of your budget on this machine and sends it on the
+next sync. When that sync fails the change is here and nowhere else, which is
+worth knowing and is not an error: the call did what you asked.
+
+It used to answer `Error`, with a paragraph about restarting the server, and
+the payee or the transaction was in the budget all the same. Measured against
+a disposable server with the session expired, that is the worst of both
+answers. Now the reply is the one you always got, with a note under it:
+
+    Payee created:
+      Name: Rent
+
+    This is in the copy of the budget on this machine, and it did not reach
+    the Actual server: the sync that pushes it failed. Nothing is lost, and
+    the next sync that works will send it. Do not repeat the call to make it
+    arrive, which would write it twice.
+
+Any failed sync, not only an expired session. A server that is down and a
+network that is not there leave the write in exactly the same place.
+
+The note is about the call you just made and the sync that followed it. A
+call that wrote nothing, such as one that refused a duplicate, says nothing
+about reaching the server, and neither call in a pair sent at once can pick
+up the other's trouble.
+
+### It signs in again when the session expires (#162)
+
+If your Actual server is configured with a password, this server now signs in
+again by itself when the server says the session has expired, and sends the
+change on the second attempt:
+
+    The session with the Actual server had expired, so this server signed in
+    again and the change reached the server on the second attempt.
+
+Only for an expired session, and only with a password. It is kept well clear
+of your server's own limit: at most twice an hour and twenty minutes apart,
+because Actual starts refusing logins after five failed ones in fifteen
+minutes, and that refusal would hide a wrong password behind an answer about
+rate limits.
+
+When it does not sign in again, the reply says which of the reasons it was,
+rather than listing them all: the password was refused, there is nothing to
+sign in with, it signed in too recently and how many minutes are left, or the
+sign-in itself failed and why. With `ACTUAL_SESSION_TOKEN` there is no
+password to use, so the reply says to issue a new token and set it there.
+
+Reads already told you when their figures were stale, and why, since 0.10.3.
+
+### repair_sync says when the repair did not finish (#162)
+
+It ends in a sync, and that sync is what checks the rebuilt state against the
+server. If it fails, the repair has not finished, and the tool reports it
+instead of answering that the state was synced.
+
+### A batch can let one row through (#175)
+
+`allow_duplicate` was all or nothing: to let in the one row that really is a
+second movement, two coffees of the same price on the same card on the same
+day, the checks came off every row in the call. 0.10.6 listed that as known
+and not fixed.
+
+A row can carry the flag itself now. The complaint about that row is set
+aside and every other row keeps its checks, against the rest of the batch and
+against what is already in your budget. The checks on a bank's `imported_id`
+are never bypassed, by either flag: a repeated id is the same movement rather
+than a similar one.
+
+### The checks run even when you allow duplicates (#175)
+
+**This changes the reply to a call that passes `allow_duplicate`.** The checks
+used to be skipped, so afterwards there was no telling that batch from one
+with nothing wrong in it. They run now, nothing is refused because of them,
+and the reply lists what they found:
+
+    1 row went in with allow_duplicate, so what the checks found about it was
+    not acted on:
+
+      row 2  Checking  -4.50  2026-10-12
+          repeats row 1: same account, date and amount.
+
+Only the rows something was found about, grouped under their row and counted
+as rows. A call that allows duplicates now asks your server what the checks
+need, which it used to skip, so it does more work than before.
+
+### create_rule describes the rule the way the listing does (#198)
+
+`get_rules` and `delete_rule` have written a rule the same way since 0.10.6:
+a figure as a figure, a true or false bare, a name where an id is stored, and
+quotes only on what your budget holds as text. The reply to `create_rule`
+still read your request back with quotes round everything, so the call that
+made a working rule described it in the form that means a broken one. All
+three go through the same describer now and cannot drift apart again.
+
+Two more things read right. Every account has a payee carrying its name, the
+one Actual uses for transfers to it, so an account and a payee sharing a name
+is ordinary rather than ambiguous: the transfer one says what it is,
+`PayPal (transfer)`, and the ordinary one is left alone, where both used to
+be printed with a uuid beside them. And in a currency with no decimal places
+the reply no longer adds a line saying that 1,500 is stored as 1500. That
+line is there to show the integer behind a figure, and in a currency like
+that the two are the same number, written once with a comma in it.
+
+### Also
+
+- The release workflow tells a rejected `server.json` from a slow registry,
+  and retries only what is worth retrying. (#199)
+
 ## 0.10.6
 
 Three replies that were not describing your budget. `create_transaction` read
