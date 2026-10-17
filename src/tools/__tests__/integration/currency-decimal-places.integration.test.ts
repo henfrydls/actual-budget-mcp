@@ -26,6 +26,7 @@ import {
   budgetDecimalPlaces,
 } from '../../../utils/currency.js';
 import { createTransaction, registerCreateTransaction } from '../../write/create-transaction.js';
+import { createRuleFromInput } from '../../write/create-rule.js';
 import { withCurrentCurrency } from '../../../utils/currency.js';
 import { getTransactionsReport } from '../../read/get-transactions.js';
 
@@ -81,6 +82,26 @@ describe.skipIf(skip)('amounts in a currency with no decimal places (#141)', () 
     }
     return [];
   }
+
+  it('does not say a yen amount twice when both readings are the same', async () => {
+    // `create_rule` prints the stored integer beside the figure, because that
+    // reading is what #183 was about. In a currency with no decimal places
+    // the two are the same number, and `-980, stored as -980` says nothing
+    // twice.
+    await budgetIn('JPY');
+
+    const lines = await createRuleFromInput({
+      condition_field: 'notes',
+      condition_op: 'is',
+      condition_value: 'ramen',
+      action_field: 'amount',
+      action_value: '-980',
+    });
+    const text = lines.join('\n');
+
+    expect(text).toContain('THEN set amount = -980');
+    expect(text).not.toContain('stored as');
+  });
 
   it('writes a whole yen, not a hundredth of one', async () => {
     const accountId = await budgetIn('JPY');
