@@ -109,10 +109,17 @@ jobs:
       # moment to propagate before the registry will accept the entry, and the
       # container image is built by a separate workflow running in parallel.
       #
-      # The image is checked first because publishing an entry that points at a
-      # tag nobody can pull is worse than publishing nothing: the registry would
-      # advertise an install command that fails for everyone who tries it.
+      # They get a budget each. One loop was shared between them, so a slow
+      # image spent the attempts npm was going to need: ten attempts thirty
+      # seconds apart is five minutes between the two, and 0.10.6 needed about
+      # seven for npm alone, which failed every attempt and then worked on the
+      # first try when the job was re-run by hand (#199).
+      #
+      # The image is waited for first because publishing an entry that points
+      # at a tag nobody can pull is worse than publishing nothing: the registry
+      # would advertise an install command that fails for everyone who tries it.
       - name: Publish to the MCP registry
+        timeout-minutes: 20
         run: |
           VERSION=$(node -p "require('./package.json').version")
           IMAGE=henfrydls/actual-budget-mcp
@@ -126,22 +133,41 @@ jobs:
               "https://ghcr.io/v2/${IMAGE}/manifests/${VERSION}"
           }
 
-          # Ten attempts rather than five. Both of the things being waited
-          # for are outside this workflow, and 0.10.4 took longer than the
-          # two and a half minutes the old loop allowed.
-          for attempt in $(seq 1 10); do
-            if ! image_exists; then
-              echo "attempt $attempt of 10: ghcr has no ${VERSION} tag yet, waiting 30s"
-              sleep 30
-              continue
+          # Five minutes for the image. It is built by a workflow that starts
+          # at the same time as this one and has taken around two; the two
+          # things that would make it miss are a queued runner and a failed
+          # build, and the second one is not something more waiting fixes.
+          image_found=
+          for attempt in $(seq 1 20); do
+            if image_exists; then
+              image_found=yes
+              break
             fi
+            echo "waiting for the ghcr ${VERSION} tag: attempt $attempt of 20"
+            sleep 15
+          done
+
+          if [ -z "$image_found" ]; then
+            echo "::error::ghcr has no ${VERSION} tag after five minutes, so the registry entry"
+            echo "::error::would point at an image nobody can pull. npm, the release asset and"
+            echo "::error::the image build are separate: check whether the image workflow failed,"
+            echo "::error::then re-run this job alone."
+            exit 1
+          fi
+
+          # Ten minutes for npm, which is the one that was short. It answers
+          # "Your package is being processed and may take a few minutes" and
+          # then serves the version; 0.10.6 took about seven.
+          for attempt in $(seq 1 20); do
             if ./mcp-publisher publish; then
               echo "published ${VERSION} to the MCP registry"
               exit 0
             fi
-            echo "attempt $attempt of 10: publish failed, npm may still be propagating, waiting 30s"
+            echo "publish failed, npm may still be propagating: attempt $attempt of 20"
             sleep 30
           done
-          echo "::error::could not publish ${VERSION} to the MCP registry after 10 attempts."
-          echo "::error::npm, the image and the release asset are already done: re-run this job alone."
+
+          echo "::error::could not publish ${VERSION} to the MCP registry after ten minutes of"
+          echo "::error::waiting for npm. npm, the image and the release asset are already done:"
+          echo "::error::re-run this job alone once npm serves the version."
           exit 1
