@@ -83,11 +83,6 @@ jobs:
           curl -sSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
           ./mcp-publisher --version || true
 
-      # No secret to manage and no token to rotate: the registry trusts the
-      # workflow's OIDC identity, which is why `id-token: write` is above.
-      - name: Authenticate to the MCP registry
-        run: ./mcp-publisher login github-oidc
-
       # package.json is the single source of the version; every other copy is
       # kept in step by hand and can fall behind (0.8.3 did). Deriving it here
       # means a stale server.json in the repo cannot make the registry advertise
@@ -109,45 +104,59 @@ jobs:
       # moment to propagate before the registry will accept the entry, and the
       # container image is built by a separate workflow running in parallel.
       #
-      # They get a budget each. One loop was shared between them, so a slow
-      # image spent the attempts npm was going to need: ten attempts thirty
-      # seconds apart is five minutes between the two, and 0.10.6 needed about
-      # seven for npm alone, which failed every attempt and then worked on the
-      # first try when the job was re-run by hand (#199).
+      # The waiting happens here, with nothing signed in. The registry's token
+      # lasts five minutes from the login, and `mcp-publisher publish` uses
+      # the token it was given without renewing it, so waiting with a session
+      # open spends the session: a loop that logged in first and then waited
+      # ten minutes for npm had no credentials left by the time npm answered.
+      # That is why re-running the job by hand worked for 0.10.6, and it is
+      # why the login is the last thing before the publish (#199).
       #
-      # The image is waited for first because publishing an entry that points
-      # at a tag nobody can pull is worse than publishing nothing: the registry
-      # would advertise an install command that fails for everyone who tries it.
+      # npm is asked directly rather than through the publisher, so a 404 from
+      # npm is told apart from everything else that can refuse a publish.
       - name: Publish to the MCP registry
         timeout-minutes: 20
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          PACKAGE=$(node -p "require('./package.json').name")
           IMAGE=henfrydls/actual-budget-mcp
+
+          wait_for() {
+            # $1 what it is, $2 attempts, $3 seconds between them, $4... the check
+            local what="$1" attempts="$2" gap="$3"
+            shift 3
+            local attempt
+            for attempt in $(seq 1 "$attempts"); do
+              if "$@"; then
+                return 0
+              fi
+              if [ "$attempt" -lt "$attempts" ]; then
+                echo "waiting for ${what}: attempt ${attempt} of ${attempts}"
+                sleep "$gap"
+              fi
+            done
+            return 1
+          }
 
           image_exists() {
             local token
-            token=$(curl -sS "https://ghcr.io/token?scope=repository:${IMAGE}:pull&service=ghcr.io" | jq -r .token)
-            curl -sf -o /dev/null \
+            token=$(curl -sS --max-time 30 \
+              "https://ghcr.io/token?scope=repository:${IMAGE}:pull&service=ghcr.io" | jq -r .token)
+            curl -sf --max-time 30 -o /dev/null \
               -H "Authorization: Bearer ${token}" \
               -H 'Accept: application/vnd.oci.image.index.v1+json' \
               "https://ghcr.io/v2/${IMAGE}/manifests/${VERSION}"
           }
 
-          # Five minutes for the image. It is built by a workflow that starts
-          # at the same time as this one and has taken around two; the two
-          # things that would make it miss are a queued runner and a failed
-          # build, and the second one is not something more waiting fixes.
-          image_found=
-          for attempt in $(seq 1 20); do
-            if image_exists; then
-              image_found=yes
-              break
-            fi
-            echo "waiting for the ghcr ${VERSION} tag: attempt $attempt of 20"
-            sleep 15
-          done
+          npm_has_version() {
+            npm view "${PACKAGE}@${VERSION}" version >/dev/null 2>&1
+          }
 
-          if [ -z "$image_found" ]; then
+          # The image first, because publishing an entry that points at a tag
+          # nobody can pull is worse than publishing nothing: the registry
+          # would advertise an install command that fails for everyone.
+          # Five minutes, since it is built alongside this and takes about two.
+          if ! wait_for "the ghcr ${VERSION} tag" 20 15 image_exists; then
             echo "::error::ghcr has no ${VERSION} tag after five minutes, so the registry entry"
             echo "::error::would point at an image nobody can pull. npm, the release asset and"
             echo "::error::the image build are separate: check whether the image workflow failed,"
@@ -155,19 +164,54 @@ jobs:
             exit 1
           fi
 
-          # Ten minutes for npm, which is the one that was short. It answers
-          # "Your package is being processed and may take a few minutes" and
-          # then serves the version; 0.10.6 took about seven.
-          for attempt in $(seq 1 20); do
-            if ./mcp-publisher publish; then
+          # Ten minutes for npm, which is the one that was short: 0.10.6 took
+          # about seven to serve the new version.
+          if ! wait_for "npm to serve ${PACKAGE}@${VERSION}" 20 30 npm_has_version; then
+            echo "::error::npm is still not serving ${PACKAGE}@${VERSION} after ten minutes."
+            echo "::error::npm, the image and the release asset are already done: re-run this"
+            echo "::error::job alone once npm serves the version."
+            exit 1
+          fi
+
+          # Both races are over, so this should go first time. The retries are
+          # for a hiccup between here and the registry, and each one signs in
+          # again because the token does not outlive five minutes.
+          for attempt in 1 2 3; do
+            ./mcp-publisher login github-oidc
+            if out=$(./mcp-publisher publish 2>&1); then
+              echo "$out"
               echo "published ${VERSION} to the MCP registry"
               exit 0
             fi
-            echo "publish failed, npm may still be propagating: attempt $attempt of 20"
-            sleep 30
+            echo "$out"
+
+            # Waiting does not fix any of these, and the message for a slow
+            # npm would send the reader to the wrong place.
+            case "$out" in
+              *401*|*403*|*nauthorized*|*orbidden*)
+                echo "::error::the MCP registry refused the workflow's credentials. This is not"
+                echo "::error::npm being slow: check the id-token permission and the registry's"
+                echo "::error::trust of this repository."
+                exit 1
+                ;;
+              *409*|*already\ exists*|*uplicate*)
+                echo "::notice::the MCP registry already has ${VERSION}, so there is nothing to do."
+                exit 0
+                ;;
+              *422*|*alidation*)
+                echo "::error::the MCP registry rejected server.json for ${VERSION}. Fix the file;"
+                echo "::error::re-running this job will not change the answer."
+                exit 1
+                ;;
+            esac
+
+            if [ "$attempt" -lt 3 ]; then
+              echo "publish failed, trying again: attempt ${attempt} of 3"
+              sleep 20
+            fi
           done
 
-          echo "::error::could not publish ${VERSION} to the MCP registry after ten minutes of"
-          echo "::error::waiting for npm. npm, the image and the release asset are already done:"
-          echo "::error::re-run this job alone once npm serves the version."
+          echo "::error::could not publish ${VERSION} to the MCP registry. npm is serving the"
+          echo "::error::version and the image is there, so this is the registry itself:"
+          echo "::error::re-run this job alone."
           exit 1

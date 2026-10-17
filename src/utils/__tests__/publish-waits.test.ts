@@ -1,83 +1,220 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 import { parse } from 'yaml';
 
 /**
- * How long the release waits for the two things it cannot hurry (#199).
+ * What the release does while it waits for the two things it cannot hurry
+ * (#199).
  *
- * The step that publishes to the MCP registry waits for two races it does not
- * control: the container image, built by a workflow running alongside this
- * one, and npm, which answers "your package is being processed" and serves
- * the new version some minutes later.
+ * The step that publishes to the MCP registry waits for the container image,
+ * built by a workflow running alongside this one, and for npm, which answers
+ * "your package is being processed" and serves the new version some minutes
+ * later.
  *
- * It is a file GitHub runs and nothing here executes, so it is the kind of
- * thing that stops being true quietly. 0.10.6 is what that cost: one loop was
- * shared between both waits, ten attempts thirty seconds apart, so the pair
- * had five minutes between them. npm took about seven, every attempt failed,
- * and the job had to be re-run by hand once npm caught up.
+ * It is run by GitHub and by nothing here, so it is the kind of thing that
+ * stops being true quietly, and reading it with a regular expression is how a
+ * test about a shell script passes while the script does the opposite: an
+ * `echo` in the right place satisfied the pattern that was looking for a
+ * `sleep`. So the script is run, against stubs, and what it does is what is
+ * checked.
  *
- * The numbers are read out of the script rather than trusted, because the
- * point of the fix is the size of the budgets and nothing else in the suite
- * would notice them shrinking.
+ * 0.10.6 is what this cost twice over. One loop was shared between both
+ * waits, which gave the pair five minutes; and the registry's token lasts
+ * five minutes from the login, so waiting with a session already open spent
+ * the session, which is why re-running the job by hand worked.
  */
-describe('what the release waits for', () => {
+describe.skipIf(process.platform === 'win32')('what the release does while it waits', () => {
   const workflow = parse(readFileSync('.github/workflows/publish.yml', 'utf8')) as {
-    jobs: Record<string, { steps: Array<{ name?: string; run?: string; 'timeout-minutes'?: number }> }>;
+    jobs: Record<
+      string,
+      { steps: Array<{ name?: string; run?: string; 'timeout-minutes'?: number }> }
+    >;
   };
   const step = workflow.jobs.registry.steps.find(
     (one) => one.name === 'Publish to the MCP registry',
-  );
+  )!;
 
-  /** Every `for attempt in $(seq 1 N)` loop, with the sleep inside it. */
-  function loops(script: string): Array<{ attempts: number; sleep: number; body: string }> {
-    // The indentation is whatever YAML left after folding the block, so the
-    // end of the loop is matched by shape rather than by column.
-    return [...script.matchAll(/for attempt in \$\(seq 1 (\d+)\); do([\s\S]*?)^\s*done$/gm)].map(
-      (match) => ({
-        attempts: Number(match[1]),
-        sleep: Number(/\bsleep (\d+)/.exec(match[2])?.[1] ?? 0),
-        body: match[2],
-      }),
-    );
+  interface Run {
+    status: number;
+    out: string;
+    /** Every stubbed command, in the order the script called it. */
+    calls: string[];
+    sleeps: number[];
   }
 
-  it('waits for the image and for npm on separate budgets', () => {
-    // One loop for both is what made npm's wait depend on how long the image
-    // took, which is the whole of #199.
-    expect(step, 'the step that publishes to the registry').toBeDefined();
-    const found = loops(step!.run!);
-    expect(found, 'one loop for the image and one for npm').toHaveLength(2);
+  /**
+   * Run the real script with stubs for everything it shells out to.
+   *
+   * `imageAfter` and `npmAfter` are how many attempts each one refuses before
+   * answering, and `publish` is what the publisher prints and exits with.
+   */
+  function run(options: {
+    imageAfter?: number;
+    npmAfter?: number;
+    publish?: Array<{ out: string; status: number }>;
+  }): Run {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'publish-step-'));
+    try {
+      const log = path.join(dir, 'calls.log');
+      const stub = (name: string, body: string) => {
+        const file = path.join(dir, name);
+        writeFileSync(file, `#!/usr/bin/env bash\n${body}\n`);
+        chmodSync(file, 0o755);
+      };
+      const count = (what: string) =>
+        `n=$(cat "${dir}/${what}.n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${dir}/${what}.n"`;
 
-    const [image, npm] = found;
-    expect(image.body, 'the image is waited for first').toContain('image_exists');
-    expect(npm.body, 'and npm is what the publish retries are for').toContain(
-      'mcp-publisher publish',
-    );
-    expect(image.body).not.toContain('mcp-publisher publish');
+      stub('node', `echo "node $*" >> "${log}"; case "$*" in *name*) echo actual-budget-mcp;; *) echo 9.9.9;; esac`);
+      stub(
+        'curl',
+        `echo "curl" >> "${log}"
+         case "$*" in
+           *token\\?*) echo '{"token":"t"}'; exit 0;;
+         esac
+         ${count('image')}
+         [ "$n" -gt "${options.imageAfter ?? 0}" ]`,
+      );
+      stub('jq', `cat >/dev/null; echo t`);
+      stub(
+        'npm',
+        `echo "npm $*" >> "${log}"; ${count('npm')}; [ "$n" -gt "${options.npmAfter ?? 0}" ]`,
+      );
+      stub('sleep', `echo "sleep $1" >> "${log}"`);
+      stub('seq', `s=$1; e=$2; while [ "$s" -le "$e" ]; do echo "$s"; s=$((s+1)); done`);
+
+      const publishes = options.publish ?? [{ out: 'ok', status: 0 }];
+      writeFileSync(
+        path.join(dir, 'mcp-publisher'),
+        `#!/usr/bin/env bash\n` +
+          `echo "mcp-publisher $1" >> "${log}"\n` +
+          `if [ "$1" = login ]; then exit 0; fi\n` +
+          `${count('publish')}\n` +
+          publishes
+            .map(
+              (one, index) =>
+                `if [ "$n" = "${index + 1}" ]; then echo ${JSON.stringify(one.out)}; exit ${one.status}; fi`,
+            )
+            .join('\n') +
+          `\necho ${JSON.stringify(publishes[publishes.length - 1].out)}\nexit ${publishes[publishes.length - 1].status}\n`,
+      );
+      chmodSync(path.join(dir, 'mcp-publisher'), 0o755);
+      writeFileSync(path.join(dir, 'script.sh'), step.run!);
+
+      let status = 0;
+      let out = '';
+      try {
+        out = execFileSync('bash', ['script.sh'], {
+          cwd: dir,
+          env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (error) {
+        const failure = error as { status?: number; stdout?: string; stderr?: string };
+        status = failure.status ?? 1;
+        out = `${failure.stdout ?? ''}${failure.stderr ?? ''}`;
+      }
+      const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
+      return {
+        status,
+        out,
+        calls,
+        sleeps: calls.filter((c) => c.startsWith('sleep ')).map((c) => Number(c.slice(6))),
+      };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('signs in only once both waits are over', () => {
+    // The registry's token lasts five minutes from the login, and the
+    // publisher does not renew it, so waiting with a session open spends it.
+    const result = run({ imageAfter: 2, npmAfter: 3 });
+
+    expect(result.status).toBe(0);
+    const firstLogin = result.calls.indexOf('mcp-publisher login');
+    const lastWait = result.calls.map((c) => c.startsWith('npm ')).lastIndexOf(true);
+    expect(firstLogin, 'there has to be a login').toBeGreaterThan(-1);
+    expect(firstLogin, 'and it comes after the last thing it waited for').toBeGreaterThan(lastWait);
   });
 
-  it('gives npm at least ten minutes, which is what 0.10.6 needed', () => {
-    const [image, npm] = loops(step!.run!);
+  it('asks npm itself rather than finding out through the publisher', () => {
+    // A 404 from npm is then told apart from everything else that can refuse
+    // a publish, and the waiting costs no session.
+    const result = run({ npmAfter: 2 });
 
-    expect((npm.attempts * npm.sleep) / 60).toBeGreaterThanOrEqual(10);
-    expect((image.attempts * image.sleep) / 60).toBeGreaterThanOrEqual(5);
+    expect(result.calls.filter((c) => c.startsWith('npm ')).length).toBeGreaterThan(1);
+    expect(
+      result.calls.filter((c) => c === 'mcp-publisher publish'),
+      'the publisher is not what waits',
+    ).toHaveLength(1);
+  });
+
+  it('gives the image five minutes and npm ten', () => {
+    const image = run({ imageAfter: 999 });
+    expect(image.status).toBe(1);
+    expect(image.out).toContain('ghcr has no');
+    // Twenty tries, fifteen seconds apart, and no sleep after the last one.
+    expect(image.sleeps.filter((s) => s === 15)).toHaveLength(19);
+
+    const npm = run({ npmAfter: 999 });
+    expect(npm.status).toBe(1);
+    expect(npm.out).toContain('npm is still not serving');
+    expect(npm.sleeps.filter((s) => s === 30)).toHaveLength(19);
+  });
+
+  it('stops without waiting when waiting cannot help', () => {
+    const refused = run({ publish: [{ out: 'error: 401 unauthorized', status: 1 }] });
+    expect(refused.status).toBe(1);
+    expect(refused.out).toContain("refused the workflow's credentials");
+    expect(
+      refused.calls.filter((c) => c === 'mcp-publisher publish'),
+      'retrying a 401 only wastes the window',
+    ).toHaveLength(1);
+
+    const invalid = run({ publish: [{ out: 'error: 422 validation failed', status: 1 }] });
+    expect(invalid.status).toBe(1);
+    expect(invalid.out).toContain('rejected server.json');
+  });
+
+  it('treats a version the registry already has as done', () => {
+    // Which is what a re-run of this job finds after a partial success.
+    const result = run({ publish: [{ out: 'error: 409 already exists', status: 1 }] });
+
+    expect(result.status).toBe(0);
+    expect(result.out).toContain('already has');
+  });
+
+  it('tries again when the registry fails for no stated reason', () => {
+    const result = run({
+      publish: [
+        { out: 'error: 503 service unavailable', status: 1 },
+        { out: 'published', status: 0 },
+      ],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.calls.filter((c) => c === 'mcp-publisher publish')).toHaveLength(2);
+    expect(
+      result.calls.filter((c) => c === 'mcp-publisher login'),
+      'each attempt signs in again, because the token does not outlive five minutes',
+    ).toHaveLength(2);
+  });
+
+  it('does not let a hanging request eat the window', () => {
+    // Checked as text, not by running it: a curl with no timeout and a curl
+    // with one behave the same against a stub, and the difference only shows
+    // against a server that never answers. Both calls reach the network.
+    const curls = [...step.run!.matchAll(/curl [^\n]*/g)].map((m) => m[0]);
+    expect(curls.length, 'the token and the manifest').toBeGreaterThanOrEqual(2);
+    for (const call of curls) expect(call).toContain('--max-time');
   });
 
   it('is allowed to run for longer than it can wait', () => {
-    // A timeout shorter than the two budgets would cut the wait short from
-    // the outside and read as a different failure.
-    const [image, npm] = loops(step!.run!);
-    const waiting = (image.attempts * image.sleep + npm.attempts * npm.sleep) / 60;
-
-    expect(step!['timeout-minutes']).toBeGreaterThan(waiting);
-  });
-
-  it('says which of the two it gave up on', () => {
-    // The remedies are different: a missing image usually means that workflow
-    // failed, and a slow npm means wait and re-run. One message for both sent
-    // the reader to the wrong one half the time.
-    const script = step!.run!;
-    expect(script).toContain('ghcr has no ${VERSION} tag after five minutes');
-    expect(script).toContain('waiting for npm');
+    // Five minutes for the image plus ten for npm plus the retries.
+    expect(step['timeout-minutes']).toBeGreaterThan(15);
   });
 });
