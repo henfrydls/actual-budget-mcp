@@ -127,6 +127,8 @@ interface BatchInput {
   notes?: string;
   cleared?: boolean;
   imported_id?: string;
+  /** Let this one row through the approximate duplicate checks (#175). */
+  allow_duplicate?: boolean;
 }
 
 /** One row once every name in it has been turned into an id. */
@@ -141,6 +143,8 @@ interface ResolvedRow {
   notes?: string;
   cleared: boolean;
   importedId?: string;
+  /** Set by the row or by the call: what the approximate checks find is a note. */
+  allowDuplicate: boolean;
   marker: string;
   /**
    * Set when the payee named another account, so this row is a transfer.
@@ -254,6 +258,7 @@ export async function createTransactions(input: {
           notes: row.notes,
           cleared: row.cleared ?? false,
           importedId: row.imported_id,
+          allowDuplicate: Boolean(row.allow_duplicate || input.allow_duplicate),
           marker: newWriteMarker(),
           transfer: target
             ? {
@@ -310,12 +315,51 @@ export async function createTransactions(input: {
     // One complaint per row, whichever check finds it first: two complaints
     // about one row read as two problems and send the reader looking for two
     // fixes.
-    const flagged = new Set<number>();
-    const complain = (index: number, reason: string) => {
-      if (flagged.has(index)) return;
-      flagged.add(index);
+    //
+    // Refused and noted are two sets, not one. A row that was only noted is
+    // still going in, so the checks that skip rows already reported must not
+    // skip it: with one set, a noted transfer stopped being paired with the
+    // ordinary row on the other side of it, and the money went into the
+    // budget twice under a reply that said nothing about it.
+    const refused = new Set<number>();
+    const allowed: Array<{ index: number; found: string }> = [];
+
+    /** A fault with no way round it, whatever the caller passed. */
+    const refuse = (index: number, reason: string) => {
+      if (refused.has(index)) return;
+      refused.add(index);
       problems.push({ index, reason });
     };
+
+    /**
+     * A row that looks like a duplicate, which is a guess and can be
+     * overruled.
+     *
+     * The finding and the advice are separate because only one of them
+     * belongs in each answer. A row that was refused is told how to proceed;
+     * a row that came in under `allow_duplicate` has already proceeded, and
+     * "pass allow_duplicate" would be advice to someone who did.
+     *
+     * The checks run either way now. Skipping them for an allowed row would
+     * save the two queries the last one makes and lose the only chance to say
+     * what they found, so a batch with duplicates in it would read exactly
+     * like one without (#175).
+     */
+    const complain = (index: number, found: string, advice: string) => {
+      // Every finding, for a row that is going in anyway. One per row is a
+      // rule about what to fix, and there is nothing to fix here.
+      if (byIndexAllowed(index)) {
+        allowed.push({ index, found });
+        return;
+      }
+      if (refused.has(index)) return;
+      refused.add(index);
+      problems.push({ index, reason: `${found} ${advice}` });
+    };
+    const allowedRows = new Set(resolved.filter((row) => row.allowDuplicate).map((r) => r.index));
+    function byIndexAllowed(index: number): boolean {
+      return allowedRows.has(index);
+    }
 
     // Identity, so no escape: `allow_duplicate` does not reach these.
     const seenIds = new Map<string, number>();
@@ -324,7 +368,7 @@ export async function createTransactions(input: {
       const key = `${row.accountId}|${row.importedId}`;
       const first = seenIds.get(key);
       if (first !== undefined) {
-        complain(
+        refuse(
           row.index,
           `repeats row ${first + 1}: same imported_id "${row.importedId}" on the same ` +
             `account. A bank id identifies one movement, so two rows carrying it in one ` +
@@ -352,7 +396,7 @@ export async function createTransactions(input: {
       );
       for (const row of resolved) {
         if (row.importedId && found.has(`${row.accountId}|${row.importedId}`)) {
-          complain(
+          refuse(
             row.index,
             `imported_id "${row.importedId}" is already in ${row.accountName}, so this row ` +
               `has been recorded before. If your bank reused the id and this is a different ` +
@@ -362,139 +406,182 @@ export async function createTransactions(input: {
       }
     }
 
-    if (!input.allow_duplicate) {
-      // Two rows in the same call that are the same movement. The existing
-      // duplicate check asks about rows already in the budget (#88), and two
-      // identical rows arriving together is a case it has never seen, because
-      // until now they could not arrive together. Measured: the engine writes
-      // both.
-      //
-      // Inside this branch, not before it: the message tells the caller to pass
-      // `allow_duplicate`, and for a turn that advice led nowhere, because the
-      // check ran either way and refused the batch again. A test asking for the
-      // way out is what found it.
-      // Both halves of one movement, first. A pay-off read from two statements
-      // arrives as `{Bank, -800, payee "Card"}` and `{Card, +800, payee
-      // "Bank"}`, and each of those asks for both legs, so writing both put
-      // the payment in twice. The check below could not see it: the two rows
-      // name different accounts.
-      const pairs = new Map<string, number>();
-      for (const row of resolved) {
-        if (!row.transfer) continue;
-        const key = transferPairKey({
-          sourceAccountId: row.accountId,
-          targetAccountId: row.transfer.targetId,
-          amountCents: row.amountCents,
-          date: row.date,
-        });
-        const first = pairs.get(key);
-        if (first !== undefined) {
-          complain(
-            row.index,
-            `is row ${first + 1} again: the same movement between the same two accounts on ` +
-              `the same day, written from the other account. One of them records both sides, ` +
-              `so only one is needed. If these really are two separate movements, pass ` +
-              `allow_duplicate.`,
-          );
-        } else {
-          pairs.set(key, row.index);
-        }
-      }
+    // The approximate checks, which run whatever the caller passed. Skipping
+    // them for a row that is allowed to duplicate would save two queries on
+    // the last one and lose the only chance to say what they found, so a
+    // batch with accepted duplicates in it would read exactly like one with
+    // none (#175).
+    // Two rows in the same call that are the same movement. The existing
+    // duplicate check asks about rows already in the budget (#88), and two
+    // identical rows arriving together is a case it has never seen, because
+    // until now they could not arrive together. Measured: the engine writes
+    // both.
+    //
+    // Both halves of one movement, first. A pay-off read from two statements
+    // arrives as `{Bank, -800, payee "Card"}` and `{Card, +800, payee
+    // "Bank"}`, and each of those asks for both legs, so writing both put
+    // the payment in twice. The check below could not see it: the two rows
+    // name different accounts.
+    const byIndex = new Map(resolved.map((row) => [row.index, row]));
 
-      const seen = new Map<string, number>();
-      for (const row of resolved) {
-        const key = `${row.accountId}|${row.date}|${row.amountCents}`;
-        const first = seen.get(key);
-        if (first !== undefined) {
-          complain(
-            row.index,
-            `repeats row ${first + 1}: same account, date and amount. If both really happened, pass allow_duplicate.`,
-          );
-        } else {
-          seen.set(key, row.index);
-        }
-      }
-
-      // Both sides of one movement, where one of them is an ordinary row.
-      //
-      // A card statement lists the payment as something like "PAYMENT
-      // RECEIVED", not as an account name, so a month read off both statements
-      // arrives as a transfer from the current account and an ordinary credit
-      // on the card. The transfer writes both sides, so the ordinary row is
-      // the same money a second time. The pair key above cannot see it: that
-      // one compares two transfers.
-      //
-      // The ordinary row is the one refused, not the transfer: the transfer
-      // records both sides, so it is the row that can go.
-      // Rows already reported are left out: one of them taking a transfer
-      // with it is how a row that does collide ends up counted among the ones
-      // that were fine. Measured on a batch holding the same credit twice.
-      const byIndex = new Map(resolved.map((row) => [row.index, row]));
-      for (const pair of pairCounterparts(
-        resolved.map((row) => ({
-          index: row.index,
-          accountId: row.accountId,
-          amountCents: row.amountCents,
-          date: row.date,
-          transferTargetId: row.transfer?.targetId,
-        })),
-        COUNTERPART_WINDOW_DAYS,
-        flagged,
-      )) {
-        const transfer = byIndex.get(pair.transfer)!;
-        const ordinary = byIndex.get(pair.ordinary)!;
+    const pairs = new Map<string, number>();
+    for (const row of resolved) {
+      if (!row.transfer) continue;
+      const key = transferPairKey({
+        sourceAccountId: row.accountId,
+        targetAccountId: row.transfer.targetId,
+        amountCents: row.amountCents,
+        date: row.date,
+      });
+      const first = pairs.get(key);
+      if (first !== undefined) {
+        // Two readings of one key. It is the pair of accounts in the
+        // direction the money runs, so it catches the same movement written
+        // from each side, which is what it is for, and it also catches the
+        // same transfer sent twice from one side. Saying "written from the
+        // other account" about the second is false, and it sends somebody
+        // looking for a row that is not there.
+        const sameSide = byIndex.get(first)!.accountId === row.accountId;
         complain(
-          ordinary.index,
-          `is the other side of the transfer in row ${transfer.index + 1}: that row moves ` +
-            `${formatMoney(Math.abs(transfer.amountCents))} on ${transfer.date} and writes ` +
-            `the matching row in ${ordinary.accountName} itself, and this one records the ` +
-            `same money on ${ordinary.date}. Keeping both puts it in twice. Drop this row, ` +
-            `or pass allow_duplicate if they really are two movements.`,
+          row.index,
+          sameSide
+            ? `is row ${first + 1} again: the same transfer, from the same account to the ` +
+              `same one, on the same day. A transfer records both sides, so only one is needed.`
+            : `is row ${first + 1} again: the same movement between the same two accounts on ` +
+              `the same day, written from the other account. One of them records both sides, ` +
+              `so only one is needed.`,
+          `If these really are two separate movements, set allow_duplicate on row ${row.index + 1}.`,
         );
+      } else {
+        pairs.set(key, row.index);
+      }
+    }
+
+    const seen = new Map<string, number>();
+    for (const row of resolved) {
+      const key = `${row.accountId}|${row.date}|${row.amountCents}`;
+      const first = seen.get(key);
+      if (first !== undefined) {
+        complain(
+          row.index,
+          `repeats row ${first + 1}: same account, date and amount.`,
+          `If both really happened, set allow_duplicate on row ${row.index + 1}.`,
+        );
+      } else {
+        seen.set(key, row.index);
+      }
+    }
+
+    // Both sides of one movement, where one of them is an ordinary row.
+    //
+    // A card statement lists the payment as something like "PAYMENT
+    // RECEIVED", not as an account name, so a month read off both statements
+    // arrives as a transfer from the current account and an ordinary credit
+    // on the card. The transfer writes both sides, so the ordinary row is
+    // the same money a second time. The pair key above cannot see it: that
+    // one compares two transfers.
+    //
+    // The ordinary row is the one refused, not the transfer: the transfer
+    // records both sides, so it is the row that can go.
+    // Rows already reported are left out: one of them taking a transfer
+    // with it is how a row that does collide ends up counted among the ones
+    // that were fine. Measured on a batch holding the same credit twice.
+    //
+    // In two passes, and the order matters. A transfer accounts for one row,
+    // so a marked row and an unmarked one can want the same transfer, and the
+    // matching takes the nearest date: a marked row two days closer took the
+    // transfer the unmarked row needed, the unmarked row went in unreported,
+    // and the money was in the budget twice. The unmarked rows are paired
+    // first, and the marked ones take what is left so they still get their
+    // note.
+    const pairable = resolved.map((row) => ({
+      index: row.index,
+      accountId: row.accountId,
+      amountCents: row.amountCents,
+      date: row.date,
+      transferTargetId: row.transfer?.targetId,
+    }));
+    const ordinaryWith = (marked: boolean) =>
+      resolved
+        .filter((row) => !row.transfer && row.allowDuplicate === marked)
+        .map((row) => row.index);
+    const firstPass = pairCounterparts(
+      pairable,
+      COUNTERPART_WINDOW_DAYS,
+      new Set([...refused, ...ordinaryWith(true)]),
+    );
+    const secondPass = pairCounterparts(
+      pairable,
+      COUNTERPART_WINDOW_DAYS,
+      new Set([
+        ...refused,
+        ...ordinaryWith(false),
+        ...firstPass.map((pair) => pair.transfer),
+      ]),
+    );
+    for (const pair of [...firstPass, ...secondPass]) {
+      const transfer = byIndex.get(pair.transfer)!;
+      const ordinary = byIndex.get(pair.ordinary)!;
+      complain(
+        ordinary.index,
+        `is the other side of the transfer in row ${transfer.index + 1}: that row moves ` +
+          `${formatMoney(Math.abs(transfer.amountCents))} on ${transfer.date} and writes ` +
+          `the matching row in ${ordinary.accountName} itself, and this one records the ` +
+          `same money on ${ordinary.date}. Keeping both puts it in twice.`,
+        `Drop this row, or set allow_duplicate on row ${ordinary.index + 1} if they ` +
+          `really are two movements.`,
+      );
+    }
+
+    for (const row of resolved) {
+      // Nothing is written when any row is refused, so asking the budget
+      // about one that already has a problem buys an answer nobody reads.
+      if (refused.has(row.index)) continue;
+      const existing = await findPossibleDuplicates(
+        row.accountId,
+        row.date,
+        row.amountCents,
+        { alreadyPulled: true },
+      );
+      if (existing.length > 0) {
+        complain(
+          row.index,
+          `${row.accountName} already has a transaction on ${row.date} for ` +
+            `${formatMoney(row.amountCents)}.`,
+          `If this is a second one, set allow_duplicate on row ${row.index + 1}.`,
+        );
+        // A refused row has its one line and nothing more to say. A marked
+        // row is going in, so the check below still has something worth
+        // telling it: that its transfer is about to put a second row in the
+        // other account as well.
+        if (!allowedRows.has(row.index)) continue;
       }
 
-      for (const row of resolved) {
-        const existing = await findPossibleDuplicates(
-          row.accountId,
-          row.date,
-          row.amountCents,
-          { alreadyPulled: true },
+      // And the row the transfer is about to put in the other account, which
+      // nothing used to look at. A card payment already imported from the
+      // bank is an ordinary row there; the transfer's own leg lands on top of
+      // it and the account shows the money arriving twice.
+      if (!row.transfer) continue;
+      const counterpart = await findUnlinkedCounterpart(
+        row.transfer.targetId,
+        row.date,
+        row.amountCents,
+        { alreadyPulled: true },
+      );
+      if (counterpart.length > 0) {
+        // The dates, because they are the part that is not obvious: the
+        // match may be a day either side, and saying only "already has a
+        // transaction" sends someone to look on the wrong day.
+        const when = counterpart.map((c) => c.date).join(', ');
+        complain(
+          row.index,
+          `${row.transfer.targetName} already has a transaction for ` +
+            `${formatMoney(-row.amountCents)} on ${when}, which is not part of a transfer. ` +
+            `This row is dated ${row.date}, and the two sides of one movement are often a ` +
+            `day apart. The transfer would put a second row there.`,
+          `If that is this same movement, already imported, drop this row; if it is a ` +
+            `different one, set allow_duplicate on row ${row.index + 1}.`,
         );
-        if (existing.length > 0) {
-          complain(
-            row.index,
-            `${row.accountName} already has a transaction on ${row.date} for ` +
-              `${formatMoney(row.amountCents)}. If this is a second one, pass allow_duplicate.`,
-          );
-          continue;
-        }
-
-        // And the row the transfer is about to put in the other account, which
-        // nothing used to look at. A card payment already imported from the
-        // bank is an ordinary row there; the transfer's own leg lands on top of
-        // it and the account shows the money arriving twice.
-        if (!row.transfer) continue;
-        const counterpart = await findUnlinkedCounterpart(
-          row.transfer.targetId,
-          row.date,
-          row.amountCents,
-          { alreadyPulled: true },
-        );
-        if (counterpart.length > 0) {
-          // The dates, because they are the part that is not obvious: the
-          // match may be a day either side, and saying only "already has a
-          // transaction" sends someone to look on the wrong day.
-          const when = counterpart.map((c) => c.date).join(', ');
-          complain(
-            row.index,
-            `${row.transfer.targetName} already has a transaction for ` +
-              `${formatMoney(-row.amountCents)} on ${when}, which is not part of a transfer. ` +
-              `This row is dated ${row.date}, and the two sides of one movement are often a ` +
-              `day apart. The transfer would put a second row there. If that is this same ` +
-              `movement, already imported, drop this row; if it is a different one, pass ` +
-              `allow_duplicate.`,
-          );
-        }
       }
     }
 
@@ -528,7 +615,7 @@ export async function createTransactions(input: {
       return lines;
     }
 
-    return await writeBatch(resolved, rows.length, accounts);
+    return await writeBatch(resolved, rows.length, accounts, allowed);
   });
 }
 
@@ -536,6 +623,7 @@ async function writeBatch(
   resolved: ResolvedRow[],
   total: number,
   accounts: Array<{ id: string; name: string; offbudget?: boolean }>,
+  allowed: Array<{ index: number; found: string }>,
 ): Promise<string[]> {
   // Grouped because `addTransactions` writes to the account it is given, not
   // to one named on the row: measured, a row carrying its own `account` went
@@ -715,6 +803,7 @@ async function writeBatch(
     'Transactions on each account, before and after:',
     ...counts,
   );
+  lines.push(...describeAllowed(allowed, written));
   lines.push(...describeTransfers(written, saved, partsByParent, accounts));
   lines.push(...describeRuleChanges(written, saved, partsByParent));
   if (!saved && written.length > 0) {
@@ -897,6 +986,53 @@ function describeTransfers(
 }
 
 /**
+ * The rows that came in because somebody said they could.
+ *
+ * `allow_duplicate` used to switch the approximate checks off, so a batch
+ * sent with it read exactly like one with nothing wrong in it, and afterwards
+ * there was no telling the two apart. The checks run either way now and this
+ * says what they found, which is the whole of what the flag overruled (#175).
+ *
+ * Only the rows a check actually fired on. A flag on a row nothing was found
+ * about did nothing, and listing it would pad the reply with rows that have
+ * no finding to show.
+ */
+function describeAllowed(
+  allowed: Array<{ index: number; found: string }>,
+  written: ResolvedRow[],
+): string[] {
+  const byIndex = new Map(written.map((row) => [row.index, row]));
+  // By row, not by finding. A row can be found twice, and counting the
+  // findings called one row "2 rows" and listed it under two headings of its
+  // own, which reads as two transactions that are not there.
+  const findings = new Map<number, string[]>();
+  for (const entry of allowed) {
+    if (!byIndex.has(entry.index)) continue;
+    const held = findings.get(entry.index);
+    if (held) held.push(entry.found);
+    else findings.set(entry.index, [entry.found]);
+  }
+  if (findings.size === 0) return [];
+
+  const one = findings.size === 1;
+  return [
+    '',
+    `${findings.size} ${one ? 'row' : 'rows'} went in with allow_duplicate, so what the ` +
+      `checks found about ${one ? 'it' : 'them'} was not acted on:`,
+    '',
+    ...[...findings.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .flatMap(([index, found]) => {
+        const row = byIndex.get(index)!;
+        return [
+          `  row ${index + 1}  ${row.accountName}  ${formatMoney(row.amountCents)}  ${row.date}`,
+          ...found.map((one) => `      ${one}`),
+        ];
+      }),
+  ];
+}
+
+/**
  * What the rules changed, row by row, once at the end.
  *
  * The batch says how many rows went in and what each transfer did, and
@@ -989,6 +1125,15 @@ export function registerCreateTransactions(server: McpServer): void {
               .describe(
                 "The bank's own id for this movement, if you have one. A row whose imported_id is already in the budget is refused, so resending a batch cannot duplicate it.",
               ),
+            allow_duplicate: z
+              .boolean()
+              .optional()
+              .describe(
+                'Let this one row through the checks that compare account, date and amount, ' +
+                  'for the row you know really is a second movement. Every other row keeps ' +
+                  'its checks. It does not reach the imported_id checks, which are identity ' +
+                  'rather than a guess, and the reply says what the checks found about it.',
+              ),
           }),
         )
         .describe(
@@ -998,7 +1143,10 @@ export function registerCreateTransactions(server: McpServer): void {
         .boolean()
         .optional()
         .describe(
-          'Create the rows even though some repeat each other or match transactions already in the budget. Without this, such a batch is reported and nothing is written.',
+          'Create the rows even though some repeat each other or match transactions already ' +
+            'in the budget. Without this, such a batch is reported and nothing is written. ' +
+            'The reply says which rows the checks found something about. To let one row ' +
+            'through and keep the checks on the rest, put allow_duplicate on that row instead.',
         ),
     },
     {
