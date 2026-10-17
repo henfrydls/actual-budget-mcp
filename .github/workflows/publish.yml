@@ -148,8 +148,22 @@ jobs:
               "https://ghcr.io/v2/${IMAGE}/manifests/${VERSION}"
           }
 
+          # E404 is npm saying "not yet", which is the thing being waited
+          # for. Anything else is npm not answering, and counting that as
+          # "not yet" spends the whole window and then reports the wrong
+          # thing. The fetch timeout is so a hung registry cannot eat it
+          # either.
+          npm_trouble=
           npm_has_version() {
-            npm view "${PACKAGE}@${VERSION}" version >/dev/null 2>&1
+            local out
+            if out=$(npm view --fetch-timeout=15000 "${PACKAGE}@${VERSION}" version 2>&1); then
+              return 0
+            fi
+            case "$out" in
+              *E404*|*404*) : ;;
+              *) npm_trouble="$out"; echo "npm did not answer: ${out}" ;;
+            esac
+            return 1
           }
 
           # The image first, because publishing an entry that points at a tag
@@ -167,7 +181,12 @@ jobs:
           # Ten minutes for npm, which is the one that was short: 0.10.6 took
           # about seven to serve the new version.
           if ! wait_for "npm to serve ${PACKAGE}@${VERSION}" 20 30 npm_has_version; then
-            echo "::error::npm is still not serving ${PACKAGE}@${VERSION} after ten minutes."
+            if [ -n "$npm_trouble" ]; then
+              echo "::error::npm did not answer in ten minutes, so whether it is serving"
+              echo "::error::${PACKAGE}@${VERSION} is unknown. The last answer was: ${npm_trouble}"
+            else
+              echo "::error::npm is still not serving ${PACKAGE}@${VERSION} after ten minutes."
+            fi
             echo "::error::npm, the image and the release asset are already done: re-run this"
             echo "::error::job alone once npm serves the version."
             exit 1
@@ -177,7 +196,13 @@ jobs:
           # for a hiccup between here and the registry, and each one signs in
           # again because the token does not outlive five minutes.
           for attempt in 1 2 3; do
-            ./mcp-publisher login github-oidc
+            if ! login=$(./mcp-publisher login github-oidc 2>&1); then
+              echo "$login"
+              echo "::error::could not sign in to the MCP registry. This is not npm being slow:"
+              echo "::error::check the id-token permission and the registry's trust of this"
+              echo "::error::repository."
+              exit 1
+            fi
             if out=$(./mcp-publisher publish 2>&1); then
               echo "$out"
               echo "published ${VERSION} to the MCP registry"
@@ -194,14 +219,36 @@ jobs:
                 echo "::error::trust of this repository."
                 exit 1
                 ;;
-              *409*|*already\ exists*|*uplicate*)
+              *uplicate\ version*|*already\ exists*)
                 echo "::notice::the MCP registry already has ${VERSION}, so there is nothing to do."
                 exit 0
                 ;;
-              *422*|*alidation*)
-                echo "::error::the MCP registry rejected server.json for ${VERSION}. Fix the file;"
-                echo "::error::re-running this job will not change the answer."
+              *422*)
+                # By the status code alone. The word "validation" turns up in
+                # the service's own 400s as well, and matching on it sent a
+                # package the registry refused to the message about the file
+                # being malformed.
+                echo "::error::the MCP registry rejected server.json for ${VERSION} as malformed."
+                echo "::error::Fix the file; re-running this job will not change the answer."
                 exit 1
+                ;;
+              *400*)
+                # What the registry checks about the package comes back as a
+                # 400, not a 422: a missing mcpName in the npm package, an OCI
+                # image it cannot pull, or npm's own 404 if it looks before
+                # npm has caught up. Only the last of those resolves itself,
+                # and the wait above makes it unlikely.
+                case "$out" in
+                  *404*|*not\ found*|*propagat*)
+                    echo "the registry has not seen ${VERSION} on npm yet"
+                    ;;
+                  *)
+                    echo "::error::the MCP registry refused ${VERSION}, and waiting will not"
+                    echo "::error::change that. Its answer is above: a missing mcpName in the"
+                    echo "::error::published package and an image it cannot pull both land here."
+                    exit 1
+                    ;;
+                esac
                 ;;
             esac
 
