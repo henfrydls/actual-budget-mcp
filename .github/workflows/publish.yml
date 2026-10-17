@@ -160,7 +160,10 @@ jobs:
               return 0
             fi
             case "$out" in
-              *E404*|*404*) : ;;
+              # Cleared, not just skipped: one network blip followed by nine
+              # honest 404s used to end on "npm did not answer", quoting an
+              # error from ten minutes earlier.
+              *E404*|*404*) npm_trouble= ;;
               *) npm_trouble="$out"; echo "npm did not answer: ${out}" ;;
             esac
             return 1
@@ -223,11 +226,14 @@ jobs:
                 echo "::notice::the MCP registry already has ${VERSION}, so there is nothing to do."
                 exit 0
                 ;;
-              *422*)
-                # By the status code alone. The word "validation" turns up in
-                # the service's own 400s as well, and matching on it sent a
-                # package the registry refused to the message about the file
-                # being malformed.
+              *"Validation failed"*|*"❌ Validation"*|*422*)
+                # Not by the status code, which a real one does not carry: on
+                # a 422 the publisher runs its own validate and prints
+                # "Validation failed. Checking detailed validation errors..."
+                # followed by the issues. The capital V is what tells it from
+                # the service's own 400s, which say "ownership validation
+                # failed" in lower case; `*422*` is left for the case where
+                # the validate call itself fails.
                 echo "::error::the MCP registry rejected server.json for ${VERSION} as malformed."
                 echo "::error::Fix the file; re-running this job will not change the answer."
                 exit 1

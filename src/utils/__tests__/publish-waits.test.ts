@@ -55,6 +55,7 @@ describe.skipIf(process.platform === 'win32')('what the release does while it wa
     imageAfter?: number;
     npmAfter?: number;
     npmBroken?: boolean;
+    npmBlipThenMissing?: boolean;
     loginFails?: boolean;
     publish?: Array<{ out: string; status: number }>;
   }): Run {
@@ -88,6 +89,7 @@ describe.skipIf(process.platform === 'win32')('what the release does while it wa
          case "$*" in *actual-budget-mcp@9.9.9*) ;; *) echo "E404 not in this registry"; exit 1;; esac
          ${options.npmBroken ? 'echo "npm ERR! network ETIMEDOUT"; exit 1' : ''}
          ${count('npm')}
+         ${options.npmBlipThenMissing ? 'if [ "$n" = 1 ]; then echo "npm ERR! network ETIMEDOUT"; exit 1; fi; echo "npm ERR! code E404"; exit 1' : ''}
          if [ "$n" -gt "${options.npmAfter ?? 0}" ]; then exit 0; fi
          echo "npm ERR! code E404"; exit 1`,
       );
@@ -184,9 +186,20 @@ describe.skipIf(process.platform === 'win32')('what the release does while it wa
       'retrying a 401 only wastes the window',
     ).toHaveLength(1);
 
-    const invalid = run({ publish: [{ out: 'error: 422 validation failed', status: 1 }] });
+    // The publisher's own words on a 422: it runs validate and prints the
+    // issues, and the status code is nowhere in them. A made-up "422" in the
+    // text let the pattern that catches the real answer be anything at all.
+    const invalid = run({
+      publish: [
+        {
+          out: 'Validation failed. Checking detailed validation errors...\n❌ Validation failed with 1 issue(s):\n  - packages.0: missing mcpName\nError: validation failed',
+          status: 1,
+        },
+      ],
+    });
     expect(invalid.status).toBe(1);
     expect(invalid.out).toContain('rejected server.json');
+    expect(invalid.calls.filter((c) => c === 'mcp-publisher publish')).toHaveLength(1);
   });
 
   it('treats a version the registry already has as done', () => {
@@ -247,6 +260,16 @@ describe.skipIf(process.platform === 'win32')('what the release does while it wa
     expect(result.status).toBe(1);
     expect(result.out).toContain('npm did not answer');
     expect(result.out).not.toContain('is still not serving');
+  });
+
+  it('forgets a network blip once npm starts answering', () => {
+    // One failure followed by honest 404s used to end on "npm did not
+    // answer", quoting an error from ten minutes earlier.
+    const result = run({ npmBlipThenMissing: true });
+
+    expect(result.status).toBe(1);
+    expect(result.out).toContain('is still not serving');
+    expect(result.out).not.toContain('npm did not answer in ten minutes');
   });
 
   it('tries again when the registry fails for no stated reason', () => {
