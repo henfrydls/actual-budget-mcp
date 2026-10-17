@@ -24,6 +24,7 @@ import {
   refuseListValue,
 } from '../../utils/rule-fields.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { loadRuleNames, describeRule } from '../../utils/rule-describe.js';
 
 /**
  * One value as a client sends it.
@@ -363,9 +364,14 @@ async function resolveRuleValue(
   const resolved = [];
   for (const item of list) resolved.push(await resolveRuleFieldValue(field, item));
 
+  // No line of its own any more. What each name turned out to be is the
+  // thing worth saying, and the rule is now written out the way `get_rules`
+  // writes it, which names the id it holds: `IF payee is Shop`. Repeating
+  // that underneath added the uuid and nothing else, and the listing stopped
+  // showing uuids in 0.10.6 because nobody can check one (#198).
   return {
     stored: LIST_OPS.has(op) ? resolved.map((r) => r.id) : resolved[0].id,
-    matched: resolved.map((r) => `${r.name} (${r.id})`),
+    matched: [],
   };
 }
 
@@ -458,12 +464,24 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
     matched.push(`  Action ${action_field}: ${action.matched.join(', ')}`);
   }
 
+  // Written out by the same describer `get_rules` and `delete_rule` use, so
+  // the three cannot drift apart again (#198). It read the request back, with
+  // quotes round everything: a figure stored as a number came back as
+  // `set amount = "-6.60"` and a stored boolean as `set cleared = "false"`,
+  // which since 0.10.6 is how the listing writes the broken form of the same
+  // rule. The reply to the call that made a working one read like the one
+  // that takes an import down.
+  //
+  // Described from the rule that was sent, which is what the engine stored:
+  // `createRule` saves it as given, and reading it back would mean loading
+  // every rule in the budget to find this one.
+  const names = await loadRuleNames();
+  const described = describeRule(rule, names);
+
   return [
     'Rule created:',
-    `  IF ${condition_field} ${condition_op} "${
-      Array.isArray(condition_value) ? condition_value.join('", "') : condition_value
-    }"`,
-    `  THEN set ${action_field} = "${action_value}"`,
+    ...described.conditions,
+    ...described.actions,
     ...matched,
     `  ID: ${(result as any).id}`,
   ];
