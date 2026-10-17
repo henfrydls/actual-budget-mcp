@@ -344,10 +344,14 @@ async function resolveRuleValue(
     // The stored integer beside the figure, because that reading is what was
     // wrong in #183. In a currency with no decimal places the two are the
     // same number, and `-980, stored as -980` says nothing twice.
+    // Compared as numbers, not as text: `formatMoney` groups the thousands,
+    // so `1,500` and `1500` are the same figure written two ways and the
+    // line said it twice anyway.
     const money = formatMoney(cents);
+    const sameFigure = Number(money.replace(/,/g, '')) === cents;
     return {
       stored: cents,
-      matched: money === String(cents) ? [] : [`${money}, stored as ${cents}`],
+      matched: sameFigure ? [] : [`${money}, stored as ${cents}`],
     };
   }
 

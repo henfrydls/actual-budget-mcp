@@ -101,6 +101,18 @@ describe.skipIf(skip)('amounts in a currency with no decimal places (#141)', () 
 
     expect(text).toContain('THEN set amount = -980');
     expect(text).not.toContain('stored as');
+
+    // And above a thousand, where `formatMoney` groups the digits: `1,500`
+    // and `1500` are the same figure written two ways.
+    const big = await createRuleFromInput({
+      condition_field: 'notes',
+      condition_op: 'is',
+      condition_value: 'rent',
+      action_field: 'amount',
+      action_value: '1500',
+    });
+    expect(big.join('\n')).toContain('THEN set amount = 1,500');
+    expect(big.join('\n')).not.toContain('stored as');
   });
 
   it('writes a whole yen, not a hundredth of one', async () => {

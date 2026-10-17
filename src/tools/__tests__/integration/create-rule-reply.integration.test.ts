@@ -149,6 +149,37 @@ describe.skipIf(skip)('what create_rule says back', () => {
     expect(lines.join('\n')).not.toMatch(/IF account is Checking \(/);
   }, 60_000);
 
+  it('says which payee is the one for transfers, and leaves the other alone', async () => {
+    // Every account has a transfer payee carrying its name, so somebody with
+    // a PayPal account and a PayPal payee has this collision as a matter of
+    // course. Putting an id beside both read as two broken rules.
+    await api.createAccount({ name: 'PayPal', offbudget: false } as never, 0);
+    const shop = (await api.createPayee({ name: 'PayPal' } as never)) as string;
+    const transfer = (await api.getPayees()).find(
+      (p) => (p as { transfer_acct?: string }).transfer_acct && p.name === 'PayPal',
+    )!.id;
+
+    const ordinary = await createRuleFromInput({
+      condition_field: 'payee',
+      condition_op: 'is',
+      condition_value: shop,
+      action_field: 'notes',
+      action_value: 'seen',
+    });
+    expect(ordinary.join('\n')).toContain('IF payee is PayPal');
+    expect(ordinary.join('\n'), 'the ordinary one is left as it was').not.toContain(shop);
+
+    const moved = await createRuleFromInput({
+      condition_field: 'payee',
+      condition_op: 'is',
+      condition_value: transfer,
+      action_field: 'notes',
+      action_value: 'moved',
+    });
+    expect(moved.join('\n')).toContain('IF payee is PayPal (transfer)');
+    expect(moved.join('\n')).not.toContain(transfer);
+  }, 60_000);
+
   it('still says it was created when the names cannot be read', async () => {
     // The rule exists by then. Answering `Error` invites the caller to try
     // again, and trying again writes a second rule.

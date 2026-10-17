@@ -84,6 +84,13 @@ export async function loadRuleNames(): Promise<RuleNames> {
       .map((c) => [c.id, byId.get((c as { group_id?: string }).group_id ?? '')] as const),
   );
   const qualified = new Map<string, string>();
+  // Which payees are the ones Actual keeps for transfers, since those carry
+  // the name of their account and collide with an ordinary payee of the same
+  // name as a matter of course: somebody with a PayPal account and a PayPal
+  // payee has one, and putting an id beside both reads as two broken rules.
+  const transferPayees = new Set(
+    payees.filter((p) => (p as { transfer_acct?: string }).transfer_acct).map((p) => p.id),
+  );
   const kinds: Array<Array<{ id: string; name: string }>> = [
     categories.filter((c) => 'group_id' in c).map((c) => ({ id: c.id, name: c.name })),
     groups.map((g) => ({ id: g.id, name: g.name })),
@@ -100,6 +107,14 @@ export async function loadRuleNames(): Promise<RuleNames> {
     }
     for (const ids of sameName.values()) {
       if (ids.length < 2) continue;
+      // One transfer payee against one ordinary payee is the ordinary case,
+      // not an ambiguity to flag: the transfer one says what it is and the
+      // other is left as it was. Anything else falls through.
+      const transfers = ids.filter((id) => transferPayees.has(id));
+      if (transfers.length === 1 && ids.length === 2) {
+        qualified.set(transfers[0], `${byId.get(transfers[0])} (transfer)`);
+        continue;
+      }
       // The group first, for a category, since that is what tells two of them
       // apart in the app as well. The id when that does not do it either,
       // which is two categories with one name in one group, or anything that
