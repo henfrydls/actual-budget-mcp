@@ -30,19 +30,25 @@ describe('the sync clock', () => {
     expect(lastFailedSync()).toBeUndefined();
   });
 
-  it('records what a failed sync threw, and rethrows it', async () => {
+  it('records what a failed sync threw, and answers instead of throwing', async () => {
+    // It threw, once. A failed sync after a write was then reported as a
+    // failed write, and a caller reading "Error" tries again, which is what
+    // duplicates (#162). What it does with the failure is the caller's to
+    // decide, so the failure is handed over rather than raised.
     const thrown = new Error('network-failure');
     sync.mockRejectedValue(thrown);
 
-    await expect(syncNow()).rejects.toThrow('network-failure');
+    const outcome = await syncNow();
 
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toBe(thrown);
     expect(lastFailedSync()?.error).toBe(thrown);
     expect(lastGoodSync()).toBeUndefined();
   });
 
   it('clears a recorded failure once a sync works again', async () => {
     sync.mockRejectedValueOnce(new Error('network-failure'));
-    await syncNow().catch(() => undefined);
+    await syncNow();
     expect(lastFailedSync()).toBeDefined();
 
     await syncNow();

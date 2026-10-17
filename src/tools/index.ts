@@ -50,6 +50,7 @@ import { registerGetRules } from './read/get-rules.js';
 import { registerCreateRule } from './write/create-rule.js';
 import { registerDeleteRule } from './write/delete-rule.js';
 import { withReadSync } from '../utils/read-sync.js';
+import { withWriteNotice } from '../utils/write-notice.js';
 import { withCurrentCurrency } from '../utils/currency.js';
 
 export function registerAllTools(rawServer: McpServer): void {
@@ -58,7 +59,7 @@ export function registerAllTools(rawServer: McpServer): void {
   // Two wrappers, one per direction. Reads pull the server's changes first
   // (#126); writes re-read the budget currency, which scales the amount they
   // are about to convert (#141).
-  const server = withReadSync(withCurrentCurrency(rawServer));
+  const server = withWriteNotice(withReadSync(withCurrentCurrency(rawServer)));
   // Read
   registerListAccounts(server);
   registerGetBudgetMonth(server);

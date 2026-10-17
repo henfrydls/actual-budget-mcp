@@ -450,6 +450,88 @@ async function warnIfServerIsOlder(): Promise<void> {
   );
 }
 
+/**
+ * How long to leave the server alone between sign-ins.
+ *
+ * Measured against a disposable Actual server: `/login` allows five failed
+ * attempts per fifteen minutes and then answers 429 `too-many-requests`,
+ * counting only the failures (`skipSuccessfulRequests`). A 429 is worse than
+ * the failure it replaces, because it hides `invalid-password` behind an
+ * answer about rate limits, so this stays well clear: twenty minutes apart
+ * and at most two in an hour, which cannot reach five in fifteen.
+ */
+const REAUTH_GAP_MS = 20 * 60_000;
+const REAUTH_MAX_PER_HOUR = 2;
+let reauthAt: number[] = [];
+let reauthenticating: Promise<ReauthOutcome> | null = null;
+
+export type ReauthOutcome =
+  | 'signed-in'
+  /** Configured with a token, so there is nothing to sign in with. */
+  | 'no-password'
+  /** Too soon, or too many lately. */
+  | 'waiting'
+  /** The server said the password is wrong. */
+  | 'refused'
+  | 'failed';
+
+/** For tests: forget the attempts, as if the process had just started. */
+export function resetReauthClock(): void {
+  reauthAt = [];
+  reauthenticating = null;
+}
+
+/**
+ * Sign in again after the session with the Actual server expired (#162).
+ *
+ * Through `api.init`, which is the same public call the server makes at
+ * startup, rather than the engine's internal sign-in handler: measured, it
+ * can be called a second time in one process, and the budget stays open, so
+ * the sync that follows works. That also keeps this off an internal API that
+ * can change between releases.
+ *
+ * Only with a password. With `ACTUAL_SESSION_TOKEN` there is nothing to sign
+ * in with: the only thing that path offers is setting the token you already
+ * have, and the one you have is the expired one.
+ *
+ * Measured too: signing in again does not pile up sessions on the server. The
+ * row for a password login is reused, token and all, so four sign-ins leave
+ * one session.
+ */
+export async function reauthenticate(): Promise<ReauthOutcome> {
+  if (reauthenticating) return reauthenticating;
+
+  const config = getConfig();
+  if (config.sessionToken || !config.password) return 'no-password';
+
+  const now = Date.now();
+  reauthAt = reauthAt.filter((at) => now - at < 60 * 60_000);
+  if (reauthAt.length >= REAUTH_MAX_PER_HOUR) return 'waiting';
+  if (reauthAt.length > 0 && now - reauthAt[reauthAt.length - 1] < REAUTH_GAP_MS) return 'waiting';
+
+  reauthAt.push(now);
+  reauthenticating = (async () => {
+    try {
+      await api.init({
+        // The directory this process claimed, not the configured one: #71 can
+        // have stepped aside to a sibling, and signing in against the other
+        // one would open a second copy of the budget.
+        dataDir: claimedDataDir ?? config.dataDir,
+        serverURL: config.serverURL,
+        password: config.password,
+      });
+      return 'signed-in' as const;
+    } catch (error) {
+      return errorCode(error) === 'invalid-password'
+        ? ('refused' as const)
+        : ('failed' as const);
+    } finally {
+      reauthenticating = null;
+    }
+  })();
+  return reauthenticating;
+}
+
 export async function ensureConnection(): Promise<void> {
   if (initialized) return;
 

@@ -149,11 +149,17 @@ describe('a transfer that fails after it has already been applied', () => {
     expect(result.content[0].text).toMatch(/could not be.*determined/is);
   });
 
-  it('covers the sync step, where the rows are in and the sync is not', async () => {
+  it('does not call a failed sync a failed write', async () => {
+    // The rows were in the budget and the reply said the write was in doubt,
+    // which invites a retry and a retry duplicates (#162). What the sync did
+    // is said by the wrapper every reply goes through.
     vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'ours' }] } as any);
     vi.mocked(api.sync).mockRejectedValue(failure());
 
-    expect((await transfer()).content[0].text).toMatch(/was saved/i);
+    const reply = await transfer();
+
+    expect(reply.isError).not.toBe(true);
+    expect(reply.content[0].text).not.toMatch(/was saved/i);
   });
 
   it('labels the write, since that is what gets found again', async () => {

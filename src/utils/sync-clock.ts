@@ -1,5 +1,6 @@
 import * as api from '@actual-app/api';
 import { refreshBudgetDecimalPlaces } from './currency.js';
+import { reauthenticate, type ReauthOutcome } from '../connection.js';
 
 /**
  * When this process last managed to sync, in one place (#126).
@@ -22,6 +23,12 @@ import { refreshBudgetDecimalPlaces } from './currency.js';
 
 let lastGood: number | undefined;
 let lastTrouble: { at: number; error: unknown } | undefined;
+/** When this process last had to sign in again, for the reply to mention it. */
+let lastReauth: number | undefined;
+
+export function lastReauthentication(): number | undefined {
+  return lastReauth;
+}
 
 /** Record a sync that worked, which also clears any recorded failure. */
 export function markGoodSync(at: number = Date.now()): void {
@@ -46,22 +53,27 @@ export function lastFailedSync(): { at: number; error: unknown } | undefined {
 export function resetSyncClock(): void {
   lastGood = undefined;
   lastTrouble = undefined;
+  lastReauth = undefined;
 }
 
-/**
- * `api.sync()`, with the clock kept.
- *
- * Every sync in this server goes through here rather than calling the API
- * directly, which is what makes "when did this last sync" answerable at all.
- * It throws what `api.sync()` throws: callers that have their own handling
- * keep it, and the only thing added is the record.
- */
-export async function syncNow(): Promise<void> {
+/** What a sync did, for the caller that has to say something about it. */
+export interface SyncOutcome {
+  /** Whether the budget and the server are in step. */
+  ok: boolean;
+  /** What went wrong, when it did not. */
+  error?: unknown;
+  /** Whether it took signing in again to get there, which is worth saying. */
+  reauthenticated?: boolean;
+  /** Why signing in again did not happen or did not work. */
+  recovery?: ReauthOutcome;
+}
+
+async function attempt(): Promise<SyncOutcome> {
   try {
     await api.sync();
   } catch (error) {
     markFailedSync(error);
-    throw error;
+    return { ok: false, error };
   }
   markGoodSync();
 
@@ -78,12 +90,52 @@ export async function syncNow(): Promise<void> {
   // budget whose preferences cannot be read goes on converting as it was.
   //
   // Caught here as well, rather than trusted: this runs after the sync has
-  // been recorded, and a throw from it would turn a sync that worked into a
-  // failed call for every write that syncs before its checks. The decimal
-  // count is a formatting detail and must not be able to fail a sync.
+  // already succeeded, and a throw from it would turn a sync that worked into
+  // one that failed.
   try {
     await refreshBudgetDecimalPlaces();
   } catch {
-    // Keeping the count already held, which is what a failed read means.
+    // The count that was already there is the better answer than none.
   }
+  return { ok: true };
+}
+
+/**
+ * `api.sync()`, with the clock kept, and one attempt at signing in again.
+ *
+ * Every sync in this server goes through here rather than calling the API
+ * directly, which is what makes "when did this last sync" answerable at all.
+ *
+ * **It does not throw.** That is the point of it, and it is what stopped a
+ * failed sync after a write being reported as a failed write (#162). Measured
+ * against a disposable server with the session expired: `create_payee`
+ * answered `isError: true` with a paragraph about restarting, and the payee
+ * was in the budget. A caller reading "Error" tries again, and trying again
+ * is what duplicates.
+ *
+ * The inventory that made this safe: no sync in this server runs before a
+ * write in a way that stops it. Every one in a write tool runs after the
+ * write, to push; the three that run before anything is written all go
+ * through `pullBeforeReading`, which has caught and warned since #88 because
+ * the check it guards still sees everything this process wrote; the read path
+ * catches to build its staleness notice; and `verifyFailedWrite` does not
+ * sync at all.
+ *
+ * Signing in again is tried for one error and one only. `token-expired` is a
+ * code on the error, not a sentence to match, which is what makes this safe
+ * to hang a recovery on.
+ */
+export async function syncNow(): Promise<SyncOutcome> {
+  const first = await attempt();
+  if (first.ok) return first;
+
+  const code = (first.error as { code?: unknown } | undefined)?.code;
+  if (code !== 'token-expired') return first;
+
+  const recovery = await reauthenticate();
+  if (recovery !== 'signed-in') return { ...first, recovery };
+
+  lastReauth = Date.now();
+  const second = await attempt();
+  return { ...second, reauthenticated: true };
 }

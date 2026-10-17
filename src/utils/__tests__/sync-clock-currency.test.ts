@@ -34,10 +34,11 @@ describe('syncing re-reads the budget currency', () => {
     expect(refreshBudgetDecimalPlaces).toHaveBeenCalledTimes(1);
   });
 
-  it('does not re-read it when the sync threw', async () => {
+  it('does not re-read it when the sync failed', async () => {
     // Nothing arrived, and the engine is the thing not answering.
     sync.mockRejectedValue(new Error('server is down'));
-    await expect(syncNow()).rejects.toThrow('server is down');
+    const outcome = await syncNow();
+    expect(outcome.ok).toBe(false);
     expect(refreshBudgetDecimalPlaces).not.toHaveBeenCalled();
   });
 
@@ -46,7 +47,7 @@ describe('syncing re-reads the budget currency', () => {
     // already worked. Letting it throw would fail every write that syncs
     // before its own checks, over a preference.
     refreshBudgetDecimalPlaces.mockRejectedValue(new Error('preferences unavailable'));
-    await expect(syncNow()).resolves.toBeUndefined();
+    await expect(syncNow()).resolves.toEqual({ ok: true });
     expect(lastGoodSync(), 'the sync itself did work').not.toBeUndefined();
   });
 });

@@ -144,11 +144,12 @@ const CODE_HELP: Record<string, string> = {
   // which is the always-on case this matters for.
   'token-expired':
     ' The session with the Actual server expired, which is why the sync was refused. ' +
-    'The budget itself is open and undamaged, and the local copy is intact. This ' +
-    'server does not sign in again on its own, so every attempt from here will fail ' +
-    'the same way: restart it to sign in again. If it is configured with ' +
-    'ACTUAL_SESSION_TOKEN rather than a password, there is nothing to sign in with, ' +
-    'so generate a new token first and restart with that.',
+    'The budget itself is open and undamaged, and the local copy is intact. With a ' +
+    'password configured this server signs in again by itself and retries, at most ' +
+    'twice an hour, so seeing this means that was tried and did not work, or that it ' +
+    'has been tried too recently. If it is configured with ACTUAL_SESSION_TOKEN rather ' +
+    'than a password, there is nothing to sign in with: generate a new token and ' +
+    'restart with that.',
   'opening-budget':
     ' Actual could not open the local copy, which usually means the cached file is ' +
     'damaged. Deleting the budget folder in ACTUAL_DATA_DIR downloads it again.',

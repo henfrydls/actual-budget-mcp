@@ -122,16 +122,27 @@ export async function refreshBeforeRead(now?: number): Promise<FreshnessReport> 
     inFlight = (async () => {
       try {
         // `syncNow` also re-reads the budget currency, which is where a
-        // change to it arrives.
-        await syncNow();
-        return true;
-      } catch (error) {
+        // change to it arrives. It answers rather than throwing (#162), and
+        // it may have signed in again to get there.
+        const outcome = await syncNow();
+        if (outcome.ok) return true;
         // stdout carries JSON-RPC. `syncNow` has already recorded it.
+        console.error(
+          `[actual-budget-mcp] could not sync before reading: ${
+            outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+          }`,
+        );
+        return false;
+      } catch (error) {
+        // Kept for anything `syncNow` does not catch itself: a read that
+        // throws here would be a read that fails because the server is down,
+        // which is the thing #126 exists to avoid.
         console.error(
           `[actual-budget-mcp] could not sync before reading: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
+        markFailedSync(error);
         return false;
       } finally {
         inFlight = undefined;
