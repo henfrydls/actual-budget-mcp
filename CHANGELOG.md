@@ -102,13 +102,14 @@ still read your request back with quotes round everything, so the call that
 made a working rule described it in the form that means a broken one. All
 three go through the same describer now and cannot drift apart again.
 
-Two things the listing itself gets right now. Every account has a payee
-carrying its name, the one Actual uses for transfers to it, so an account and
-a payee sharing a name is ordinary rather than ambiguous: the transfer one
-says what it is, `PayPal (transfer)`, and the ordinary one is left alone,
-where both used to be printed with a uuid beside them. And an amount a rule
-set is compared as a figure, so `1,500` and `1500` are no longer reported as
-a change from one to the other.
+Two more things read right. Every account has a payee carrying its name, the
+one Actual uses for transfers to it, so an account and a payee sharing a name
+is ordinary rather than ambiguous: the transfer one says what it is,
+`PayPal (transfer)`, and the ordinary one is left alone, where both used to
+be printed with a uuid beside them. And in a currency with no decimal places
+the reply no longer adds a line saying that 1,500 is stored as 1500. That
+line is there to show the integer behind a figure, and in a currency like
+that the two are the same number, written once with a comma in it.
 
 ### Also
 
