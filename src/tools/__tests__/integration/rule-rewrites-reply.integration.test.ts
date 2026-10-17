@@ -232,6 +232,9 @@ describe.skipIf(skip)('what the saved row says, in the reply', () => {
     // account argument is written over whatever the rule chose. This is the
     // guard that holds the engine to it; if it ever goes red, the reply has to
     // start reading the account off the row like everything else.
+    //
+    // Only this route. The same rule moves a transaction that arrives through
+    // an import or a bank sync, which `rule-sets-account` measures.
     const lines = await createTransaction({
       account: 'Checking',
       amount: -16,
