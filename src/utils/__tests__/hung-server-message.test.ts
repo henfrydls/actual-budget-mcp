@@ -95,22 +95,34 @@ describe('a sync that failed being reported as a problem opening the budget', ()
       expect(described).not.toMatch(/running and reachable/i);
     });
 
-    it('tells an expired session to restart the server, not to open anything', () => {
+    it('tells an expired session what was already tried, not to open anything', () => {
       // Measured by deleting the server's sessions with the MCP server
       // running: the budget stays open and only the sync is refused, so the
       // sentence it arrives wearing, about a problem opening the budget, sends
-      // the reader after the one thing that is fine. Nothing here signs in
-      // again, so it fails the same way every 60 seconds until a restart.
+      // the reader after the one thing that is fine.
+      //
+      // It used to say nothing here signs in again, which stopped being true
+      // with #162: with a password this signs in and retries by itself, so
+      // seeing this means that was tried and did not work, or that it has
+      // been tried too recently.
       const described = describeError(withCode('token-expired'));
 
       expect(described).toMatch(/session .* expired/i);
-      // The act, not just the word: the second half of this message also
-      // mentions restarting, for the case where a restart alone is not enough.
-      expect(described).toMatch(/restart it to sign in/i);
-      // And it says so: the budget is fine. Actual's own sentence in front of
-      // this one is about a problem opening it, which is the one thing that
-      // did not happen.
+      expect(described).toMatch(/signs in again by itself/i);
+      expect(described, 'a restart is not the remedy any more').not.toMatch(
+        /restart it to sign in/i,
+      );
+      // And it says so: the budget is fine. Actual's own sentence is about a
+      // problem opening it, which is the one thing that did not happen, so
+      // this is the one code where that sentence does not go in front. It is
+      // still there, as the detail, because someone searching for it or
+      // pasting it into an issue needs to find it.
       expect(described).toMatch(/budget itself is open/i);
+      expect(described, 'the explanation first, not the sentence it contradicts').not.toMatch(
+        /^Actual reported:/,
+      );
+      expect(described).toContain("Actual's own words:");
+      expect(described).toContain('unknown problem opening');
       expect(described).not.toMatch(/running and reachable/i);
       // Not the cached copy either: deleting it would cost a download and
       // change nothing.

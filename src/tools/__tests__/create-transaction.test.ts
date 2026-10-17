@@ -232,11 +232,17 @@ describe('a write that fails after it has already been applied', () => {
     await expect(attempt()).rejects.toThrow(/could not be.*determined/is);
   });
 
-  it('covers the sync step too, where the row is in and the sync is not', async () => {
+  it('does not call a failed sync a failed write', async () => {
+    // It used to. The row was in the budget and the reply said Error, which
+    // is the one answer that invites a retry, and a retry duplicates (#162).
+    // A sync that does not reach the server is reported as what it is, by
+    // the wrapper every reply goes through.
     lookupFinds([{ id: 'ours', amount: -5000 }]);
     vi.mocked(api.sync).mockRejectedValue(failure());
 
-    await expect(attempt()).rejects.toThrow(/was saved/i);
+    const lines = await attempt();
+
+    expect(lines.join('\n')).toContain('Transaction created:');
   });
 
   it('leaves an ordinary refusal unwrapped, not merely quoted inside a verdict', async () => {

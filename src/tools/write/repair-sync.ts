@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
 import { ensureConnection, getConfig, getInternal } from '../../connection.js';
 import { probeServer } from '../../utils/server-probe.js';
-import { describeError } from '../../utils/errors.js';
+import { alreadyDescribed, describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
 /**
@@ -91,10 +91,29 @@ export async function repairSyncState(): Promise<string[]> {
   try {
     await getInternal().send('sync-repair');
   } catch (error) {
-    throw new Error(`Sync repair failed: ${describeError(error)}`);
+    // `alreadyDescribed`, because this message carries one explanation
+    // already and the handler describes whatever it catches: Actual's own
+    // words inside it were enough to send the second pass down the branch
+    // for a server that is not answering.
+    throw alreadyDescribed(`Sync repair failed: ${describeError(error)}`);
   }
 
-  await syncNow();
+  // Not a push after a write, which is what #162 turned into a notice. This
+  // sync is what checks the rebuilt state against the server, and it is the
+  // whole point of the repair: if it fails, the repair did not finish and the
+  // caller has to hear that rather than read "completed... synced with the
+  // server" with a caveat underneath. The advice that comes with the notice
+  // would be wrong here too: repairing twice writes nothing twice.
+  const verified = await syncNow();
+  if (!verified.ok) {
+    throw alreadyDescribed(
+      'The local sync state was rebuilt, but the sync that checks it against the server ' +
+        'did not work, so the repair is not finished. ' +
+        // No write caution: a repair changes no budget data, so "check before
+        // retrying, it may have been applied" is about nothing.
+        describeError(verified.error, { omitUncertainWriteCaution: true }),
+    );
+  }
 
   return [
     'Sync repair completed.',

@@ -144,11 +144,12 @@ const CODE_HELP: Record<string, string> = {
   // which is the always-on case this matters for.
   'token-expired':
     ' The session with the Actual server expired, which is why the sync was refused. ' +
-    'The budget itself is open and undamaged, and the local copy is intact. This ' +
-    'server does not sign in again on its own, so every attempt from here will fail ' +
-    'the same way: restart it to sign in again. If it is configured with ' +
-    'ACTUAL_SESSION_TOKEN rather than a password, there is nothing to sign in with, ' +
-    'so generate a new token first and restart with that.',
+    'The budget itself is open and undamaged, and the local copy is intact. With a ' +
+    'password configured this server signs in again by itself and retries, at most ' +
+    'twice an hour, so seeing this means that was tried and did not work, or that it ' +
+    'has been tried too recently. If it is configured with ACTUAL_SESSION_TOKEN rather ' +
+    'than a password, there is nothing to sign in with: generate a new token and ' +
+    'restart with that.',
   'opening-budget':
     ' Actual could not open the local copy, which usually means the cached file is ' +
     'damaged. Deleting the budget folder in ACTUAL_DATA_DIR downloads it again.',
@@ -253,7 +254,30 @@ export interface DescribeErrorOptions {
   omitUncertainWriteCaution?: boolean;
 }
 
+/**
+ * Mark a message that is already a finished explanation.
+ *
+ * A tool that builds its own sentence around `describeError` and then throws
+ * it hands that message to whatever catches it, which describes it again.
+ * Measured on `repair_sync`: the inner text ended with Actual's own
+ * "unknown problem opening", the outer pass matched on that, and the reply
+ * opened by telling the reader to check that a server which had just answered
+ * was running, with the write caution printed twice underneath.
+ *
+ * A symbol rather than a field: nothing serialises it by accident, and it
+ * cannot collide with a property Actual puts on its own errors.
+ */
+const DESCRIBED = Symbol.for('actual-mcp.described');
+
+export function alreadyDescribed(message: string): Error {
+  return Object.assign(new Error(message), { [DESCRIBED]: true });
+}
+
 export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
+  if (typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[DESCRIBED]) {
+    return readable(error);
+  }
+
   const text = haystack(error);
   const caution = options.omitUncertainWriteCaution ? '' : MAY_ALREADY_BE_APPLIED;
   const contention = options.omitContentionNote ? '' : contentionNote();
@@ -274,6 +298,14 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
       return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
     }
     const known = CODE_HELP[reason];
+    // An expired session is the one code whose explanation contradicts the
+    // sentence in front of it: "a problem opening" and then "the budget
+    // itself is open". Actual's own words are kept, by `quoting`, where they
+    // read as the detail they are rather than as the verdict. The other codes
+    // leave them in front, because in front of those they are accurate.
+    if (reason === 'token-expired') {
+      return (known ?? '').trim() + quoting(error) + caution + contention;
+    }
     return (
       `Actual reported: ${readable(error)}` +
       (known ?? ` The reason it gave is "${reason}".`) +

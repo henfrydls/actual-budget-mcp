@@ -249,13 +249,14 @@ describe('create_split_transaction: the sync step and the second lookup', () => 
     vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
   });
 
-  it('covers a failure in the sync step, not only in the write', async () => {
-    // create_transaction and create_transfer had this; the split did not, so
-    // swallowing the sync error left the suite green.
+  it('does not call a failed sync a failed write', async () => {
+    // The split was in the budget and the reply put the write in doubt,
+    // which invites a retry, and a retry writes the split again (#162). What
+    // the sync did is said by the wrapper every reply goes through.
     vi.mocked(api.runQuery).mockResolvedValue({ data: [{ id: 'parent' }] } as any);
     vi.mocked(api.sync).mockRejectedValue(failure());
 
-    await expect(split()).rejects.toThrow(/was saved/i);
+    await expect(split()).resolves.toBeDefined();
   });
 
   it('will not say "not saved" when the second lookup cannot run', async () => {

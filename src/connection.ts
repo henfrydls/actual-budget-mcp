@@ -1,6 +1,7 @@
 import * as api from '@actual-app/api';
 import type { ConnectionConfig } from './types.js';
 import {
+  activeDataDir,
   claimDataDir,
   forgetActiveDataDir,
   releaseDataDirLock,
@@ -448,6 +449,125 @@ async function warnIfServerIsOlder(): Promise<void> {
       `${serverVersion} can no longer open it. Actual's own apps do this too when they ` +
       'update. Update your Actual server and apps to match, or stop this server now.',
   );
+}
+
+/**
+ * How long to leave the server alone between sign-ins.
+ *
+ * Measured against a disposable Actual server: `/login` allows five failed
+ * attempts per fifteen minutes and then answers 429 `too-many-requests`,
+ * counting only the failures (`skipSuccessfulRequests`). A 429 is worse than
+ * the failure it replaces, because it hides `invalid-password` behind an
+ * answer about rate limits, so this stays well clear: twenty minutes apart
+ * and at most two in an hour, which cannot reach five in fifteen.
+ */
+const REAUTH_GAP_MS = 20 * 60_000;
+const REAUTH_MAX_PER_HOUR = 2;
+let reauthAt: number[] = [];
+let reauthenticating: Promise<Reauthentication> | null = null;
+
+export type ReauthOutcome =
+  | 'signed-in'
+  /** Configured with a token, so there is nothing to sign in with. */
+  | 'no-password'
+  /** Too soon, or too many lately. */
+  | 'waiting'
+  /** The server said the password is wrong. */
+  | 'refused'
+  | 'failed';
+
+/**
+ * What signing in again did, in enough detail to say it out loud.
+ *
+ * The outcome on its own was not enough. A write whose sync failed said the
+ * sign-in "was tried and did not work, or has been tried too recently",
+ * covering four cases at once, while this function knew which one it was:
+ * measured against a disposable server with the wrong password, the reply
+ * never once said the password had been refused.
+ */
+export interface Reauthentication {
+  outcome: ReauthOutcome;
+  /** What Actual answered when the sign-in itself failed. */
+  error?: unknown;
+  /** The earliest the next attempt is allowed, for `waiting`. */
+  nextAttemptAt?: number;
+}
+
+/** For tests: forget the attempts, as if the process had just started. */
+export function resetReauthClock(): void {
+  reauthAt = [];
+  reauthenticating = null;
+}
+
+/**
+ * Sign in again after the session with the Actual server expired (#162).
+ *
+ * Through `api.init`, which is the same public call the server makes at
+ * startup, rather than the engine's internal sign-in handler: measured, it
+ * can be called a second time in one process, and the budget stays open, so
+ * the sync that follows works. That also keeps this off an internal API that
+ * can change between releases.
+ *
+ * Only with a password. With `ACTUAL_SESSION_TOKEN` there is nothing to sign
+ * in with: the only thing that path offers is setting the token you already
+ * have, and the one you have is the expired one.
+ *
+ * Measured too: signing in again does not pile up sessions on the server. The
+ * row for a password login is reused, token and all, so four sign-ins leave
+ * one session.
+ *
+ * And measured on an **encrypted** budget, because `api.init` reloads the
+ * global store and the encryption keys live in it: against a disposable
+ * server holding an end-to-end encrypted file, with the session expired, the
+ * write that followed the sign-in reached the server, and a third, clean data
+ * directory downloaded the file with the encryption password and read it
+ * back. The keys are written to `global-store.json` when the file is first
+ * decrypted, which is where the new store finds them.
+ */
+export async function reauthenticate(): Promise<Reauthentication> {
+  if (reauthenticating) return reauthenticating;
+
+  const config = getConfig();
+  if (config.sessionToken || !config.password) return { outcome: 'no-password' };
+
+  const now = Date.now();
+  reauthAt = reauthAt.filter((at) => now - at < 60 * 60_000);
+  if (reauthAt.length >= REAUTH_MAX_PER_HOUR) {
+    // Both limits bind at once: the oldest attempt has to age out of the hour
+    // *and* the gap since the last one has to pass.
+    return {
+      outcome: 'waiting',
+      nextAttemptAt: Math.max(reauthAt[0] + 60 * 60_000, reauthAt[reauthAt.length - 1] + REAUTH_GAP_MS),
+    };
+  }
+  if (reauthAt.length > 0 && now - reauthAt[reauthAt.length - 1] < REAUTH_GAP_MS) {
+    return { outcome: 'waiting', nextAttemptAt: reauthAt[reauthAt.length - 1] + REAUTH_GAP_MS };
+  }
+
+  reauthAt.push(now);
+  reauthenticating = (async () => {
+    try {
+      await api.init({
+        // The directory this process holds, not the configured one: #71 can
+        // have stepped aside to a sibling, and signing in against the other
+        // one would open a second copy of the budget. `activeDataDir` is
+        // where that answer already lives, and asking it is what keeps this
+        // from being a second opinion that can disagree.
+        dataDir: activeDataDir(),
+        serverURL: config.serverURL,
+        password: config.password,
+      });
+      return { outcome: 'signed-in' as const };
+    } catch (error) {
+      return {
+        outcome: errorCode(error) === 'invalid-password' ? ('refused' as const) : ('failed' as const),
+        error,
+      };
+    } finally {
+      reauthenticating = null;
+    }
+  })();
+  return reauthenticating;
 }
 
 export async function ensureConnection(): Promise<void> {

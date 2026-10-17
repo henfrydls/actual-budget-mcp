@@ -37,6 +37,7 @@ vi.mock('@actual-app/api', () => ({
 
 import * as api from '@actual-app/api';
 import { findPossibleDuplicates, describePossibleDuplicates } from '../duplicate-check.js';
+import { withSyncScope } from '../sync-clock.js';
 
 /**
  * #88 unit cover. All of this behaviour used to be exercised only through the
@@ -144,6 +145,21 @@ describe('findPossibleDuplicates: the question it asks', () => {
     await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
 
     expect(calls).toEqual(['sync:start', 'sync:done', 'runQuery']);
+  });
+
+  it('keeps its pull out of what the reply says about reaching the server', async () => {
+    // #162: the notice a write carries is about the push that follows the
+    // write. This pull is not that, and a call that finds a duplicate writes
+    // nothing at all. Measured before the flag existed: a refused duplicate
+    // answered "it did not reach the Actual server... Do not repeat the
+    // call", about a write that never happened.
+    vi.mocked(api.sync).mockRejectedValueOnce(new Error('server is down') as never);
+
+    const { scope } = await withSyncScope(() =>
+      findPossibleDuplicates('acc-1', '2026-06-05', -5000),
+    );
+
+    expect(scope.failure).toBeUndefined();
   });
 
   it('excludes split children, which are not transactions anyone records twice', async () => {

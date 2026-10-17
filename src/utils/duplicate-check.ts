@@ -75,17 +75,24 @@ export interface ExistingTransaction {
  * give it more callers than `create_transaction`.
  */
 export async function pullBeforeReading(what: string): Promise<void> {
-  try {
-    await syncNow();
-  } catch (error) {
-    // stderr: stdout carries JSON-RPC.
-    console.error(
-      `[actual-budget-mcp] warning: could not sync before ${what}, so it saw only ` +
-        "this machine's copy of the budget and may have missed what another client " +
-        'wrote. Reason: ' +
-        String((error as Error)?.message ?? error),
-    );
-  }
+  // `syncNow` answers rather than throwing (#162), so this reads the answer.
+  // What it does with it has not changed: warn and carry on. The check this
+  // guards still sees everything this process wrote, and the write's own
+  // sync is still to come and says for itself whether it reached the server.
+  //
+  // `pulling` is what keeps this out of that answer. Measured: a duplicate
+  // refused by the check that follows came back saying the write "did not
+  // reach the Actual server" and not to repeat the call, when there had been
+  // no write at all.
+  const outcome = await syncNow({ pulling: true });
+  if (outcome.ok) return;
+  // stderr: stdout carries JSON-RPC.
+  console.error(
+    `[actual-budget-mcp] warning: could not sync before ${what}, so it saw only ` +
+      "this machine's copy of the budget and may have missed what another client " +
+      'wrote. Reason: ' +
+      String((outcome.error as Error)?.message ?? outcome.error),
+  );
 }
 
 export async function findPossibleDuplicates(
