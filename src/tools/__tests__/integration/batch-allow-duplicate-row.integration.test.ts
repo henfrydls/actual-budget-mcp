@@ -184,8 +184,10 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
     expect(text).toContain('Created 2 transactions.');
     expect(text).toContain('repeats row 1');
     expect(text).toContain('already has a transaction on 2026-10-12');
-    // Row 2 twice, once per finding.
-    expect(text.match(/^ {2}row 2 {2}/gm) ?? []).toHaveLength(2);
+    // Two rows, and row 2 heads its own entry once with both findings under
+    // it. Counting findings called one row "2 rows" and listed it twice.
+    expect(text).toContain('2 rows went in with allow_duplicate');
+    expect(text.match(/^ {2}row 2 {2}(?!.*->).*$/gm) ?? []).toHaveLength(1);
   }, 60_000);
 
   it('still refuses the batch when the repeat is not marked', async () => {
@@ -334,8 +336,12 @@ describe.skipIf(skip)('allow_duplicate on one row', () => {
 
     expect(text).toContain('already has a transaction on 2026-10-01');
     expect(text).toContain('already has a transaction for');
-    // One line per finding, and there are at least these two.
-    expect((text.match(/^ {2}row 1 {2}/gm) ?? []).length).toBeGreaterThanOrEqual(2);
+    // One entry for the row, with its findings under it, and the heading
+    // counts rows: this is one row however many things were found about it.
+    // The transfer summary numbers its lines the same way, so the ones
+    // without a route are the entries in this list.
+    expect(text).toContain('1 row went in with allow_duplicate');
+    expect(text.match(/^ {2}row 1 {2}(?!.*->).*$/gm) ?? []).toHaveLength(1);
   }, 60_000);
 
   it('says nothing about a flag on a row the checks found nothing about', async () => {

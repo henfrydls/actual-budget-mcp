@@ -1002,22 +1002,33 @@ function describeAllowed(
   written: ResolvedRow[],
 ): string[] {
   const byIndex = new Map(written.map((row) => [row.index, row]));
-  const shown = allowed.filter((entry) => byIndex.has(entry.index));
-  if (shown.length === 0) return [];
+  // By row, not by finding. A row can be found twice, and counting the
+  // findings called one row "2 rows" and listed it under two headings of its
+  // own, which reads as two transactions that are not there.
+  const findings = new Map<number, string[]>();
+  for (const entry of allowed) {
+    if (!byIndex.has(entry.index)) continue;
+    const held = findings.get(entry.index);
+    if (held) held.push(entry.found);
+    else findings.set(entry.index, [entry.found]);
+  }
+  if (findings.size === 0) return [];
 
-  const one = shown.length === 1;
+  const one = findings.size === 1;
   return [
     '',
-    `${shown.length} ${one ? 'row' : 'rows'} went in with allow_duplicate, so what the ` +
+    `${findings.size} ${one ? 'row' : 'rows'} went in with allow_duplicate, so what the ` +
       `checks found about ${one ? 'it' : 'them'} was not acted on:`,
     '',
-    ...shown.flatMap((entry) => {
-      const row = byIndex.get(entry.index)!;
-      return [
-        `  row ${entry.index + 1}  ${row.accountName}  ${formatMoney(row.amountCents)}  ${row.date}`,
-        `      ${entry.found}`,
-      ];
-    }),
+    ...[...findings.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .flatMap(([index, found]) => {
+        const row = byIndex.get(index)!;
+        return [
+          `  row ${index + 1}  ${row.accountName}  ${formatMoney(row.amountCents)}  ${row.date}`,
+          ...found.map((one) => `      ${one}`),
+        ];
+      }),
   ];
 }
 
