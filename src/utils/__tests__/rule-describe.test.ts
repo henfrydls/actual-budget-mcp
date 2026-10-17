@@ -17,6 +17,7 @@ const names: RuleNames = {
     ['c1', 'Fun'],
   ]),
   schedules: new Map([['s1', 'Rent']]),
+  qualified: new Map(),
   known: true,
 };
 
@@ -83,6 +84,7 @@ describe('a rule value, as the person who wrote it would read it', () => {
         ['p8', '[x]'],
       ]),
       schedules: new Map(),
+      qualified: new Map(),
       known: true,
     };
     expect(readable(odd, 'payee', 'p1')).toBe('"true"');

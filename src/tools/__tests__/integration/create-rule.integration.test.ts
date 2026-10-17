@@ -199,6 +199,8 @@ describe.skipIf(skip)('create_rule with a payee', () => {
   it('says which payee the rule holds, since the name was typed and the id is stored', async () => {
     // A name that matched one they did not have in mind is invisible
     // otherwise: the rule holds an id, and the reply quoted what they typed.
+    // `amazon` is not the payee's name, `Amazon` is, and the reply has to say
+    // which one the rule ended up with.
     const lines = await createRuleFromInput({
       condition_field: 'payee',
       condition_op: 'is',
@@ -208,8 +210,12 @@ describe.skipIf(skip)('create_rule with a payee', () => {
     });
     const text = lines.join('\n');
 
-    expect(text).toContain(`Condition payee: Amazon (${payeeId})`);
-    expect(text).toContain(`Action payee: Amazon Prime (${primeId})`);
+    expect(text).toContain('IF payee is Amazon');
+    expect(text).toContain('THEN set payee = Amazon Prime');
+    // And not the id, which is what the rule holds and what nobody can check.
+    // It used to be printed in brackets on a line of its own (#198).
+    expect(text).not.toContain(payeeId);
+    expect(text).not.toContain(primeId);
   });
 
   it('says nothing about a payee when the rule has none', async () => {

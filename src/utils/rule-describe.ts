@@ -29,6 +29,16 @@ export interface RuleNames {
   /** Schedule ids, which only `link-schedule` carries. */
   schedules: Map<string, string>;
   /**
+   * What to print instead of the name, for the ids whose name does not
+   * identify them.
+   *
+   * Two categories called Groceries in different groups, or payees called
+   * `Shop ` and `shop`, print as one name and the reply says nothing about
+   * which one the rule holds. Only those few carry something extra, so an
+   * ordinary listing stays as it is.
+   */
+  qualified: Map<string, string>;
+  /**
    * Whether these are the budget's names or a stand-in for names that could
    * not be read.
    *
@@ -60,6 +70,71 @@ export async function loadRuleNames(): Promise<RuleNames> {
     ...accounts.map((a) => [a.id, a.name] as const),
   ]);
 
+  // Which names do not identify what holds them, within their own kind. A
+  // payee and an account can share a name without any confusion, because the
+  // field says which is which, and every account has a transfer payee named
+  // after it, so comparing across kinds would qualify every account there is.
+  //
+  // Compared without case or surrounding space: `Shop ` and `shop` are two
+  // payees that read as one, and telling somebody their rule is about "Shop"
+  // answers nothing.
+  const groupOf = new Map(
+    categories
+      .filter((c) => 'group_id' in c)
+      .map((c) => [c.id, byId.get((c as { group_id?: string }).group_id ?? '')] as const),
+  );
+  const qualified = new Map<string, string>();
+  // Which payees are the ones Actual keeps for transfers, since those carry
+  // the name of their account and collide with an ordinary payee of the same
+  // name as a matter of course: somebody with a PayPal account and a PayPal
+  // payee has one, and putting an id beside both reads as two broken rules.
+  const transferPayees = new Set(
+    payees.filter((p) => (p as { transfer_acct?: string }).transfer_acct).map((p) => p.id),
+  );
+  const kinds: Array<Array<{ id: string; name: string }>> = [
+    categories.filter((c) => 'group_id' in c).map((c) => ({ id: c.id, name: c.name })),
+    groups.map((g) => ({ id: g.id, name: g.name })),
+    payees.map((p) => ({ id: p.id, name: p.name })),
+    accounts.map((a) => ({ id: a.id, name: a.name })),
+  ];
+  for (const kind of kinds) {
+    const sameName = new Map<string, string[]>();
+    for (const { id, name } of kind) {
+      const key = (name ?? '').trim().toLowerCase();
+      const held = sameName.get(key);
+      if (held) held.push(id);
+      else sameName.set(key, [id]);
+    }
+    for (const ids of sameName.values()) {
+      if (ids.length < 2) continue;
+      // One transfer payee against one ordinary payee is the ordinary case,
+      // not an ambiguity to flag: the transfer one says what it is and the
+      // other is left as it was. Anything else falls through.
+      const transfers = ids.filter((id) => transferPayees.has(id));
+      if (transfers.length === 1 && ids.length === 2) {
+        qualified.set(transfers[0], `${byId.get(transfers[0])} (transfer)`);
+        continue;
+      }
+      // The group first, for a category, since that is what tells two of them
+      // apart in the app as well. The id when that does not do it either,
+      // which is two categories with one name in one group, or anything that
+      // is not a category.
+      const byGroup = new Map<string, string[]>();
+      for (const id of ids) {
+        const group = groupOf.get(id);
+        const label = group ? `${byId.get(id)} in ${group}` : '';
+        const held = byGroup.get(label);
+        if (held) held.push(id);
+        else byGroup.set(label, [id]);
+      }
+      for (const [label, held] of byGroup) {
+        for (const id of held) {
+          qualified.set(id, label && held.length === 1 ? label : `${byId.get(id)} (${id})`);
+        }
+      }
+    }
+  }
+
   // A rule Actual writes for a schedule ends in `link-schedule` holding the
   // schedule's id, and the id is the one thing the person reading the list
   // cannot look up anywhere (#182).
@@ -77,7 +152,7 @@ export async function loadRuleNames(): Promise<RuleNames> {
     // budget with no schedules reaches here with nothing to lose.
   }
 
-  return { byId, schedules, known: true };
+  return { byId, schedules, qualified, known: true };
 }
 
 /**
@@ -153,7 +228,9 @@ export function readable(names: RuleNames, field: string, value: unknown): strin
     // the name where the id belongs, reading perfectly well and never
     // matching anything. The quotes are what tell the two apart on the line
     // itself.
-    const named = ID_FIELDS.has(field) ? names.byId.get(text) : undefined;
+    const named = ID_FIELDS.has(field)
+      ? (names.qualified.get(text) ?? names.byId.get(text))
+      : undefined;
     if (named !== undefined) return confusable(named) ? JSON.stringify(named) : named;
     // `JSON.stringify` rather than a pair of quotes, so a value holding one
     // is escaped instead of closing the pair early.

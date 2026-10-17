@@ -24,6 +24,7 @@ import {
   refuseListValue,
 } from '../../utils/rule-fields.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { loadRuleNames, describeRule, type RuleNames } from '../../utils/rule-describe.js';
 
 /**
  * One value as a client sends it.
@@ -340,7 +341,18 @@ async function resolveRuleValue(
     // Said back, because the reading is the thing that was wrong: 45.50 is
     // forty five and a half, not forty five cents, and a rule runs until
     // somebody deletes it.
-    return { stored: cents, matched: [`${formatMoney(cents)}, stored as ${cents}`] };
+    // The stored integer beside the figure, because that reading is what was
+    // wrong in #183. In a currency with no decimal places the two are the
+    // same number, and `-980, stored as -980` says nothing twice.
+    // Compared as numbers, not as text: `formatMoney` groups the thousands,
+    // so `1,500` and `1500` are the same figure written two ways and the
+    // line said it twice anyway.
+    const money = formatMoney(cents);
+    const sameFigure = Number(money.replace(/,/g, '')) === cents;
+    return {
+      stored: cents,
+      matched: sameFigure ? [] : [`${money}, stored as ${cents}`],
+    };
   }
 
   if (BOOLEAN_FIELDS.has(field)) {
@@ -363,9 +375,14 @@ async function resolveRuleValue(
   const resolved = [];
   for (const item of list) resolved.push(await resolveRuleFieldValue(field, item));
 
+  // No line of its own any more. What each name turned out to be is the
+  // thing worth saying, and the rule is now written out the way `get_rules`
+  // writes it, which names the id it holds: `IF payee is Shop`. Repeating
+  // that underneath added the uuid and nothing else, and the listing stopped
+  // showing uuids in 0.10.6 because nobody can check one (#198).
   return {
     stored: LIST_OPS.has(op) ? resolved.map((r) => r.id) : resolved[0].id,
-    matched: resolved.map((r) => `${r.name} (${r.id})`),
+    matched: [],
   };
 }
 
@@ -458,13 +475,45 @@ export async function createRuleFromInput(input: CreateRuleInput): Promise<strin
     matched.push(`  Action ${action_field}: ${action.matched.join(', ')}`);
   }
 
+  // Written out by the same describer `get_rules` and `delete_rule` use, so
+  // the three cannot drift apart again (#198). It read the request back, with
+  // quotes round everything: a figure stored as a number came back as
+  // `set amount = "-6.60"` and a stored boolean as `set cleared = "false"`,
+  // which since 0.10.6 is how the listing writes the broken form of the same
+  // rule. The reply to the call that made a working one read like the one
+  // that takes an import down.
+  //
+  // Described from the rule that was sent, which is what the engine stored:
+  // `createRule` saves it as given, and reading it back would mean loading
+  // every rule in the budget to find this one.
+  // The rule is already created by now, so a failure here must not become an
+  // error: the caller reads "Error", tries again, and the budget ends up with
+  // the rule twice. It degrades to ids, the way `delete_rule` does.
+  let names: RuleNames = {
+    byId: new Map(),
+    schedules: new Map(),
+    qualified: new Map(),
+    known: false,
+  };
+  let namesFailed = false;
+  try {
+    names = await loadRuleNames();
+  } catch {
+    namesFailed = true;
+  }
+  const described = describeRule(rule, names);
+
   return [
     'Rule created:',
-    `  IF ${condition_field} ${condition_op} "${
-      Array.isArray(condition_value) ? condition_value.join('", "') : condition_value
-    }"`,
-    `  THEN set ${action_field} = "${action_value}"`,
+    ...described.conditions,
+    ...described.actions,
     ...matched,
+    ...(namesFailed && described.usesIds
+      ? [
+          '  The names behind these ids could not be read just now, so the ids are shown',
+          '  as they are stored. The rule is created.',
+        ]
+      : []),
     `  ID: ${(result as any).id}`,
   ];
 }
