@@ -604,8 +604,8 @@ export async function ensureConnection(): Promise<void> {
     } else if (claim.contended) {
       // How many there are, since when, and what it costs (#207). The line
       // used to name the directory and the first pid, which says nothing
-      // about the pile: a server on `-7` has six others behind it, and the
-      // reader has no way to know that from "<dir> is in use".
+      // about the pile: a server several siblings along has that many others
+      // running, and "<dir> is in use" gives the reader no way to know.
       const crowded = crowdedNotice(claim);
       console.error(
         crowded !== undefined
