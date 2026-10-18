@@ -202,12 +202,13 @@ export interface ClaimedDataDir {
   /** The live process holding the configured directory. */
   heldBy?: LockInfo;
   /**
-   * Every live server this one stepped past, in the order it met them.
+   * Every live server on this directory or one of its siblings.
    *
-   * The count is the point (#207). A server that lands on `-7` has six others
-   * running against the same budget, each with a full copy of it on disk, and
-   * "<dir> is in use" says none of that: in the live test of 0.10.7 one of
-   * them had been running for three weeks.
+   * The count is the point (#207). A server that lands on a high-numbered
+   * sibling has that many others running against the same budget, each with a
+   * full copy of it on disk, and "<dir> is in use" says none of that. It was
+   * found in the live test of 0.10.7, where one of the servers still holding
+   * a directory had been started in a session closed weeks before.
    */
   others?: LockInfo[];
   /** True when every candidate was taken and we are sharing after all. */
@@ -221,12 +222,13 @@ export interface ClaimedDataDir {
  * pids: what clears this is closing the sessions that left them, and a list
  * of numbers reads as something to go and kill one by one.
  *
- * Nothing is reclaimed on a guess. A directory whose holder is gone is taken
- * over already, which is `readDataDirLock` answering null for a pid that no
- * longer exists. What is left after that is a pid the system has handed to
- * something else, and telling that apart costs a platform-specific lookup
- * that can be wrong. Wrong puts two servers in one directory, which is the
- * thing this mechanism exists to prevent; right saves one download.
+ * Nothing is reclaimed on a guess, which was decided when this was written.
+ * A directory whose holder is gone is taken over already, which is
+ * `readDataDirLock` answering null for a pid that no longer exists. What is
+ * left after that is a pid the system has handed to something else, and
+ * telling that apart costs a platform-specific lookup that can be wrong.
+ * Wrong puts two servers in one directory, which is the thing this mechanism
+ * exists to prevent; right saves one download.
  */
 export function crowdedNotice(claim: ClaimedDataDir): string | undefined {
   const others = claim.others ?? [];
@@ -283,11 +285,30 @@ const MAX_SIBLINGS = 8;
  * measured in #71 all had it set to the same path. Honouring the setting to the
  * letter would mean corrupting the budget it points at.
  */
+/**
+ * Every live server on the configured directory or one of its siblings.
+ *
+ * Counted after the choice and never used to make it, which keeps the two
+ * questions apart: where this server goes is decided by the first directory
+ * it can take, and how many others are running is decided by all of them.
+ *
+ * Counting only the ones it walked past is what the search leaves behind. The
+ * search stops at the first free directory, and a closed session leaves a
+ * free directory in the middle: with a live server on the first, a dead lock
+ * on the second and live servers on the third and fourth, it stops at the
+ * second and would report one neighbour out of three.
+ */
+function liveNeighbours(configured: string): LockInfo[] {
+  const found: LockInfo[] = [];
+  for (let n = 1; n <= MAX_SIBLINGS; n++) {
+    const lock = readDataDirLock(n === 1 ? configured : `${configured}-${n}`);
+    if (lock && lock.pid !== process.pid) found.push(lock);
+  }
+  return found;
+}
+
 export function claimDataDir(version: string): ClaimedDataDir {
   const configured = effectiveDataDir();
-  // Kept as they are met, so the startup line can say how many there are
-  // rather than naming the first one and leaving the rest unsaid (#207).
-  const others: LockInfo[] = [];
 
   for (let n = 1; n <= MAX_SIBLINGS; n++) {
     const candidate = n === 1 ? configured : `${configured}-${n}`;
@@ -301,10 +322,9 @@ export function claimDataDir(version: string): ClaimedDataDir {
             dataDir: candidate,
             contended: configured,
             heldBy: readDataDirLock(configured) ?? undefined,
-            others,
+            others: liveNeighbours(configured),
           };
     }
-    if (lock.heldBy) others.push(lock.heldBy);
   }
 
   // Everything is taken. Sharing is wrong, and not starting is worse.
@@ -314,7 +334,7 @@ export function claimDataDir(version: string): ClaimedDataDir {
     dataDir: configured,
     contended: configured,
     heldBy: readDataDirLock(configured) ?? undefined,
-    others,
+    others: liveNeighbours(configured),
     shared: true,
   };
 }

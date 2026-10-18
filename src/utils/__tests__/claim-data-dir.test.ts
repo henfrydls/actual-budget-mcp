@@ -88,7 +88,7 @@ describe('claiming a data dir that another server may be using', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps every server it stepped past, not just the first', () => {
+  it('keeps every live server around it, not just the first', () => {
     // The count is what the startup line is for (#207): landing on `-4` means
     // three others are running, and naming only the holder of the first
     // directory says nothing about the other two.
@@ -101,6 +101,27 @@ describe('claiming a data dir that another server may be using', () => {
     vi.restoreAllMocks();
 
     expect(claim.others).toHaveLength(3);
+  });
+
+  it('counts the ones behind a directory that was freed', () => {
+    // The case a closed session leaves: the search stops at the first free
+    // directory, and the free one is in the middle. Counting only what it
+    // walked past reported one neighbour out of three, and the oldest it
+    // named was a server that had started that morning.
+    liveLockFrom(join(root, 'cache'), '2001-02-02T00:00:00.000Z');
+    deadLock(join(root, 'cache-2'));
+    liveLockFrom(join(root, 'cache-3'), '2001-01-01T00:00:00.000Z');
+    liveLock(join(root, 'cache-4'));
+    vi.spyOn(process, 'pid', 'get').mockReturnValue(999_006);
+
+    const claim = claimDataDir('1.0.0');
+    const notice = crowdedNotice(claim)!;
+    vi.restoreAllMocks();
+
+    expect(claim.dataDir, 'the choice is unchanged').toBe(join(root, 'cache-2'));
+    expect(claim.others).toHaveLength(3);
+    expect(notice).toContain('4 actual-budget-mcp servers');
+    expect(notice).toContain('The oldest started on 2001-01-01.');
   });
 
   it('reclaims a directory whose holder is gone instead of leaving it behind', () => {
@@ -142,16 +163,16 @@ describe('claiming a data dir that another server may be using', () => {
 /**
  * What the server says at startup when it is not on the first directory.
  *
- * In the live test of 0.10.7 it started on `-7`, and the line it printed
- * named one directory and one pid. Six servers were running against the same
- * budget, one of them for three weeks, and nothing said so.
+ * In the live test of 0.10.7 the line named one directory and one pid, while
+ * several servers were running against the same budget and one of them had
+ * been left by a session closed weeks earlier. Nothing said so.
  */
 describe('the line about a crowded directory', () => {
   it('counts them, including this one, and says since when', () => {
     // The oldest second, on purpose: the directories are met in order and
     // the one it met first is not the one that has been there longest.
-    liveLockFrom(join(root, 'cache'), '2026-10-11T10:00:00.000Z');
-    liveLockFrom(join(root, 'cache-2'), '2026-09-24T10:00:00.000Z');
+    liveLockFrom(join(root, 'cache'), '2001-02-02T00:00:00.000Z');
+    liveLockFrom(join(root, 'cache-2'), '2001-01-01T00:00:00.000Z');
     vi.spyOn(process, 'pid', 'get').mockReturnValue(999_004);
 
     const notice = crowdedNotice(claimDataDir('1.0.0'))!;
@@ -159,7 +180,7 @@ describe('the line about a crowded directory', () => {
 
     expect(notice).toContain('3 actual-budget-mcp servers');
     expect(notice, 'the oldest, not whichever came first').toContain(
-      'The oldest started on 2026-09-24.',
+      'The oldest started on 2001-01-01.',
     );
     expect(notice).toContain('left over from sessions');
     expect(notice).toContain('Closing the ones you are not using');
@@ -168,7 +189,7 @@ describe('the line about a crowded directory', () => {
   it('names no pids', () => {
     // What clears this is closing the sessions that left them. A list of
     // numbers reads as something to go and kill one by one.
-    liveLockFrom(join(root, 'cache'), '2026-09-24T10:00:00.000Z');
+    liveLockFrom(join(root, 'cache'), '2001-01-01T00:00:00.000Z');
     vi.spyOn(process, 'pid', 'get').mockReturnValue(999_005);
 
     const notice = crowdedNotice(claimDataDir('1.0.0'))!;

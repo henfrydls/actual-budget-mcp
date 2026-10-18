@@ -11,11 +11,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const claim = {
   dataDir: '/data/actual-budget-mcp-4',
   contended: '/data/actual-budget-mcp',
-  heldBy: { pid: 31204, startedAt: '2026-09-24T10:00:00.000Z', version: '0.10.7' },
+  heldBy: { pid: 111, startedAt: '2001-01-01T00:00:00.000Z', version: '0.0.0' },
   others: [
-    { pid: 31204, startedAt: '2026-09-24T10:00:00.000Z', version: '0.10.7' },
-    { pid: 48890, startedAt: '2026-10-11T10:00:00.000Z', version: '0.10.7' },
-    { pid: 50111, startedAt: '2026-10-17T10:00:00.000Z', version: '0.10.7' },
+    { pid: 111, startedAt: '2001-01-01T00:00:00.000Z', version: '0.0.0' },
+    { pid: 222, startedAt: '2001-02-02T00:00:00.000Z', version: '0.0.0' },
+    { pid: 333, startedAt: '2001-03-03T00:00:00.000Z', version: '0.0.0' },
   ],
   shared: false,
 };
@@ -69,7 +69,7 @@ describe('what the server says when it is not on the first directory', () => {
 
     expect(line, 'nothing printed it').toBeDefined();
     expect(line).toContain('4 actual-budget-mcp servers');
-    expect(line).toContain('The oldest started on 2026-09-24.');
+    expect(line).toContain('The oldest started on 2001-01-01.');
     expect(line).toContain('full download on disk');
     expect(line, 'the fix is closing them, not a list to go killing').not.toMatch(/pid/i);
   });
