@@ -2,6 +2,7 @@ import * as api from '@actual-app/api';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
+import { PREFIX, sweepFinishedRuns } from './temp-run-dirs.js';
 
 /**
  * Integration test harness that runs the REAL Actual Budget engine locally,
@@ -39,7 +40,14 @@ function restoreLog(): void {
 
 export async function initTestEngine(): Promise<void> {
   silenceEngineChatter();
-  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'actual-mcp-it-'));
+  sweepFinishedRuns();
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `${PREFIX}${process.pid}-`));
+  // For the run that is interrupted rather than finished: `exit` fires on
+  // Ctrl-C and on an uncaught error, and only synchronous work runs there.
+  // It does not fire on SIGKILL, which is what the sweep above is for.
+  process.once('exit', () => {
+    if (dataDir) fs.rmSync(dataDir, { recursive: true, force: true });
+  });
   internal = await api.init({ dataDir });
 }
 
@@ -86,8 +94,12 @@ export async function createFreshBudget(
   await api.runImport(name, setup);
   const budgets = await api.getBudgets();
   const created = budgets.find((b) => b.name === name);
-  if (!created) throw new Error(`could not locate freshly created budget "${name}"`);
-  await api.loadBudget(created.id);
+  // `id` is optional on the engine's own type: a budget known only to the
+  // server has none yet. One it just created locally always does, and saying
+  // so here is what lets this file type-check (#109).
+  if (!created?.id) throw new Error(`could not locate freshly created budget "${name}"`);
+  const id: string = created.id;
+  await api.loadBudget(id);
   // The decimal count belongs to the budget that is open, and a new budget
   // has its own currency. In the server this happens inside `ensureConnection`,
   // which reads the preference as part of opening one; here the harness opens
@@ -101,7 +113,7 @@ export async function createFreshBudget(
   // which hangs the run with no failure to read.
   const { resetBudgetDecimalPlaces } = await import('../../../utils/currency.js');
   resetBudgetDecimalPlaces();
-  return created.id;
+  return id;
 }
 
 export { api };

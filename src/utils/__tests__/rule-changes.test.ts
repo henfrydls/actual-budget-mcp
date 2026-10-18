@@ -21,6 +21,8 @@ function savedRow(overrides: Partial<SavedRow> = {}): SavedRow {
     payeeName: 'Cinema',
     notes: 'hola',
     cleared: false,
+    payeeTransferAccount: null,
+    parentId: null,
     category: null,
     categoryName: null,
     isParent: false,
