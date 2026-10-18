@@ -27,6 +27,28 @@ describe('amountToCents', () => {
   it('converts zero', () => {
     expect(amountToCents(0)).toBe(0);
   });
+
+  /**
+   * That it rounds, which nothing pinned (#112).
+   *
+   * Replacing it with `Math.trunc(amount * 100)` passed the whole suite, in
+   * both modes. Binary floating point cannot hold most decimal amounts
+   * exactly, so `19.99 * 100` is `1998.9999999999998`: rounding gives 1999
+   * and truncating gives 1998, which is a cent lost on an ordinary price,
+   * silently, every time. In a budgeting tool that surfaces much later as a
+   * reconciliation that is off by a few cents and no way to find out why.
+   *
+   * The figures are measured against the SDK, not reasoned from it.
+   */
+  it.each([
+    [19.99, 1999],
+    [-19.99, -1999],
+    [8.115, 812],
+    [0.005, 1],
+    [2.675, 268],
+  ])('rounds %d to %d rather than truncating', (amount, cents) => {
+    expect(amountToCents(amount)).toBe(cents);
+  });
 });
 
 describe('formatMoney', () => {
