@@ -31,9 +31,20 @@ function installed(name: string): string[] {
     .filter((version): version is string => typeof version === 'string');
 }
 
-/** The floor of a `^x.y.z` pin, as numbers. */
+/**
+ * The floor of a `^x.y.z` pin, as numbers.
+ *
+ * Anything it cannot read is a failure and not a pass. `$hono` parsed to
+ * `[NaN]`, every comparison against NaN was false, and the check said the
+ * version was at or above the pin: a typo in the one file this test exists
+ * to watch, waved through by the test.
+ */
 function floorOf(pin: string): number[] {
-  return pin.replace(/^[\^~>=]+/, '').split('.').map(Number);
+  const parts = pin.replace(/^[\^~>=]+/, '').split('.').map(Number);
+  if (parts.length === 0 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
+    throw new Error(`"${pin}" is not a version this can compare`);
+  }
+  return parts;
 }
 
 function atLeast(version: string, pin: string): boolean {
@@ -48,6 +59,15 @@ function atLeast(version: string, pin: string): boolean {
 
 describe('the version overrides', () => {
   const overrides = Object.entries(manifest.overrides ?? {});
+
+  it('are all a package and a version', () => {
+    // npm also takes an object, to override a package only underneath
+    // another one. Nothing here uses that, and the two checks below would
+    // throw on one rather than say what it found.
+    for (const [name, pin] of overrides) {
+      expect(typeof pin, `the override for ${name} is not a version string`).toBe('string');
+    }
+  });
 
   it('has some, or this file is measuring nothing', () => {
     expect(overrides.length).toBeGreaterThan(0);
