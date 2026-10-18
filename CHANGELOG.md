@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.10.8
+
+Mostly the inside of the thing. Three changes show.
+
+### A failure says the likely cause first (#206)
+
+When a write does not reach your Actual server, or a read answers from an
+older copy, the reply explains why. It used to explain Actual's wording
+first and arrive at the one actionable sentence three clauses later. The
+likely cause now opens it, and Actual's own words stay at the end as the
+detail:
+
+    The Actual server did not answer: check that it is running and reachable.
+    That is what this almost always is. [...] Actual's own words: We had an
+    unknown problem opening "..."
+
+And the paragraph about another server running against the same budget is no
+longer attached to every one of those. Two servers sharing a cache produce an
+out-of-sync budget, and that is where it stays. A server that did not answer,
+a session that expired and a key that cannot decrypt are not things another
+server does, and saying so there read as the cause.
+
+### Startup says how many servers are on this budget (#207)
+
+A server whose data directory is already in use steps aside to a sibling, and
+said so by naming the directory and one process. If sessions have been closed
+without stopping their servers, several can be running at once, each with a
+full copy of the budget on disk and each writing to the same Actual server.
+
+Now it says how many there are, since when the oldest has been running, that
+they are usually left over from closed sessions, and that closing them is
+what clears it. Nothing is reclaimed automatically: a directory whose owner
+is gone is reused already, and guessing about one whose owner is still there
+is how two servers end up in one directory.
+
+### Nothing moderate left in what gets published (#135)
+
+`hono` and `@hono/node-server` were pinned at versions their advisories had
+grown past. `npm audit --omit=dev` reported two moderate; it reports none.
+Both arrive through the MCP SDK, which is on its newest release, so they are
+pinned forward rather than waiting for it.
+
+### Also
+
+Internal, and none of it changes a reply:
+
+- The suite runs on Windows in CI, which is where a test comparing paths with
+  forward slashes was failing for anyone who tried it there. (#172)
+- The test files are type-checked, which nothing did before, and the eight
+  errors that found are fixed. (#109)
+- Tests that passed only in the order they were written now pass in any
+  order. (#106)
+- The integration harness cleans up its temporary directory when a run is
+  interrupted, instead of leaving a budget database behind. (#101)
+- Four guarantees the suite could not see are pinned: the reads its stale-read
+  guard covers, that a date is refused where a month is wanted, that money
+  rounds rather than truncating, and that every tool waits for the connection
+  before it reads. (#118, #117, #112, #102)
+
 ## 0.10.7
 
 What a reply tells you about what reached your budget. A write whose sync
