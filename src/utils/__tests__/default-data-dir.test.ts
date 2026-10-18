@@ -18,10 +18,17 @@ describe('defaultDataDir', () => {
 
   it('uses the XDG data dir on Linux, not /tmp', async () => {
     setPlatform('linux');
-    process.env.XDG_DATA_HOME = '/home/someone/.local/share';
+    const xdg = join('/home', 'someone', '.local', 'share');
+    process.env.XDG_DATA_HOME = xdg;
     const { effectiveDataDir } = await import('../data-dir-lock.js');
 
-    expect(effectiveDataDir()).toBe('/home/someone/.local/share/actual-budget-mcp');
+    // Built with `join`, like the code builds it (#172). The expectation was
+    // written out with forward slashes, which is the separator everywhere
+    // this suite runs today and not the one it fails on: on Windows `join`
+    // answers with backslashes, and somebody running the suite there is how
+    // this was found, since nothing here can run it. CI cannot either yet:
+    // `npm ci` on a Windows runner cannot install better-sqlite3 (#210).
+    expect(effectiveDataDir()).toBe(join(xdg, 'actual-budget-mcp'));
   });
 
   it('falls back to ~/.local/share when XDG_DATA_HOME is unset', async () => {
