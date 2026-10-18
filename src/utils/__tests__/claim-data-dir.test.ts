@@ -24,6 +24,23 @@ const liveLockFrom = (dir: string, startedAt: string) => {
   );
 };
 
+/**
+ * A lock held by a live process that is not this one.
+ *
+ * `process.ppid` is the vitest process that started this worker, so it is
+ * alive for as long as the test is. The other helpers name this process,
+ * which works while `process.pid` is mocked to something that does not
+ * exist, and that is exactly the case that cannot see whether this server
+ * counts itself.
+ */
+const liveLockHeldByAnother = (dir: string) => {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, LOCK_FILE),
+    JSON.stringify({ pid: process.ppid, startedAt: '2001-01-01T00:00:00.000Z', version: '0.0.0' }),
+  );
+};
+
 /** A lock naming a pid that cannot exist, standing in for a crashed server. */
 const deadLock = (dir: string) => {
   mkdirSync(dir, { recursive: true });
@@ -197,6 +214,21 @@ describe('the line about a crowded directory', () => {
 
     expect(notice).not.toMatch(/pid/i);
     expect(notice).not.toContain(String(process.pid));
+  });
+
+  it('does not count itself among them', () => {
+    // With a real pid in its own lock, a count that forgets to skip this
+    // server reads one too many, and the number is the whole point of the
+    // line. The other tests cannot see it: they mock `process.pid` to
+    // something that does not exist, so this server's own lock reads as a
+    // dead one and is skipped for the wrong reason.
+    liveLockHeldByAnother(join(root, 'cache'));
+
+    const claim = claimDataDir('1.0.0');
+
+    expect(claim.dataDir).toBe(join(root, 'cache-2'));
+    expect(claim.others, 'the neighbour, not the neighbour and itself').toHaveLength(1);
+    expect(crowdedNotice(claim)).toContain('2 actual-budget-mcp servers');
   });
 
   it('says nothing when this server has the directory to itself', () => {
