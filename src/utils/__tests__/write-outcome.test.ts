@@ -224,7 +224,11 @@ describe('the verdict carries the contention note', () => {
     const spy = vi.spyOn(process, 'pid', 'get').mockReturnValue(999_200);
     claimDataDir('0.9.2');
 
-    const { message } = await verifyFailedWrite(
+    // out-of-sync, which is what sharing a cache produces. #79 asks for the
+    // note where contention is the cause, and #206 is about everywhere else:
+    // this used to add it to all four verdicts whatever had gone wrong.
+    const { message } = await verifyFailedWrite(new Error('out-of-sync'), context(present));
+    const unreachable = await verifyFailedWrite(
       new Error('We had an unknown problem opening "x"'),
       context(present),
     );
@@ -238,6 +242,9 @@ describe('the verdict carries the contention note', () => {
     // process has the file" from "the file is broken". Dropping it from the
     // verdict used to break no test at all.
     expect(message).toMatch(new RegExp(String(incumbent)));
+    // And not on a failure another server cannot cause (#206): a server that
+    // did not answer is not a server that is sharing the cache.
+    expect(unreachable.message).not.toMatch(new RegExp(String(incumbent)));
   });
 });
 

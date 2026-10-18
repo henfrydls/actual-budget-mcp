@@ -296,6 +296,32 @@ export function alreadyDescribed(message: string): Error {
   return Object.assign(new Error(message), { [DESCRIBED]: true });
 }
 
+/**
+ * Whether two servers on one budget could be what produced this failure.
+ *
+ * One criterion, named once, because three places answer it: `describeError`,
+ * `verifyFailedWrite`, which builds its own message around the note, and
+ * anything added later. Deciding it per caller is what left the note attached
+ * to failures it has nothing to do with (#206): a read whose figures were
+ * stale, a tool that failed with the server stopped, a sign-in that did not
+ * work.
+ *
+ * Sharing a cache produces two things and not the rest of the list: Actual
+ * reports the budget as out-of-sync, or it throws the empty error of #40
+ * mid-sync. A version mismatch says out-of-sync too and is not this: it means
+ * the library and the file disagree, which one server alone does just as
+ * well. A server that did not answer, a session that expired, a key that
+ * cannot decrypt and a local copy that will not open are not things another
+ * server on this budget does.
+ */
+export function contentionExplains(error: unknown): boolean {
+  const text = haystack(error);
+  if (/out-of-sync-(migrations|data)/i.test(text)) return false;
+  if (/out-of-sync/i.test(text)) return true;
+  if (/unknown problem opening/i.test(text)) return false;
+  return readable(error).trim() === '';
+}
+
 export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
   if (typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[DESCRIBED]) {
     return readable(error);
@@ -303,18 +329,11 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
 
   const text = haystack(error);
   const caution = options.omitUncertainWriteCaution ? '' : MAY_ALREADY_BE_APPLIED;
-  // Only where two servers on one budget are a cause of **this** failure
-  // (#206), which is the pair of things sharing a cache produces: Actual
-  // reports it as out-of-sync, or it throws the empty error of #40 mid-sync.
-  //
-  // It used to be appended to every description, and each caller that did not
-  // want it had to remember to say so. Three of them did not: a read whose
-  // figures were stale, a tool that failed with the server stopped, and the
-  // branch for a sign-in that did not work all ended on a paragraph about a
-  // server started three weeks earlier, attached to the reason where it reads
-  // as the cause. Deciding it here, by what the failure is, is the only way
-  // the answer is the same on every route.
-  const contention = options.omitContentionNote ? '' : contentionNote();
+  // Only where contention is a cause of **this** failure (#206). It used to
+  // be appended to every description, and each caller that did not want it
+  // had to remember to say so; three did not.
+  const contention =
+    options.omitContentionNote || !contentionExplains(error) ? '' : contentionNote();
 
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
@@ -329,7 +348,7 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
     // text describes. With a named reason, say what that reason means and
     // leave Actual's sentence as the detail instead of contradicting it.
     if (reason === '' || NETWORK_CODES.has(reason)) {
-      return unknownOpenHelp(reason) + quoting(error) + caution;
+      return unknownOpenHelp(reason) + quoting(error) + caution + contention;
     }
     const known = CODE_HELP[reason];
     // An expired session is the one code whose explanation contradicts the
@@ -338,15 +357,13 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
     // read as the detail they are rather than as the verdict. The other codes
     // leave them in front, because in front of those they are accurate.
     if (reason === 'token-expired') {
-      return (known ?? '').trim() + quoting(error) + caution;
+      return (known ?? '').trim() + quoting(error) + caution + contention;
     }
-    // No contention note on any named reason either: a session that expired,
-    // a key that cannot decrypt and a local copy that will not open are not
-    // things another server on this budget does.
     return (
       `Actual reported: ${readable(error)}` +
       (known ?? ` The reason it gave is "${reason}".`) +
-      caution
+      caution +
+      contention
     );
   }
 

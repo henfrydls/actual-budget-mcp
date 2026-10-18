@@ -1,4 +1,4 @@
-import { describeError, contentionNote, readable, haystack } from './errors.js';
+import { contentionExplains, describeError, contentionNote, readable, haystack } from './errors.js';
 
 /**
  * What actually happened to a write that reported failure.
@@ -111,7 +111,12 @@ export async function verifyFailedWrite(
   });
   // #79 asks that contention be named where it is the cause, so the message can
   // distinguish "another process has the file" from "the file is broken".
-  const contention = contentionNote();
+  // Where it is the cause, and not on every failure: the same question
+  // `describeError` asks, asked through the same predicate (#206). This one
+  // builds its own message around the note, so it opts out above and adds it
+  // here, and before this it added it to all four verdicts whatever had gone
+  // wrong.
+  const contention = contentionExplains(error) ? contentionNote() : '';
 
   if (verdict === 'applied') {
     return {
