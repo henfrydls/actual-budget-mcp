@@ -52,6 +52,11 @@ jobs:
   # install fails at `gyp ERR! find VS`; with it, the suite runs (#210).
   test-windows:
     runs-on: windows-latest
+    # The suite takes a little over half an hour here, against five minutes
+    # on Linux, so the default six-hour ceiling is no ceiling at all: one
+    # hung test would spend a working day of runner time before anything
+    # stopped it.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
