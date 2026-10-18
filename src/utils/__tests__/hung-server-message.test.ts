@@ -23,7 +23,21 @@ describe('a sync that failed being reported as a problem opening the budget', ()
     const described = describeError(engineFailure());
 
     expect(described).toMatch(/no specific case/i);
-    expect(described).toMatch(/most likely cause/i);
+    expect(described, 'likely, not certain').toMatch(/almost always/i);
+  });
+
+  it('leads with what to do about it (#206)', () => {
+    // It used to open by explaining Actual's wording and reach the server in
+    // the third clause. Seen in the live test of 0.10.7 with the server
+    // stopped: a write that had worked answered with a paragraph of hedging
+    // about a message, for a failure that is almost always a server that is
+    // not there.
+    const described = describeError(engineFailure());
+
+    expect(described, 'the first sentence').toMatch(/^The Actual server did not answer/);
+    expect(described.indexOf('running and reachable')).toBeLessThan(
+      described.indexOf('no specific case'),
+    );
   });
 
   it('points at the server, as the likely cause and not as a fact', () => {

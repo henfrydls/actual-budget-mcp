@@ -121,13 +121,20 @@ const MAY_ALREADY_BE_APPLIED =
  * have landed. Rewriting the object would take that away and the answer would
  * silently become "not applied", which is the one verdict that authorises a
  * retry.
+ *
+ * The likely cause goes first (#206). It used to open by explaining Actual's
+ * wording and reach "the server not answering" in the third clause, so the
+ * one actionable sentence was the one nobody read to. Seen in the live test
+ * of 0.10.7 with the server stopped: a `create_payee` that had worked
+ * answered with a paragraph of hedging about a message, for a failure that
+ * is almost always a server that is not there.
  */
 const UNKNOWN_OPEN_HELP =
-  'Actual reported a generic failure that names opening the budget, which it uses ' +
-  'for anything it has no specific case for. It carries no code, so the most ' +
-  'likely cause is the Actual server not answering: check that it is running and ' +
-  'reachable. If the budget was already open, nothing was being opened and this ' +
-  'came from a sync.';
+  'The Actual server did not answer: check that it is running and reachable. That ' +
+  'is what this almost always is. Actual reports it as a problem opening the budget, ' +
+  'which is the message it falls back on for anything it has no specific case for, ' +
+  'and it arrived with no code of its own. If the budget was already open, nothing ' +
+  'was being opened and this came from a sync.';
 
 /** What a named reason means, where knowing it changes what to do. */
 const CODE_HELP: Record<string, string> = {
