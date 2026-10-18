@@ -129,9 +129,9 @@ describe('rowsDatedAfterToday: the question it asks', () => {
 describe('describeFutureRows: the choice it lays out', () => {
   const rows = [
     { id: 't1', date: '2026-09-28', amount: -4000, payeeName: 'Farmacia', notes: null,
-      cameFromBank: false, enteredByHand: false },
+      cleared: false, cameFromBank: false, enteredByHand: false },
     { id: 't2', date: '2026-10-15', amount: -8000, payeeName: undefined, notes: 'rent',
-      cameFromBank: false, enteredByHand: false },
+      cleared: false, cameFromBank: false, enteredByHand: false },
   ];
   const text = () => describeFutureRows(rows, -12000, 'Card', -10000, -14000).join('\n');
 

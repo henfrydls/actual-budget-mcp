@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { McpServerLike } from '../read-sync.js';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 
@@ -329,7 +330,7 @@ describe('re-reading the currency before a write', () => {
       tool: (...a: unknown[]) => {
         handler = a.at(-1) as () => Promise<unknown>;
       },
-    } as never);
+    } as unknown as McpServerLike);
     (server.tool as (...a: unknown[]) => unknown)('a_tool', 'does a thing', {}, annotations, async () => {
       seen = budgetDecimalPlaces();
       return { seen };

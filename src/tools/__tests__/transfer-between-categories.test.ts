@@ -71,7 +71,7 @@ function month(groceries: number, dining: number, balances?: [number, number]) {
 
 describe('transfer_between_categories (#86)', () => {
   beforeEach(() => {
-    sendMock.mockClear().mockResolvedValue(undefined);
+    sendMock.mockReset().mockResolvedValue(undefined);
     vi.mocked(api.getBudgetMonth).mockReset();
     // Reset this too. The income test replaces it with a three-category list,
     // and without this that list leaks into every test declared after it. It

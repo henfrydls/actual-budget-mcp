@@ -13,6 +13,7 @@ import { reauthenticate } from '../../connection.js';
 import { readDataDirLock } from '../data-dir-lock.js';
 import { resetSyncClock, syncNow, withSyncScope } from '../sync-clock.js';
 import { syncFailureNotice, withWriteNotice } from '../write-notice.js';
+import type { McpServerLike } from '../read-sync.js';
 
 const withCode = (code: string) => Object.assign(new Error('sync refused'), { code });
 
@@ -27,7 +28,7 @@ function wrap(
       registered = args[args.length - 1] as never;
     },
   };
-  withWriteNotice(server as never).tool(
+  withWriteNotice(server as unknown as McpServerLike).tool(
     'create_payee' as never,
     'd' as never,
     {} as never,

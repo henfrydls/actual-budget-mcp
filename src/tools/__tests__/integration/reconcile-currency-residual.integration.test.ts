@@ -255,7 +255,7 @@ describe.skipIf(skip)('reconcile_currency_residual integration (#30)', () => {
     const { category } = await budgetWithACollision('Card (JPY)');
 
     const order: string[] = [];
-    vi.mocked(api.sync).mockClear().mockImplementation(async () => {
+    vi.mocked(api.sync).mockReset().mockImplementation(async () => {
       order.push('sync:start');
       await Promise.resolve();
       await Promise.resolve();

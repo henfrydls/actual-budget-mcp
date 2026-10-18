@@ -34,7 +34,7 @@ describe('repairSyncState (#41 recover from an out-of-sync budget)', () => {
   beforeEach(() => {
     answering.mockReset().mockResolvedValue('answering');
     send.mockReset().mockResolvedValue(undefined);
-    vi.mocked(api.sync).mockClear().mockResolvedValue(undefined);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined);
     vi.mocked(ensureConnection).mockReset().mockResolvedValue(undefined);
   });
 
@@ -152,7 +152,7 @@ describe('repair_sync when the problem is that the server is not there (#89)', (
   beforeEach(() => {
     answering.mockReset();
     send.mockReset().mockResolvedValue(undefined);
-    vi.mocked(api.sync).mockClear().mockResolvedValue(undefined);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined);
     vi.mocked(ensureConnection).mockReset().mockResolvedValue(undefined);
   });
 

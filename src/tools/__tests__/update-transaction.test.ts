@@ -29,7 +29,7 @@ import { updateTransactionFields } from '../write/update-transaction.js';
 
 describe('updateTransactionFields (#25 split sub-transaction amount)', () => {
   beforeEach(() => {
-    vi.mocked(api.updateTransaction).mockClear().mockResolvedValue({} as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
     vi.mocked(api.runQuery).mockReset();
   });
 
@@ -63,14 +63,14 @@ describe('updateTransactionFields (#25 split sub-transaction amount)', () => {
 
 describe('updateTransactionFields (#37 payee must be an id, never payee_name)', () => {
   beforeEach(() => {
-    vi.mocked(api.updateTransaction).mockClear().mockResolvedValue({} as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
     vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [{ id: 't-1', amount: -500, is_child: false }] } as any);
-    vi.mocked(api.getPayees).mockClear().mockResolvedValue([
+    vi.mocked(api.getPayees).mockReset().mockResolvedValue([
       { id: 'payee-1', name: 'Supermarket' },
       // Actual stores transfer payees with an empty name and a transfer_acct.
       { id: 'transfer-payee-1', name: '', transfer_acct: 'acct-1' },
     ] as any);
-    vi.mocked(api.createPayee).mockClear().mockResolvedValue('payee-new' as any);
+    vi.mocked(api.createPayee).mockReset().mockResolvedValue('payee-new' as any);
   });
 
   it('resolves an existing payee name to its id', async () => {

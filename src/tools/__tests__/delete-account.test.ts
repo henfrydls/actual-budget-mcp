@@ -32,7 +32,7 @@ describe('deleteAccountGuarded (destructive: needs explicit confirmation)', () =
       { id: 't3' },
     ] as any);
     vi.mocked(api.deleteAccount).mockReset().mockResolvedValue(undefined);
-    vi.mocked(api.sync).mockClear().mockResolvedValue(undefined);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined);
   });
 
   it('does not delete on the first call, it previews instead', async () => {

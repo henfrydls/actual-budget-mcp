@@ -37,7 +37,7 @@ import { createTransaction } from '../write/create-transaction.js';
 
 describe('createTransaction transfer linking (#24)', () => {
   beforeEach(() => {
-    vi.mocked(api.addTransactions).mockClear().mockResolvedValue('ok' as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
   });
 
   it('routes to a linked transfer when the payee names another account', async () => {

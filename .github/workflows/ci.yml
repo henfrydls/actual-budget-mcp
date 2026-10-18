@@ -36,6 +36,12 @@ jobs:
 
       - run: npm ci
       - run: npm run build
+      # The tests are excluded from the build, and vitest transpiles without
+      # checking, so nothing type-checked them (#109). A reference to
+      # something that does not exist is invisible until the line runs, and
+      # inside a gated test it never does: that is how a call to a function
+      # nobody had imported reached the smoke tests.
+      - run: npm run typecheck
       - run: npm test
 
   # The paths this server builds are the one thing a Linux runner cannot
