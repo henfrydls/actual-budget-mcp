@@ -20,7 +20,7 @@ import { createNewAccount } from '../write/create-account.js';
 describe('createNewAccount (#38)', () => {
   beforeEach(() => {
     vi.mocked(api.createAccount).mockReset().mockResolvedValue('acct-new');
-    vi.mocked(api.sync).mockClear().mockResolvedValue(undefined);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined);
   });
 
   it('creates an on-budget account by default', async () => {

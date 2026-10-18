@@ -177,6 +177,16 @@ describe('a hung server does not hold a request for five minutes (#99)', () => {
   }, 20_000);
 
   it('puts the original fetch back', async () => {
+    // This module installs itself on import, so "the original" depends on
+    // whether anything has taken that one off yet: run first, this test used
+    // to capture the import-time wrapper as `before` and compare it against
+    // the real fetch that the uninstall correctly restored. It passed only
+    // because another test in the file had happened to go first (#106).
+    //
+    // So it starts from a known state. Installing undoes an active install
+    // before it does anything else, which is what makes one line enough.
+    installHttpTimeout(500)();
+
     const before = globalThis.fetch;
     const uninstall = installHttpTimeout(500);
     expect(globalThis.fetch).not.toBe(before);

@@ -38,7 +38,7 @@ import {
 
 describe('reconcileCurrencyResidual (#30)', () => {
   beforeEach(() => {
-    vi.mocked(api.addTransactions).mockClear().mockResolvedValue('ok' as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
   });
 

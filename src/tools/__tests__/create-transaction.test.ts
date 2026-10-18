@@ -39,8 +39,8 @@ import { resolveDate } from '../../utils/dates.js';
 
 describe('createTransaction (#26 explicit category must win)', () => {
   beforeEach(() => {
-    vi.mocked(api.addTransactions).mockClear().mockResolvedValue('ok' as any);
-    vi.mocked(api.updateTransaction).mockClear().mockResolvedValue({} as any);
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
     vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
     vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
     vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);

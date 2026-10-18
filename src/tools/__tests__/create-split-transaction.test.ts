@@ -34,7 +34,16 @@ import { createSplitTransaction, registerCreateSplitTransaction } from '../write
 
 describe('createSplitTransaction (#28)', () => {
   beforeEach(() => {
-    vi.mocked(api.addTransactions).mockClear().mockResolvedValue('ok' as any);
+    // `mockReset`, not `mockClear` (#106). `mockClear` forgets the calls and
+    // keeps the implementation, so a `mockImplementationOnce` queued by a
+    // later block in this file was still waiting here when the tests ran in
+    // another order: two of these failed with "the budget could not be read
+    // back", which is not an assertion and names nothing that is wrong.
+    // Every other block in the file already resets.
+    vi.mocked(api.addTransactions).mockReset().mockResolvedValue('ok' as any);
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: [] } as any);
+    vi.mocked(api.getTransactions).mockReset().mockResolvedValue([] as any);
+    vi.mocked(api.sync).mockReset().mockResolvedValue(undefined as any);
   });
 
   it('creates a parent with subtransactions when splits sum to the total', async () => {

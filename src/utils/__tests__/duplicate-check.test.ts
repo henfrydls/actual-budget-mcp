@@ -118,7 +118,7 @@ describe('findPossibleDuplicates: the question it asks', () => {
   beforeEach(() => {
     calls.length = 0;
     asked.length = 0;
-    vi.mocked(api.sync).mockClear().mockImplementation(async () => {
+    vi.mocked(api.sync).mockReset().mockImplementation(async () => {
       calls.push('sync:start');
       await Promise.resolve();
       await Promise.resolve();

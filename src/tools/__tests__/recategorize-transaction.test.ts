@@ -37,7 +37,7 @@ function captureHandler(register: (server: any) => void): (args: any) => Promise
 
 describe('recategorize_transaction (#44: must not zero a split child)', () => {
   beforeEach(() => {
-    vi.mocked(api.updateTransaction).mockClear().mockResolvedValue({} as any);
+    vi.mocked(api.updateTransaction).mockReset().mockResolvedValue({} as any);
     vi.mocked(api.runQuery).mockReset();
   });
 
