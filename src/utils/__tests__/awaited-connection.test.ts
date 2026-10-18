@@ -44,7 +44,12 @@ function calleeName(call: ts.CallExpression): string | undefined {
 }
 
 /** Wrappers that change nothing about when the promise is waited for. */
-function transparent(node: ts.Node): boolean {
+function transparent(node: ts.Node, child: ts.Node): boolean {
+  if (ts.isConditionalExpression(node)) {
+    // `await (flag ? ensureConnection() : Promise.resolve())`. Either branch
+    // is the value being awaited; the condition is not.
+    return node.whenTrue === child || node.whenFalse === child;
+  }
   return (
     ts.isParenthesizedExpression(node) ||
     ts.isAsExpression(node) ||
@@ -53,6 +58,17 @@ function transparent(node: ts.Node): boolean {
     ts.isSatisfiesExpression(node)
   );
 }
+
+/**
+ * Callers that wait for the callback they are given.
+ *
+ * By hand, like the list in `unsettled-reads`: whether a function awaits what
+ * it is handed is not in the tree. `tool` and `resource` are the MCP
+ * registration, whose handler the SDK awaits, and `queueTransactionWrite`
+ * runs its callback and returns the promise. Anything not on this list, such
+ * as `setTimeout` or `forEach`, takes the callback and walks away.
+ */
+const AWAITS_ITS_CALLBACK = new Set(['tool', 'resource', 'queueTransactionWrite']);
 
 /** `Promise.all`, `allSettled`, `race`, `any`: waiting on one waits on all. */
 function isPromiseCombinator(call: ts.CallExpression): boolean {
@@ -65,8 +81,33 @@ function isPromiseCombinator(call: ts.CallExpression): boolean {
   );
 }
 
-/** Whether an `await` anywhere in the file names this variable. */
-function awaitedByName(file: ts.SourceFile, name: string): boolean {
+/** The function a node lives in, or the file when it lives in none. */
+function enclosingBody(node: ts.Node): ts.Node {
+  let current: ts.Node | undefined = node.parent;
+  while (current) {
+    if (
+      ts.isFunctionDeclaration(current) ||
+      ts.isFunctionExpression(current) ||
+      ts.isArrowFunction(current) ||
+      ts.isMethodDeclaration(current) ||
+      ts.isConstructorDeclaration(current) ||
+      ts.isGetAccessor(current) ||
+      ts.isSetAccessor(current)
+    ) {
+      return current;
+    }
+    current = current.parent;
+  }
+  return node.getSourceFile();
+}
+
+/**
+ * Whether an `await` inside this function names this variable.
+ *
+ * Inside this one, not anywhere in the file: two functions can both call a
+ * variable `open`, and one of them awaiting it says nothing about the other.
+ */
+function awaitedByName(scope: ts.Node, name: string): boolean {
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
@@ -79,7 +120,7 @@ function awaitedByName(file: ts.SourceFile, name: string): boolean {
     }
     ts.forEachChild(node, visit);
   };
-  visit(file);
+  visit(scope);
   return found;
 }
 
@@ -94,7 +135,7 @@ export function unawaitedCalls(source: string): number[] {
     let parent: ts.Node | undefined = node.parent;
 
     while (parent) {
-      if (transparent(parent)) {
+      if (transparent(parent, node)) {
         node = parent;
         parent = parent.parent;
         continue;
@@ -115,8 +156,22 @@ export function unawaitedCalls(source: string): number[] {
       }
       if (ts.isAwaitExpression(parent)) return true;
       if (ts.isReturnStatement(parent)) return true;
-      // `() => ensureConnection()` hands the promise to whoever called it.
-      if (ts.isArrowFunction(parent) && parent.body === node) return true;
+      // `() => ensureConnection()` hands the promise to whoever has the
+      // arrow, so the question moves to the arrow rather than being answered
+      // by it: returned or awaited or handed to something that waits, yes;
+      // given to `setTimeout` or `forEach`, no.
+      if (ts.isArrowFunction(parent) && parent.body === node) {
+        node = parent;
+        parent = node.parent;
+        continue;
+      }
+      if (
+        ts.isCallExpression(parent) &&
+        parent.arguments.includes(node as ts.Expression) &&
+        AWAITS_ITS_CALLBACK.has(calleeName(parent) ?? '')
+      ) {
+        return true;
+      }
       if (ts.isVoidExpression(parent)) return false;
       // An array on its way into `Promise.all([...])`: climb, and let the
       // combinator's own parent decide. An array going anywhere else is not
@@ -141,7 +196,7 @@ export function unawaitedCalls(source: string): number[] {
         parent.initializer === node &&
         ts.isIdentifier(parent.name)
       ) {
-        return awaitedByName(file, parent.name.text);
+        return awaitedByName(enclosingBody(parent), parent.name.text);
       }
       return false;
     }
@@ -221,7 +276,11 @@ describe('every call to ensureConnection is waited for', () => {
       ['a then on the end', 'await ensureConnection().then(() => 1);'],
       ['returning it', 'return ensureConnection();'],
       ['returning a chain', 'return ensureConnection().then(() => 1);'],
-      ['a concise arrow body', 'const g = () => ensureConnection(); await g();'],
+      ['a concise arrow body kept and called', 'const g = () => ensureConnection(); await g();'],
+      ['a concise arrow body returned', 'return () => ensureConnection();'],
+      ['a concise arrow body as a tool handler', "server.tool('t', 'd', {}, a, () => ensureConnection());"],
+      ['a conditional branch', 'await (flag ? ensureConnection() : Promise.resolve());'],
+      ['the other conditional branch', 'await (flag ? Promise.resolve() : ensureConnection());'],
       ['Promise.all', 'await Promise.all([ensureConnection(), g()]);'],
       ['Promise.allSettled', 'await Promise.allSettled([ensureConnection()]);'],
       ['a variable awaited later', 'const open = ensureConnection(); await open;'],
@@ -238,8 +297,21 @@ describe('every call to ensureConnection is waited for', () => {
       ['Promise.all nobody awaits', 'Promise.all([ensureConnection(), g()]);'],
       ['an array that goes nowhere', 'const xs = [ensureConnection()];'],
       ['a variable nothing awaits', 'const open = ensureConnection(); use(open);'],
+      ['an arrow handed to setTimeout', 'setTimeout(() => ensureConnection());'],
+      ['an arrow handed to forEach', '[1].forEach(() => ensureConnection());'],
     ])('reports %s', (_what, body) => {
       expect(scan(body)).toEqual([1]);
+    });
+
+    it('reads a variable in the function it lives in, not in the file', () => {
+      // Two functions can both call it `open`, and one of them awaiting it
+      // says nothing about the other.
+      const source = `
+        async function one() { const open = ensureConnection(); use(open); }
+        async function two() { const open = somethingElse(); await open; }
+      `;
+
+      expect(unawaitedCalls(source)).toEqual([2]);
     });
 
     it('sees it through a namespace and through an alias', () => {
