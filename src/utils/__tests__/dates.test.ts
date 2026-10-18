@@ -19,6 +19,24 @@ describe('resolveMonth', () => {
     expect(resolveMonth('2025-12')).toBe('2025-12');
   });
 
+  /**
+   * A date is not a month, and nothing said so (#117).
+   *
+   * `resolveMonth` returning `YYYY-MM-DD` unchanged is silent: the engine's
+   * `dbMonth` is a `parseInt`, so a malformed month is written against and
+   * reported as success while every reader keeps looking at the twelve months
+   * that exist. Nine tools resolve a month through here and only one of them
+   * re-checks the result, and the test that covered it asserted the wording
+   * of that one tool's own message: loosening this regex to accept a day
+   * still failed it, for the wrong reason, through the wrong guard.
+   */
+  it.each(['2026-09-15', '2026-09-1', '2026-09-15T00:00:00Z', '2026-09-'])(
+    'refuses %s, which is a date and not a month',
+    (input) => {
+      expect(() => resolveMonth(input)).toThrow(/Could not parse month/);
+    },
+  );
+
   it('handles "this month" (EN)', () => {
     expect(resolveMonth('this month')).toBe('2026-03');
   });

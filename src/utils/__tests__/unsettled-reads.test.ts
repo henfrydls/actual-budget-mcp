@@ -19,6 +19,38 @@ const OFFENDING = `
   });
 `;
 
+/**
+ * Every read the guard is meant to cover, one case each (#118).
+ *
+ * `getTransactionsReport` could be deleted from `READ_NAMES` with the whole
+ * suite green, and it had already been missing once: the first list knew only
+ * the engine's own API, and the read tool is used across the integration
+ * tests. A list nothing exercises is a list that loses entries.
+ *
+ * Written out here rather than imported from the set it is pinning. The point
+ * is that two places have to agree, and a loop over the set under test would
+ * simply have one case fewer.
+ */
+describe('the reads it knows about', () => {
+  it.each([
+    ['runQuery', "await api.runQuery(q)"],
+    ['getTransactions', 'await api.getTransactions(acct, a, b)'],
+    ['getAccountBalance', 'await api.getAccountBalance(acct)'],
+    ['rowsDatedAfterToday', 'await rowsDatedAfterToday(acct)'],
+    ['findPossibleDuplicates', 'await findPossibleDuplicates(acct, date, cents)'],
+    ['getTransactionsReport', 'await getTransactionsReport({ account: acct })'],
+  ])('reports %s when it follows a write with nothing in between', (_name, call) => {
+    const src = `
+      it('x', async () => {
+        await api.deleteTransaction(id);
+        const rows = ${call};
+      });
+    `;
+
+    expect(findUnsettledReads(src)).toHaveLength(1);
+  });
+});
+
 describe('findUnsettledReads: the offence it is for', () => {
   it('finds a read straight after a delete', () => {
     expect(findUnsettledReads(OFFENDING)).toEqual([{ line: 3, readLine: 4 }]);
