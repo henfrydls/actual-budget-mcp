@@ -3,9 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@actual-app/api', () => ({ default: {}, sync: vi.fn(), utils: {} }));
 vi.mock('../currency.js', () => ({ refreshBudgetDecimalPlaces: vi.fn() }));
 vi.mock('../../connection.js', () => ({ reauthenticate: vi.fn() }));
+vi.mock('../data-dir-lock.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../data-dir-lock.js')>()),
+  readDataDirLock: vi.fn(),
+}));
 
 import * as api from '@actual-app/api';
 import { reauthenticate } from '../../connection.js';
+import { readDataDirLock } from '../data-dir-lock.js';
 import { resetSyncClock, syncNow, withSyncScope } from '../sync-clock.js';
 import { syncFailureNotice, withWriteNotice } from '../write-notice.js';
 
@@ -147,6 +152,47 @@ describe('what a write says about its sync', () => {
       };
 
       expect((await wrap(twice)()).content[0].text).toBe('Rows created: 2');
+    });
+  });
+
+  /**
+   * The other server on the same budget, which is not why this failed (#206).
+   *
+   * Seen in the live test of 0.10.7: a push against a stopped server ended on
+   * a paragraph about a server from three weeks earlier, attached to
+   * `Reason:` where it reads as the cause.
+   */
+  describe('the note about another server', () => {
+    beforeEach(() => {
+      vi.mocked(readDataDirLock).mockReset().mockReturnValue({
+        pid: 4242,
+        startedAt: '2026-09-24T10:00:00.000Z',
+        version: '0.10.7',
+      });
+    });
+
+    it('leaves it out of a failure it did not cause', async () => {
+      vi.mocked(api.sync).mockRejectedValue(
+        Object.assign(new Error('We had an unknown problem opening "b"'), {}),
+      );
+
+      const text = (await wrap(writeThenPush())()).content[0].text;
+
+      expect(text).toContain('did not reach the Actual server');
+      expect(text).toContain('did not answer');
+      expect(text, 'a fact about startup, not about this sync').not.toContain('pid 4242');
+    });
+
+    it('keeps it for the failure two servers do cause', async () => {
+      // An out-of-sync budget is what sharing a cache produces, and there the
+      // other server is the answer rather than a distraction.
+      vi.mocked(api.sync).mockRejectedValue(
+        Object.assign(new Error(''), { reason: 'out-of-sync' }),
+      );
+
+      const text = (await wrap(writeThenPush())()).content[0].text;
+
+      expect(text).toContain('pid 4242');
     });
   });
 

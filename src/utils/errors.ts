@@ -121,13 +121,36 @@ const MAY_ALREADY_BE_APPLIED =
  * have landed. Rewriting the object would take that away and the answer would
  * silently become "not applied", which is the one verdict that authorises a
  * retry.
+ *
+ * The likely cause goes first (#206). It used to open by explaining Actual's
+ * wording and reach "the server not answering" in the third clause, so the
+ * one actionable sentence was the one nobody read to. Seen in the live test
+ * of 0.10.7 with the server stopped: a `create_payee` that had worked
+ * answered with a paragraph of hedging about a message, for a failure that
+ * is almost always a server that is not there.
+ *
+ * Two cases reach it, and the difference is worth a clause. With no code it
+ * is a guess, a good one. With `timeout` or `network-failure` the connection
+ * is what Actual itself is naming, and saying "it arrived with no code of its
+ * own" there was simply false.
  */
-const UNKNOWN_OPEN_HELP =
-  'Actual reported a generic failure that names opening the budget, which it uses ' +
-  'for anything it has no specific case for. It carries no code, so the most ' +
-  'likely cause is the Actual server not answering: check that it is running and ' +
-  'reachable. If the budget was already open, nothing was being opened and this ' +
-  'came from a sync.';
+function unknownOpenHelp(reason: string): string {
+  const sure =
+    reason === ''
+      ? 'That is what this almost always is. '
+      : `The code it came with, "${reason}", is about the connection too. `;
+  const noCode =
+    reason === ''
+      ? ', and it arrived with no code of its own'
+      : '';
+  return (
+    'The Actual server did not answer: check that it is running and reachable. ' +
+    sure +
+    'Actual reports it as a problem opening the budget, which is the message it falls ' +
+    `back on for anything it has no specific case for${noCode}. If the budget was ` +
+    'already open, nothing was being opened and this came from a sync.'
+  );
+}
 
 /** What a named reason means, where knowing it changes what to do. */
 const CODE_HELP: Record<string, string> = {
@@ -273,6 +296,32 @@ export function alreadyDescribed(message: string): Error {
   return Object.assign(new Error(message), { [DESCRIBED]: true });
 }
 
+/**
+ * Whether two servers on one budget could be what produced this failure.
+ *
+ * One criterion, named once, because three places answer it: `describeError`,
+ * `verifyFailedWrite`, which builds its own message around the note, and
+ * anything added later. Deciding it per caller is what left the note attached
+ * to failures it has nothing to do with (#206): a read whose figures were
+ * stale, a tool that failed with the server stopped, a sign-in that did not
+ * work.
+ *
+ * Sharing a cache produces two things and not the rest of the list: Actual
+ * reports the budget as out-of-sync, or it throws the empty error of #40
+ * mid-sync. A version mismatch says out-of-sync too and is not this: it means
+ * the library and the file disagree, which one server alone does just as
+ * well. A server that did not answer, a session that expired, a key that
+ * cannot decrypt and a local copy that will not open are not things another
+ * server on this budget does.
+ */
+export function contentionExplains(error: unknown): boolean {
+  const text = haystack(error);
+  if (/out-of-sync-(migrations|data)/i.test(text)) return false;
+  if (/out-of-sync/i.test(text)) return true;
+  if (/unknown problem opening/i.test(text)) return false;
+  return readable(error).trim() === '';
+}
+
 export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
   if (typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[DESCRIBED]) {
     return readable(error);
@@ -280,7 +329,11 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
 
   const text = haystack(error);
   const caution = options.omitUncertainWriteCaution ? '' : MAY_ALREADY_BE_APPLIED;
-  const contention = options.omitContentionNote ? '' : contentionNote();
+  // Only where contention is a cause of **this** failure (#206). It used to
+  // be appended to every description, and each caller that did not want it
+  // had to remember to say so; three did not.
+  const contention =
+    options.omitContentionNote || !contentionExplains(error) ? '' : contentionNote();
 
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
   // the reasons Actual reports are `out-of-sync-migrations` / `out-of-sync-data`.
@@ -295,7 +348,7 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
     // text describes. With a named reason, say what that reason means and
     // leave Actual's sentence as the detail instead of contradicting it.
     if (reason === '' || NETWORK_CODES.has(reason)) {
-      return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
+      return unknownOpenHelp(reason) + quoting(error) + caution + contention;
     }
     const known = CODE_HELP[reason];
     // An expired session is the one code whose explanation contradicts the

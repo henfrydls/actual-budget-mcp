@@ -75,6 +75,35 @@ describe('describeError names data dir contention (#47)', () => {
     );
   });
 
+  it('says nothing about contention on a failure contention does not cause', () => {
+    // #206: the note was appended to every description, so a read that could
+    // not refresh, and a tool that failed with the server stopped, both ended
+    // on a paragraph about another server. Two servers on one budget produce
+    // an out-of-sync budget and the empty mid-sync error; they do not stop a
+    // server answering.
+    vi.mocked(readDataDirLock).mockReturnValue({
+      pid: 4242,
+      startedAt: '2026-08-31T10:00:00.000Z',
+      version: '0.8.1',
+    });
+
+    const unreachable = describeError(new Error('We had an unknown problem opening "b"'));
+    const expired = describeError(
+      Object.assign(new Error('We had an unknown problem opening "b"'), {
+        code: 'token-expired',
+      }),
+    );
+    const decrypt = describeError(
+      Object.assign(new Error('We had an unknown problem opening "b"'), {
+        code: 'decrypt-failure',
+      }),
+    );
+
+    expect(unreachable).not.toContain('4242');
+    expect(expired).not.toContain('4242');
+    expect(decrypt).not.toContain('4242');
+  });
+
   it('mentions contention on the empty-message sync failure too', () => {
     vi.mocked(readDataDirLock).mockReturnValue({
       pid: 4242,

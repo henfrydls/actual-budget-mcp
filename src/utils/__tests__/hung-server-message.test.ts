@@ -23,7 +23,21 @@ describe('a sync that failed being reported as a problem opening the budget', ()
     const described = describeError(engineFailure());
 
     expect(described).toMatch(/no specific case/i);
-    expect(described).toMatch(/most likely cause/i);
+    expect(described, 'likely, not certain').toMatch(/almost always/i);
+  });
+
+  it('leads with what to do about it (#206)', () => {
+    // It used to open by explaining Actual's wording and reach the server in
+    // the third clause. Seen in the live test of 0.10.7 with the server
+    // stopped: a write that had worked answered with a paragraph of hedging
+    // about a message, for a failure that is almost always a server that is
+    // not there.
+    const described = describeError(engineFailure());
+
+    expect(described, 'the first sentence').toMatch(/^The Actual server did not answer/);
+    expect(described.indexOf('running and reachable')).toBeLessThan(
+      described.indexOf('no specific case'),
+    );
   });
 
   it('points at the server, as the likely cause and not as a fact', () => {
@@ -159,6 +173,20 @@ describe('a sync that failed being reported as a problem opening the budget', ()
       for (const code of ['network-failure', 'timeout']) {
         expect(describeError(withCode(code)), code).toMatch(/running and reachable/i);
       }
+    });
+
+    it('does not say a network code has no code (#206)', () => {
+      // The same branch takes both, and the sentence was written for one of
+      // them: with `timeout` on the error, "it arrived with no code of its
+      // own" is simply false, and the code is the part that confirms the
+      // guess rather than something to apologise for.
+      const timedOut = describeError(withCode('timeout'));
+
+      expect(timedOut).not.toMatch(/no code of its own/i);
+      expect(timedOut).toContain('"timeout"');
+      expect(describeError(engineFailure()), 'and with no code it still says so').toMatch(
+        /no code of its own/i,
+      );
     });
 
     it('reads a reason given as `reason` as well as `code`', () => {

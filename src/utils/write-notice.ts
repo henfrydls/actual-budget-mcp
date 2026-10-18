@@ -97,6 +97,11 @@ export function syncFailureNotice(scope: SyncScope, now = Date.now()): string | 
         ? ' The session with the Actual server had expired, so this server signed in ' +
           'again, and the sync failed even so.'
         : '';
+    // Nothing about the contention note here (#206): `describeError` decides
+    // it by what the failure is, so a read, a tool error and this all answer
+    // the same way. Deciding it per caller is what left it attached to
+    // `Reason:` on a push that failed against a stopped server, where it read
+    // as the cause.
     const reason = describeError(scope.failure, { omitUncertainWriteCaution: true }).trim();
     return STAYED_HERE + signedIn + (reason === '' ? '' : ` Reason: ${reason}`);
   }
