@@ -57,4 +57,41 @@ describe('sweeping the directories of runs that are over', () => {
     expect(existsSync(theirs)).toBe(true);
     expect(existsSync(unnamed), 'a name it cannot read is not a name it owns').toBe(true);
   });
+
+  it('leaves the directories of the harness that has no pid in the name', () => {
+    // Every branch and checkout without this sweep still names its
+    // directories `actual-mcp-it-<random>`, and a random suffix can look like
+    // a number. Reading one as a pid would delete a run going on elsewhere.
+    root = mkdtempSync(join(tmpdir(), 'sweep-test-'));
+    const older = ['actual-mcp-it-482913', 'actual-mcp-it-0x1a2b', 'actual-mcp-it-100e10'];
+    for (const name of older) mkdirSync(join(root, name), { recursive: true });
+
+    sweepFinishedRuns(root);
+
+    for (const name of older) expect(existsSync(join(root, name)), name).toBe(true);
+  });
+
+  it('reads only digits as a pid', () => {
+    root = mkdtempSync(join(tmpdir(), 'sweep-test-'));
+    // `Number` takes both of these, and a random suffix can be either.
+    const hex = join(root, `${PREFIX}0x1a2b-rest`);
+    const exponent = join(root, `${PREFIX}100e10-rest`);
+    mkdirSync(hex, { recursive: true });
+    mkdirSync(exponent, { recursive: true });
+
+    sweepFinishedRuns(root);
+
+    expect(existsSync(hex)).toBe(true);
+    expect(existsSync(exponent)).toBe(true);
+  });
+
+  it('removes directories and not files', () => {
+    root = mkdtempSync(join(tmpdir(), 'sweep-test-'));
+    const file = join(root, `${PREFIX}999999-stray.log`);
+    writeFileSync(file, 'not ours to delete');
+
+    sweepFinishedRuns(root);
+
+    expect(existsSync(file)).toBe(true);
+  });
 });
