@@ -201,8 +201,52 @@ export interface ClaimedDataDir {
   contended?: string;
   /** The live process holding the configured directory. */
   heldBy?: LockInfo;
+  /**
+   * Every live server this one stepped past, in the order it met them.
+   *
+   * The count is the point (#207). A server that lands on `-7` has six others
+   * running against the same budget, each with a full copy of it on disk, and
+   * "<dir> is in use" says none of that: in the live test of 0.10.7 one of
+   * them had been running for three weeks.
+   */
+  others?: LockInfo[];
   /** True when every candidate was taken and we are sharing after all. */
   shared?: boolean;
+}
+
+/**
+ * What to say at startup when this server is not on the first directory.
+ *
+ * The count, how long the oldest has been there, and what it costs. Not the
+ * pids: what clears this is closing the sessions that left them, and a list
+ * of numbers reads as something to go and kill one by one.
+ *
+ * Nothing is reclaimed on a guess. A directory whose holder is gone is taken
+ * over already, which is `readDataDirLock` answering null for a pid that no
+ * longer exists. What is left after that is a pid the system has handed to
+ * something else, and telling that apart costs a platform-specific lookup
+ * that can be wrong. Wrong puts two servers in one directory, which is the
+ * thing this mechanism exists to prevent; right saves one download.
+ */
+export function crowdedNotice(claim: ClaimedDataDir): string | undefined {
+  const others = claim.others ?? [];
+  if (claim.contended === undefined || others.length === 0) return undefined;
+
+  const total = others.length + 1;
+  const oldest = others
+    .map((other) => other.startedAt)
+    .filter((at): at is string => typeof at === 'string' && at !== '')
+    .sort()[0];
+  const since = oldest === undefined ? '' : ` The oldest started on ${oldest.slice(0, 10)}.`;
+
+  return (
+    `${total} actual-budget-mcp servers are running against this budget, counting this ` +
+    `one.${since} They are usually left over from sessions that were closed without ` +
+    `stopping the server. This one is using ${claim.dataDir}, which holds its own copy ` +
+    'of the budget: every one of them is a full download on disk and one more client ' +
+    'writing to the same Actual server. Closing the ones you are not using is what ' +
+    'clears this.'
+  );
 }
 
 /**
@@ -241,6 +285,9 @@ const MAX_SIBLINGS = 8;
  */
 export function claimDataDir(version: string): ClaimedDataDir {
   const configured = effectiveDataDir();
+  // Kept as they are met, so the startup line can say how many there are
+  // rather than naming the first one and leaving the rest unsaid (#207).
+  const others: LockInfo[] = [];
 
   for (let n = 1; n <= MAX_SIBLINGS; n++) {
     const candidate = n === 1 ? configured : `${configured}-${n}`;
@@ -250,8 +297,14 @@ export function claimDataDir(version: string): ClaimedDataDir {
       activeDir = candidate;
       return n === 1
         ? { dataDir: candidate }
-        : { dataDir: candidate, contended: configured, heldBy: readDataDirLock(configured) ?? undefined };
+        : {
+            dataDir: candidate,
+            contended: configured,
+            heldBy: readDataDirLock(configured) ?? undefined,
+            others,
+          };
     }
+    if (lock.heldBy) others.push(lock.heldBy);
   }
 
   // Everything is taken. Sharing is wrong, and not starting is worse.
@@ -261,6 +314,7 @@ export function claimDataDir(version: string): ClaimedDataDir {
     dataDir: configured,
     contended: configured,
     heldBy: readDataDirLock(configured) ?? undefined,
+    others,
     shared: true,
   };
 }

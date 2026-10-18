@@ -3,6 +3,7 @@ import type { ConnectionConfig } from './types.js';
 import {
   activeDataDir,
   claimDataDir,
+  crowdedNotice,
   forgetActiveDataDir,
   releaseDataDirLock,
   effectiveDataDir,
@@ -601,12 +602,17 @@ export async function ensureConnection(): Promise<void> {
           'of sync: give each client its own ACTUAL_DATA_DIR.',
       );
     } else if (claim.contended) {
+      // How many there are, since when, and what it costs (#207). The line
+      // used to name the directory and the first pid, which says nothing
+      // about the pile: a server on `-7` has six others behind it, and the
+      // reader has no way to know that from "<dir> is in use".
+      const crowded = crowdedNotice(claim);
       console.error(
-        `[actual-budget-mcp] ${claim.contended} is in use` +
-          (claim.heldBy ? ` by pid ${claim.heldBy.pid}` : '') +
-          `, so this server is using ${dataDir} instead. Two servers on one cache drive ` +
-          'the budget out of sync. The first run here downloads the budget again; set ' +
-          'ACTUAL_DATA_DIR per client to choose the location yourself.',
+        crowded !== undefined
+          ? `[actual-budget-mcp] ${crowded}`
+          : `[actual-budget-mcp] ${claim.contended} is in use, so this server is using ` +
+              `${dataDir} instead. The first run here downloads the budget again; set ` +
+              'ACTUAL_DATA_DIR per client to choose the location yourself.',
       );
     }
 
