@@ -38,6 +38,35 @@ jobs:
       - run: npm run build
       - run: npm test
 
+  # The paths this server builds are the one thing a Linux runner cannot
+  # check: `default-data-dir` hard coded a forward slash and passed here for
+  # as long as it existed, until somebody ran the suite on Windows and
+  # reported it (#172). One job, on the LTS, because what it tests is the
+  # platform and not the Node version.
+  #
+  # `--ignore-scripts`, the same flag and the same reason as the Dockerfile:
+  # `better-sqlite3` ships a `binding.gyp`, npm runs `node-gyp rebuild` for
+  # any package that has one, and node-gyp looks for Visual Studio before it
+  # looks at whether it has anything to compile. The prebuilt N-API binaries
+  # are already in the package. Measured on this image without the flag, the
+  # install fails at `gyp ERR! find VS`; with it, the suite runs (#210).
+  test-windows:
+    runs-on: windows-latest
+    # The suite takes a little over half an hour here, against five minutes
+    # on Linux, so the default six-hour ceiling is no ceiling at all: one
+    # hung test would spend a working day of runner time before anything
+    # stopped it.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm test
+
   audit:
     runs-on: ubuntu-latest
     steps:
