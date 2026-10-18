@@ -78,6 +78,10 @@ describe('the version overrides', () => {
   });
 
   it.each(overrides)('%s resolves at or above its pin', (name, pin) => {
+    // An override written as an object is reported by the case above; here it
+    // would only throw on `pin.replace`, which says nothing about what is
+    // wrong with the manifest.
+    if (typeof pin !== 'string') return;
     for (const version of installed(name)) {
       expect(atLeast(version, pin), `${name} ${version} is below ${pin}`).toBe(true);
     }
