@@ -1,0 +1,34 @@
+# Throwaway, for #210. Two questions, one run:
+#   1. does `npx actual-budget-mcp` work on Windows without a compiler?
+#   2. does `--ignore-scripts` get CI past the install?
+# This file is not meant to be merged.
+name: Spike Windows
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  user-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install and run it the way a user would
+        run: npx -y actual-budget-mcp@0.10.7 --version
+
+  ci-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm test
