@@ -71,7 +71,18 @@ jobs:
           cache: 'npm'
       - run: npm ci --ignore-scripts
       - run: npm run build
-      - run: npm test
+      # The unit project, not the whole suite. What this job is for is the
+      # code in this repository that can differ by platform, and that is all
+      # unit-tested: the path building of #172, the data directory lock, the
+      # sweep of the harness's own directories. The integration tests drive
+      # the Actual engine, and on this runner they take about seventeen
+      # seconds each against a fraction of a second on Linux: measured, one
+      # file of forty tests took eleven minutes and the whole suite fifty,
+      # with two tests crossing the sixty-second per-test ceiling on a slower
+      # run. That is a required check that fails for reasons nobody can act
+      # on. The Linux matrix runs the whole suite on every one of its three
+      # versions.
+      - run: npm test -- --project unit
 
   audit:
     runs-on: ubuntu-latest

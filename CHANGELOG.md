@@ -46,8 +46,8 @@ pinned forward rather than waiting for it.
 
 Internal, and none of it changes a reply:
 
-- The suite runs on Windows in CI, which is where a test comparing paths with
-  forward slashes was failing for anyone who tried it there. (#172)
+- The unit tests run on Windows in CI, which is where a test comparing paths
+  with forward slashes was failing for anyone who tried it there. (#172)
 - The test files are type-checked, which nothing did before, and the eight
   errors that found are fixed. (#109)
 - Tests that passed only in the order they were written now pass in any
