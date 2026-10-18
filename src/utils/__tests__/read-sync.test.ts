@@ -13,6 +13,11 @@ vi.mock('../currency.js', () => ({
   refreshBudgetDecimalPlaces: (...a: unknown[]) => refreshBudgetDecimalPlaces(...a),
 }));
 
+vi.mock('../data-dir-lock.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../data-dir-lock.js')>()),
+  readDataDirLock: vi.fn(),
+}));
+
 import {
   refreshBeforeRead,
   stalenessNotice,
@@ -22,6 +27,7 @@ import {
   SYNC_RETRY_MS,
 } from '../read-sync.js';
 import { syncNow } from '../sync-clock.js';
+import { readDataDirLock } from '../data-dir-lock.js';
 
 /**
  * Pulling the server's changes before a read (#126).
@@ -382,6 +388,41 @@ describe('what the reader is told when it could not refresh', () => {
     );
 
     expect(notice).toMatch(/repair_sync/);
+  });
+
+  it('does not blame another server for a server that did not answer', () => {
+    // #206, found on this route by the audit: the note about another server
+    // on the same budget was appended to every description, so a read whose
+    // figures were stale ended on a paragraph about a process started weeks
+    // earlier, attached to the reason where it reads as the cause.
+    vi.mocked(readDataDirLock).mockReturnValue({
+      pid: 4242,
+      startedAt: '2026-09-24T10:00:00.000Z',
+      version: '0.10.7',
+    });
+    const failure = new Error('We had an unknown problem opening "budget-id"');
+
+    const notice = stalenessNotice({ current: false, failure }, Date.now())!;
+    vi.mocked(readDataDirLock).mockReset();
+
+    expect(notice).toContain('did not answer');
+    expect(notice).not.toContain('4242');
+  });
+
+  it('still names another server when that is what out-of-sync means', () => {
+    vi.mocked(readDataDirLock).mockReturnValue({
+      pid: 4242,
+      startedAt: '2026-09-24T10:00:00.000Z',
+      version: '0.10.7',
+    });
+
+    const notice = stalenessNotice(
+      { current: false, failure: new Error('out-of-sync') },
+      Date.now(),
+    )!;
+    vi.mocked(readDataDirLock).mockReset();
+
+    expect(notice).toContain('4242');
   });
 
   it('points a refused login at the credentials', () => {

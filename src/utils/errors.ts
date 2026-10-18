@@ -128,13 +128,29 @@ const MAY_ALREADY_BE_APPLIED =
  * of 0.10.7 with the server stopped: a `create_payee` that had worked
  * answered with a paragraph of hedging about a message, for a failure that
  * is almost always a server that is not there.
+ *
+ * Two cases reach it, and the difference is worth a clause. With no code it
+ * is a guess, a good one. With `timeout` or `network-failure` the connection
+ * is what Actual itself is naming, and saying "it arrived with no code of its
+ * own" there was simply false.
  */
-const UNKNOWN_OPEN_HELP =
-  'The Actual server did not answer: check that it is running and reachable. That ' +
-  'is what this almost always is. Actual reports it as a problem opening the budget, ' +
-  'which is the message it falls back on for anything it has no specific case for, ' +
-  'and it arrived with no code of its own. If the budget was already open, nothing ' +
-  'was being opened and this came from a sync.';
+function unknownOpenHelp(reason: string): string {
+  const sure =
+    reason === ''
+      ? 'That is what this almost always is. '
+      : `The code it came with, "${reason}", is about the connection too. `;
+  const noCode =
+    reason === ''
+      ? ', and it arrived with no code of its own'
+      : '';
+  return (
+    'The Actual server did not answer: check that it is running and reachable. ' +
+    sure +
+    'Actual reports it as a problem opening the budget, which is the message it falls ' +
+    `back on for anything it has no specific case for${noCode}. If the budget was ` +
+    'already open, nothing was being opened and this came from a sync.'
+  );
+}
 
 /** What a named reason means, where knowing it changes what to do. */
 const CODE_HELP: Record<string, string> = {
@@ -287,6 +303,17 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
 
   const text = haystack(error);
   const caution = options.omitUncertainWriteCaution ? '' : MAY_ALREADY_BE_APPLIED;
+  // Only where two servers on one budget are a cause of **this** failure
+  // (#206), which is the pair of things sharing a cache produces: Actual
+  // reports it as out-of-sync, or it throws the empty error of #40 mid-sync.
+  //
+  // It used to be appended to every description, and each caller that did not
+  // want it had to remember to say so. Three of them did not: a read whose
+  // figures were stale, a tool that failed with the server stopped, and the
+  // branch for a sign-in that did not work all ended on a paragraph about a
+  // server started three weeks earlier, attached to the reason where it reads
+  // as the cause. Deciding it here, by what the failure is, is the only way
+  // the answer is the same on every route.
   const contention = options.omitContentionNote ? '' : contentionNote();
 
   // Checked before plain out-of-sync: these mean "upgrade", not "repair", and
@@ -302,7 +329,7 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
     // text describes. With a named reason, say what that reason means and
     // leave Actual's sentence as the detail instead of contradicting it.
     if (reason === '' || NETWORK_CODES.has(reason)) {
-      return UNKNOWN_OPEN_HELP + quoting(error) + caution + contention;
+      return unknownOpenHelp(reason) + quoting(error) + caution;
     }
     const known = CODE_HELP[reason];
     // An expired session is the one code whose explanation contradicts the
@@ -311,13 +338,15 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
     // read as the detail they are rather than as the verdict. The other codes
     // leave them in front, because in front of those they are accurate.
     if (reason === 'token-expired') {
-      return (known ?? '').trim() + quoting(error) + caution + contention;
+      return (known ?? '').trim() + quoting(error) + caution;
     }
+    // No contention note on any named reason either: a session that expired,
+    // a key that cannot decrypt and a local copy that will not open are not
+    // things another server on this budget does.
     return (
       `Actual reported: ${readable(error)}` +
       (known ?? ` The reason it gave is "${reason}".`) +
-      caution +
-      contention
+      caution
     );
   }
 

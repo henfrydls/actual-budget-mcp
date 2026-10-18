@@ -1,4 +1,4 @@
-import { describeError, haystack } from './errors.js';
+import { describeError } from './errors.js';
 import { withSyncScope, type SyncScope } from './sync-clock.js';
 import type { McpServerLike } from './read-sync.js';
 
@@ -97,19 +97,12 @@ export function syncFailureNotice(scope: SyncScope, now = Date.now()): string | 
         ? ' The session with the Actual server had expired, so this server signed in ' +
           'again, and the sync failed even so.'
         : '';
-    // The contention note only where contention can be the cause (#206).
-    // Another server on the same budget is a fact about how this process
-    // started; attached to `Reason:` it reads as the reason. In the live test
-    // of 0.10.7 a push that failed against a stopped server ended on a
-    // paragraph about a server from three weeks earlier, which had nothing to
-    // do with it. An out-of-sync budget is the one failure here that two
-    // servers really do cause, so that keeps it. The startup line says it
-    // once in either case, where a fact about startup belongs.
-    const outOfSync = /out-of-sync/i.test(haystack(scope.failure));
-    const reason = describeError(scope.failure, {
-      omitUncertainWriteCaution: true,
-      omitContentionNote: !outOfSync,
-    }).trim();
+    // Nothing about the contention note here (#206): `describeError` decides
+    // it by what the failure is, so a read, a tool error and this all answer
+    // the same way. Deciding it per caller is what left it attached to
+    // `Reason:` on a push that failed against a stopped server, where it read
+    // as the cause.
+    const reason = describeError(scope.failure, { omitUncertainWriteCaution: true }).trim();
     return STAYED_HERE + signedIn + (reason === '' ? '' : ` Reason: ${reason}`);
   }
 

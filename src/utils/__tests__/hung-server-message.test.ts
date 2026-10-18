@@ -175,6 +175,20 @@ describe('a sync that failed being reported as a problem opening the budget', ()
       }
     });
 
+    it('does not say a network code has no code (#206)', () => {
+      // The same branch takes both, and the sentence was written for one of
+      // them: with `timeout` on the error, "it arrived with no code of its
+      // own" is simply false, and the code is the part that confirms the
+      // guess rather than something to apologise for.
+      const timedOut = describeError(withCode('timeout'));
+
+      expect(timedOut).not.toMatch(/no code of its own/i);
+      expect(timedOut).toContain('"timeout"');
+      expect(describeError(engineFailure()), 'and with no code it still says so').toMatch(
+        /no code of its own/i,
+      );
+    });
+
     it('reads a reason given as `reason` as well as `code`', () => {
       const tagged = Object.assign(new Error('We had an unknown problem opening "b"'), {
         reason: 'decrypt-failure',
