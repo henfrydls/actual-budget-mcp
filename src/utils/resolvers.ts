@@ -209,7 +209,7 @@ export async function resolveAccountId(nameOrId: string): Promise<string> {
  */
 export async function resolveCategoryId(
   nameOrId: string,
-  options: { includeHidden?: boolean } = {},
+  options: { includeHidden?: boolean; prefer?: 'visible' | 'hidden' } = {},
 ): Promise<string> {
   await ensureConnection();
   const categories = await api.getCategories();
@@ -249,9 +249,43 @@ export async function resolveCategoryId(
     );
   }
   if (cats.length > 1) {
-    const names = cats.map((c) => c.name).join(', ');
+    // Actual allows one name in two groups, so a tie is ordinary rather than
+    // a mistake. When the caller has said which kind it wants and exactly one
+    // match is of that kind, that is the answer: unhiding "Groceries" means
+    // the hidden one, and hiding or renaming it means the one in the way.
+    const wanted =
+      options.prefer === undefined
+        ? []
+        : cats.filter((c) =>
+            options.prefer === 'hidden'
+              ? (c as { hidden?: boolean }).hidden === true
+              : (c as { hidden?: boolean }).hidden !== true,
+          );
+    if (wanted.length === 1) return wanted[0].id;
+
+    // Still tied: say what tells them apart, which the names cannot.
+    let groups: Array<{ id: string; name: string }> = [];
+    try {
+      // `?? []`, not only the catch: a caller that stubs this out answers
+      // `undefined` rather than throwing, and the names below are worth
+      // having without the groups.
+      groups = ((await api.getCategoryGroups()) ?? []) as Array<{ id: string; name: string }>;
+    } catch {
+      // Same reason.
+    }
+    const described = cats
+      .map((c) => {
+        const row = c as { id: string; name: string; group_id?: string; hidden?: boolean };
+        const group = groups.find((g) => g.id === row.group_id)?.name;
+        return (
+          `${row.name}${group === undefined ? '' : ` in ${group}`}` +
+          `${row.hidden === true ? ', hidden' : ''} (${row.id})`
+        );
+      })
+      .join('; ');
     throw new Error(
-      `Ambiguous category name "${nameOrId}". Matches: ${names}`,
+      `Ambiguous category name "${nameOrId}". Matches: ${described}. Pass the id of ` +
+        `the one you mean.`,
     );
   }
 

@@ -21,7 +21,14 @@ export function registerUpdateCategory(server: McpServer): void {
         await ensureConnection();
         // Including the hidden ones: unhiding a category is this tool's job,
         // and a hidden one does not resolve by name anywhere else (#218).
-        const categoryId = await resolveCategoryId(category, { includeHidden: true });
+        //
+        // And when one name is in two groups, which Actual allows, what is
+        // being asked says which one is meant: unhiding means the hidden one,
+        // hiding or renaming means the one that is in the way.
+        const categoryId = await resolveCategoryId(category, {
+          includeHidden: true,
+          prefer: hidden === false ? 'hidden' : 'visible',
+        });
 
         const categories = await api.getCategories();
         const cat = categories.find((c) => c.id === categoryId);

@@ -106,4 +106,63 @@ describe.skipIf(skip)('update_category against the real engine', () => {
     expect(reply.isError, reply.content[0]?.text).toBeUndefined();
     expect(await readBack(groceries)).toEqual({ name: 'Market', hidden: true });
   }, 60_000);
+
+  /**
+   * One name in two groups, which Actual allows (#218, round two).
+   *
+   * Letting this tool see the hidden ones turned an ordinary rename into
+   * `Ambiguous category name "Groceries". Matches: Groceries, Groceries`, a
+   * message with nothing to act on, for something that worked before.
+   */
+  describe('when the same name is in two groups', () => {
+    let visible = '';
+    let archived = '';
+
+    beforeAll(async () => {
+      const archive = await api.createCategoryGroup({ name: 'Archive' } as never);
+      archived = await api.createCategory({ name: 'Twin', group_id: archive } as never);
+      await handlerFor()({ category: archived, hidden: true });
+      const everyday = (await api.getCategoryGroups()).find((g) => g.name === 'Everyday')!;
+      visible = await api.createCategory({ name: 'Twin', group_id: everyday.id } as never);
+    }, 120_000);
+
+    it('renames the one that is in the way', async () => {
+      const reply = await handlerFor()({ category: 'Twin', name: 'Twin renamed' });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      expect(await readBack(visible)).toEqual({ name: 'Twin renamed', hidden: false });
+      expect(await readBack(archived)).toEqual({ name: 'Twin', hidden: true });
+      await handlerFor()({ category: visible, name: 'Twin' });
+    }, 60_000);
+
+    it('hides the one that is in the way', async () => {
+      const reply = await handlerFor()({ category: 'Twin', hidden: true });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      expect(await readBack(visible)).toEqual({ name: 'Twin', hidden: true });
+      await handlerFor()({ category: visible, hidden: false });
+    }, 60_000);
+
+    it('unhides the hidden one', async () => {
+      const reply = await handlerFor()({ category: 'Twin', hidden: false });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      expect(await readBack(archived)).toEqual({ name: 'Twin', hidden: false });
+      await handlerFor()({ category: archived, hidden: true });
+    }, 60_000);
+
+    it('refuses, with something to act on, when both are the same kind', async () => {
+      // Two visible ones named alike: nothing in the request says which.
+      await handlerFor()({ category: archived, hidden: false });
+
+      const reply = await handlerFor()({ category: 'Twin', name: 'Either' });
+
+      expect(reply.isError).toBe(true);
+      expect(reply.content[0].text).toContain('Ambiguous');
+      expect(reply.content[0].text).toContain('in Everyday');
+      expect(reply.content[0].text).toContain('in Archive');
+      expect(reply.content[0].text).toContain('Pass the id');
+      await handlerFor()({ category: archived, hidden: true });
+    }, 60_000);
+  });
 });
