@@ -13,7 +13,9 @@ vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { registerCreateRule } from '../write/create-rule.js';
+import { z } from 'zod';
+import * as api from '@actual-app/api';
+import { registerCreateRule, createRuleFromInput } from '../write/create-rule.js';
 
 /**
  * What the tool tells a client it takes (#185).
@@ -89,5 +91,62 @@ describe('what create_rule says it takes', () => {
     expect(shape.condition_value.parse(0)).toBe(0);
     expect(shape.condition_value.parse('text')).toBe('text');
     expect(shape.condition_value.parse(['a', 'b'])).toEqual(['a', 'b']);
+  });
+});
+
+/**
+ * `stage`, and the clients that say null when they mean nothing (#220).
+ *
+ * The field is optional and means "no stage" when it is absent, which Actual
+ * stores as `null`. A client that fills every optional field with JSON null
+ * was refused for saying exactly that.
+ */
+describe('the stage a rule runs in', () => {
+  const stage = () => shapeOf().stage;
+
+  it('takes null, which is what no stage is called', () => {
+    expect(stage().parse(null)).toBeNull();
+  });
+
+  it('takes the two stages there are, and the word for neither', () => {
+    for (const value of ['pre', 'post', 'null']) {
+      expect(stage().parse(value)).toBe(value);
+    }
+  });
+
+  it('still defaults to no stage when it is not sent at all', () => {
+    expect(stage().parse(undefined)).toBe('null');
+  });
+
+  it('takes a whole call with null in it, which is how a client sends one', () => {
+    // The field on its own can be right while the object the SDK builds
+    // refuses the call, and the object is what a client actually sends.
+    const whole = z.object(shapeOf() as never);
+
+    expect(() =>
+      whole.parse({
+        condition_field: 'notes',
+        condition_op: 'contains',
+        condition_value: 'gym',
+        action_field: 'notes',
+        action_value: 'Gym',
+        stage: null,
+      }),
+    ).not.toThrow();
+  });
+
+  it('creates the rule with no stage, which is what the engine stores', async () => {
+    vi.mocked(api.createRule).mockClear().mockResolvedValue({ id: 'r-1' } as never);
+
+    await createRuleFromInput({
+      condition_field: 'notes',
+      condition_op: 'contains',
+      condition_value: 'gym',
+      action_field: 'notes',
+      action_value: 'Gym',
+      stage: null,
+    });
+
+    expect(vi.mocked(api.createRule).mock.calls[0]?.[0]).toMatchObject({ stage: null });
   });
 });

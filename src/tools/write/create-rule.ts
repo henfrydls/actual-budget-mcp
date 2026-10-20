@@ -44,7 +44,7 @@ export interface CreateRuleInput {
   condition_value: RuleValue | RuleValue[];
   action_field: string;
   action_value: RuleValue;
-  stage?: string;
+  stage?: string | null;
 }
 
 /** A value of any of those shapes, as the text everything here reads. */
@@ -571,7 +571,17 @@ export function registerCreateRule(server: McpServer): void {
           'payee, category or account must already exist; use create_payee or ' +
           'create_category for a new one.',
       ),
-      stage: z.string().optional().default('null').describe('When to apply: null (default), pre, or post'),
+      // `nullable`, because a client that fills every optional field with
+      // JSON null sent `stage: null` and was refused for saying exactly what
+      // it meant (#220). The default only applies to `undefined`, so null
+      // arrives as null and is read below as no stage, which is what the
+      // engine stores for one.
+      stage: z
+        .string()
+        .nullable()
+        .optional()
+        .default('null')
+        .describe('When to apply: null (default), pre, or post'),
     },
     { title: 'Create automation rule', readOnlyHint: false },
     async (input) => {
