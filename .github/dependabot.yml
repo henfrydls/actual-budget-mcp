@@ -53,3 +53,27 @@ updates:
     open-pull-requests-limit: 3
     labels:
       - dependencies
+
+  # The actions, pinned to commit SHAs (#224), which is the point of watching
+  # them here: a tag can be moved to point at other code and a SHA cannot, so
+  # pinning is only half of it and the other half is somebody raising the pin
+  # when the action is fixed. Without this entry the pins are frozen and the
+  # repository quietly runs last year's action for ever.
+  #
+  # Weekly, not daily like the two above. Those exist because a new Actual
+  # breaks a user's budget the day it lands; an action moves on its own
+  # schedule and nothing here depends on having it the same morning.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      # One pull request for the lot. They move together often enough, and
+      # four open PRs that each change one line is how a config like this
+      # gets ignored.
+      actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
