@@ -83,4 +83,17 @@ describe('shutting down while the connection is still being made', () => {
     await expect(shutdown()).resolves.toBeUndefined();
     await connecting;
   });
+
+  it('closes the session of a startup that signed in and then failed', async () => {
+    // `initialized` is only true once the budget is open, so a download that
+    // fails left a session on the server and a claimed directory with
+    // nothing to give either of them back.
+    downloadBudget.mockRejectedValue(new Error('the server went away mid-download'));
+    const { ensureConnection, shutdown } = await import('../../connection.js');
+
+    await ensureConnection().catch(() => undefined);
+    await shutdown();
+
+    expect(apiShutdown, 'it signed in, so there is a session to close').toHaveBeenCalledOnce();
+  });
 });

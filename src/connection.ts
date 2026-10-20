@@ -15,6 +15,14 @@ import { refreshBudgetDecimalPlaces, resetBudgetDecimalPlaces } from './utils/cu
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
+/**
+ * Whether `api.init` got as far as signing in.
+ *
+ * Not the same question as `initialized`, which is only true once the budget
+ * is open: a startup that fails on the download has a session on the server
+ * and a claimed directory, and both are this process's to give back (#219).
+ */
+let signedIn = false;
 /** The directory this process actually claimed, which may not be the configured one. */
 let claimedDataDir: string | null = null;
 
@@ -640,6 +648,8 @@ export async function ensureConnection(): Promise<void> {
           ? { sessionToken: config.sessionToken }
           : { password: config.password }),
       });
+      // From here there is a session on the server, whatever happens next.
+      signedIn = true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = errorCode(error);
@@ -808,7 +818,11 @@ export async function shutdown(): Promise<void> {
   // Whoever is leaving puts a limit on how long this may take, so joining a
   // connection in flight cannot hold the exit open.
   if (initializing) await initializing.catch(() => undefined);
-  if (!initialized) return;
+  // `signedIn`, not only `initialized`: a startup that signed in and then
+  // failed on the download leaves a session on the server and a claimed
+  // directory, and reading "not initialised" as "nothing to give back"
+  // stranded both (#219).
+  if (!initialized && !signedIn) return;
   await api.shutdown();
   // The claimed directory, not the configured one: they differ whenever this
   // server stepped aside, and releasing the wrong lock would drop someone
@@ -818,6 +832,7 @@ export async function shutdown(): Promise<void> {
   forgetActiveDataDir();
   resetBudgetDecimalPlaces();
   initialized = false;
+  signedIn = false;
   initializing = null;
   internal = null;
 }

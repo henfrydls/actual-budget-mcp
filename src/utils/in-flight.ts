@@ -16,6 +16,7 @@ import type { McpServerLike } from './read-sync.js';
  */
 let active = 0;
 let waiting: Array<() => void> = [];
+let leaving = false;
 
 function settle(): void {
   if (active !== 0) return;
@@ -46,10 +47,32 @@ export function whenIdle(): Promise<void> {
   return new Promise<void>((resolve) => waiting.push(resolve));
 }
 
+/**
+ * Stop taking new work, because this server is on its way out (#219).
+ *
+ * Measured: Claude Code closes a stdio server with SIGINT, then SIGTERM
+ * 100ms later, then SIGKILL 400ms after that. Five hundred milliseconds in
+ * total, and signing out of the server has to fit inside it. Anything spent
+ * looking at whether a request is about to arrive is taken from that.
+ *
+ * So a call that arrives once leaving has begun is refused outright, which
+ * is both faster and more honest than letting it reach a budget that is
+ * being closed: before this, a request that had not been dispatched yet
+ * answered `Error: No budget file is open` and wrote its rows anyway.
+ */
+export function startLeaving(): void {
+  leaving = true;
+}
+
+export function isLeaving(): boolean {
+  return leaving;
+}
+
 /** For tests: forget everything, as if the process had just started. */
 export function resetInFlight(): void {
   active = 0;
   waiting = [];
+  leaving = false;
 }
 
 /**
@@ -65,7 +88,22 @@ export function withInFlight<T extends McpServerLike>(server: T): T {
   const originalTool = server.tool.bind(server) as (...args: unknown[]) => unknown;
   (wrapped as { tool: unknown }).tool = (...args: unknown[]) => {
     const handler = args[args.length - 1] as (...a: unknown[]) => Promise<unknown>;
-    const counted = (...a: unknown[]) => trackInFlight(() => handler(...a));
+    const counted = async (...a: unknown[]) => {
+      if (leaving) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text:
+                'This server is shutting down and did not run that: the client it was ' +
+                'started by has gone. Nothing was read or written. Start it again.',
+            },
+          ],
+          isError: true,
+        };
+      }
+      return trackInFlight(() => handler(...a));
+    };
     return originalTool(...args.slice(0, -1), counted);
   };
 

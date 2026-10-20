@@ -42,8 +42,8 @@ export interface ExitPaths {
   stop: () => Promise<void>;
   /** Resolves when no tool call is still running. */
   whenIdle?: () => Promise<void>;
-  /** Whether a tool call is running right now. */
-  busy?: () => boolean;
+  /** Stop taking new calls, so nothing new reaches a budget being closed. */
+  stopAccepting?: () => void;
   /** How to leave, so a test can watch rather than die. */
   exit: (code: number) => void;
   /** Where end-of-file arrives. */
@@ -58,21 +58,9 @@ export interface ExitPaths {
   timeoutMs?: number;
   /** How long a tool call in flight gets to finish before we leave it alone. */
   inFlightMs?: number;
-  /** How long to watch for a request that had not been dispatched yet. */
-  quietMs?: number;
 }
 
 export const EXIT_GRACE_MS = 5_000;
-/**
- * A beat to look again before deciding nothing is running.
- *
- * Counting starts when a handler starts, and a request that arrived a
- * moment before the signal has not been dispatched yet: measured, a batch
- * sent 300ms before a SIGTERM was not yet running, so the count said zero,
- * the budget was closed, and the call that then started answered `Error: No
- * budget file is open`. Idle has to mean idle a moment later too.
- */
-export const EXIT_QUIET_MS = 250;
 /**
  * Long, because reaching it is not a graceful fallback.
  *
@@ -100,6 +88,14 @@ export function installExitPaths(paths: ExitPaths): void {
     if (leaving) return;
     leaving = true;
 
+    // First of all, before any waiting: nothing new is taken from here on.
+    // A request that had not been dispatched yet is refused rather than run
+    // against a budget that is being closed, which is what the counter
+    // could not see. It is also what keeps the exit short enough to matter:
+    // Claude Code sends SIGINT, SIGTERM 100ms later and SIGKILL 400ms after
+    // that, so everything here has about half a second.
+    paths.stopAccepting?.();
+
     const timers: Array<ReturnType<typeof setTimeout>> = [];
     /** `work`, or `'gave up'` when it takes longer than `ms`. */
     const atMost = async (work: Promise<unknown>, ms: number): Promise<'done' | 'gave up'> => {
@@ -118,22 +114,8 @@ export function installExitPaths(paths: ExitPaths): void {
       // What is in flight first. Closing the budget underneath a tool that
       // is using it answers "no budget file is open" to a call that then
       // writes everything anyway.
-      const quiet = paths.quietMs ?? EXIT_QUIET_MS;
-      const settleDown = async (): Promise<void> => {
-        for (;;) {
-          await (paths.whenIdle?.() ?? Promise.resolve());
-          // And look again a beat later: a request that arrived just before
-          // the signal has not reached its handler yet, so nothing is
-          // counted and the server looks idle when it is not.
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, quiet);
-            (timer as { unref?: () => void }).unref?.();
-            timers.push(timer);
-          });
-          if (paths.busy?.() !== true) return;
-        }
-      };
-      const settled = await atMost(settleDown(), paths.inFlightMs ?? EXIT_IN_FLIGHT_MS);
+      const idle = paths.whenIdle?.() ?? Promise.resolve();
+      const settled = await atMost(idle, paths.inFlightMs ?? EXIT_IN_FLIGHT_MS);
 
       // Still working after all that: something is stuck, and a server that
       // never leaves is where this issue started. Leaving without closing

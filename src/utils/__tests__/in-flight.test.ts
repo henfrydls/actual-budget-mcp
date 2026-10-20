@@ -1,5 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { inFlightCount, resetInFlight, trackInFlight, whenIdle, withInFlight } from '../in-flight.js';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import {
+  inFlightCount,
+  isLeaving,
+  resetInFlight,
+  startLeaving,
+  trackInFlight,
+  whenIdle,
+  withInFlight,
+} from '../in-flight.js';
 import type { McpServerLike } from '../read-sync.js';
 
 /**
@@ -12,6 +20,12 @@ import type { McpServerLike } from '../read-sync.js';
 describe('what is in flight', () => {
   beforeEach(() => {
     resetInFlight();
+  });
+
+  it('is not leaving to begin with', () => {
+    expect(isLeaving()).toBe(false);
+    startLeaving();
+    expect(isLeaving()).toBe(true);
   });
 
   it('is nothing to begin with, and idle is immediate', async () => {
@@ -101,6 +115,47 @@ describe('what is in flight', () => {
       await call;
 
       expect(inFlightCount()).toBe(0);
+    });
+
+    it('refuses a call that arrives once the server is leaving', async () => {
+      // The counter starts when a handler starts, so a request that had not
+      // been dispatched when the signal arrived was invisible: measured, one
+      // sent 300ms before a SIGTERM reached a budget that was being closed
+      // and answered `Error: No budget file is open`. Refusing it outright
+      // is faster and says what happened.
+      const { server, handlerOf } = registered();
+      const ran = vi.fn().mockResolvedValue({ content: [] });
+      server.tool('a_tool' as never, 'd' as never, {} as never, {} as never, ran as never);
+
+      startLeaving();
+      const reply = (await handlerOf()({})) as {
+        content: Array<{ text: string }>;
+        isError?: boolean;
+      };
+
+      expect(ran, 'it must not reach the budget').not.toHaveBeenCalled();
+      expect(reply.isError).toBe(true);
+      expect(reply.content[0].text).toContain('shutting down');
+      expect(reply.content[0].text).toContain('Nothing was read or written');
+      expect(inFlightCount(), 'and it is not work to wait for').toBe(0);
+    });
+
+    it('lets a call that was already running finish', async () => {
+      const { server, handlerOf } = registered();
+      let finish: ((value: string) => void) | undefined;
+      server.tool(
+        'a_tool' as never,
+        'd' as never,
+        {} as never,
+        {} as never,
+        (() => new Promise<string>((r) => { finish = r; })) as never,
+      );
+
+      const call = handlerOf()();
+      startLeaving();
+      finish!('the reply');
+
+      await expect(call).resolves.toBe('the reply');
     });
 
     it('passes the arguments and the reply through untouched', async () => {

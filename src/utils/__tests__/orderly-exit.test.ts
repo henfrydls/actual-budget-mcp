@@ -1,10 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import {
-  installExitPaths,
-  EXIT_GRACE_MS,
-  EXIT_IN_FLIGHT_MS,
-  EXIT_QUIET_MS,
-} from '../orderly-exit.js';
+import { installExitPaths, EXIT_GRACE_MS, EXIT_IN_FLIGHT_MS } from '../orderly-exit.js';
 
 /** A stand-in for `process.stdin` and `process`, so nothing here really exits. */
 function wiring() {
@@ -81,7 +76,6 @@ describe('leaving when the client goes away', () => {
         stdin: w.stdin,
         signals: w.signals,
         timeoutMs: 50,
-        quietMs: 10,
       });
 
       w.signalListeners.get('SIGTERM')!();
@@ -118,7 +112,6 @@ describe('leaving when the client goes away', () => {
         stdin: w.stdin,
         signals: w.signals,
         timeoutMs: 10_000,
-        quietMs: 10,
       });
 
       w.signalListeners.get('SIGINT')!();
@@ -161,7 +154,6 @@ describe('leaving while a tool is still running', () => {
         exit: w.exit,
         stdin: w.stdin,
         signals: w.signals,
-        quietMs: 10,
       });
 
       w.signalListeners.get('SIGTERM')!();
@@ -193,7 +185,6 @@ describe('leaving while a tool is still running', () => {
         stdin: w.stdin,
         signals: w.signals,
         inFlightMs: 100,
-        quietMs: 10,
       });
 
       w.stdinListeners.get('end')!();
@@ -223,53 +214,25 @@ describe('leaving while a tool is still running', () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it('looks again before deciding nothing is running', async () => {
-    // Counting starts when a handler starts. A request that arrived a moment
-    // before the signal has not been dispatched yet, so the count says zero:
-    // measured, a batch sent 300ms before a SIGTERM was still in the pipe,
-    // the budget was closed, and the call that then started answered
-    // `Error: No budget file is open`.
-    vi.useFakeTimers();
-    try {
-      const w = wiring();
-      const stop = vi.fn().mockResolvedValue(undefined);
-      let running = false;
-      let finish: (() => void) | undefined;
-      installExitPaths({
-        stop,
-        whenIdle: () =>
-          running ? new Promise<void>((resolve) => { finish = () => { running = false; resolve(); }; })
-                  : Promise.resolve(),
-        busy: () => running,
-        exit: w.exit,
-        stdin: w.stdin,
-        signals: w.signals,
-        quietMs: 50,
-      });
+  it('stops taking calls before it waits for anything', async () => {
+    // Measured: Claude Code sends SIGINT, SIGTERM 100ms later and SIGKILL
+    // 400ms after that. Everything here has about half a second, and a
+    // request that arrives inside it must not reach a budget being closed.
+    const w = wiring();
+    const order: string[] = [];
+    installExitPaths({
+      stop: async () => void order.push('stop'),
+      whenIdle: async () => void order.push('waited'),
+      stopAccepting: () => order.push('stopped accepting'),
+      exit: w.exit,
+      stdin: w.stdin,
+      signals: w.signals,
+    });
 
-      w.signalListeners.get('SIGTERM')!();
-      // The request reaches its handler just after the signal.
-      running = true;
-      await vi.advanceTimersByTimeAsync(60);
+    w.signalListeners.get('SIGTERM')!();
+    await vi.waitFor(() => expect(w.exits).toEqual([0]));
 
-      expect(stop, 'it was dispatched while we were looking away').not.toHaveBeenCalled();
-      expect(w.exits).toEqual([]);
-
-      finish!();
-      await vi.advanceTimersByTimeAsync(60);
-
-      expect(stop).toHaveBeenCalledOnce();
-      expect(w.exits).toEqual([0]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('that second look is a beat, not a wait', () => {
-    // It is paid on every exit, including the ordinary one where nothing is
-    // happening: measured, an idle server leaves in about 300ms with it.
-    expect(EXIT_QUIET_MS).toBeLessThanOrEqual(500);
-    expect(EXIT_QUIET_MS).toBeGreaterThan(0);
+    expect(order).toEqual(['stopped accepting', 'waited', 'stop']);
   });
 
   it('waits far longer for a call than for the shutdown', () => {
@@ -294,6 +257,14 @@ describe('the wiring', () => {
     const source = readFileSync('src/index.ts', 'utf8');
 
     expect(source).toContain('installExitPaths({');
+    // And that the wait covers the first download, not only the tool calls:
+    // the session it is there to close was opened by `api.init` at the start
+    // of that download. Dropping `connectionSettled` from the composition
+    // left the suite green.
+    expect(source).toMatch(/whenIdle:[\s\S]{0,160}connectionSettled\(\)/);
+    expect(source, 'and nothing new is taken once leaving has begun').toContain(
+      'stopAccepting: startLeaving',
+    );
     // The last one is the startup call; the first belongs to the
     // `test:connection` command, which exits on its own.
     expect(

@@ -13,7 +13,7 @@ import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
 import { installExitPaths } from './utils/orderly-exit.js';
-import { inFlightCount, whenIdle } from './utils/in-flight.js';
+import { startLeaving, whenIdle } from './utils/in-flight.js';
 import { installProcessGuards } from './utils/process-guards.js';
 import { describeError } from './utils/errors.js';
 import * as api from '@actual-app/api';
@@ -136,7 +136,9 @@ installExitPaths({
   whenIdle: async () => {
     await Promise.all([whenIdle(), connectionSettled()]);
   },
-  busy: () => inFlightCount() > 0,
+  // Nothing new from the moment the exit starts, so a request still in the
+  // pipe is refused instead of reaching a budget that is being closed.
+  stopAccepting: startLeaving,
   exit: (code) => process.exit(code),
   stdin: process.stdin,
   signals: process,
