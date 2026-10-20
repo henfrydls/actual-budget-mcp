@@ -194,7 +194,23 @@ export async function resolveAccountId(nameOrId: string): Promise<string> {
   return matches[0].id;
 }
 
-export async function resolveCategoryId(nameOrId: string): Promise<string> {
+/**
+ * `includeHidden` is for the one tool that has to address a hidden category.
+ *
+ * A hidden category is left out of the name match everywhere else on
+ * purpose: it is hidden because nobody wants it offered, and a transaction
+ * should not land in one by a name that also fits something visible.
+ *
+ * `update_category` is the exception, because unhiding one is its job.
+ * Measured against the engine while fixing #218: hide `Groceries` and it
+ * stops resolving by name, so it can only be brought back by id, and the
+ * error says `No category found matching "Groceries"` and lists the ones
+ * that are visible. The category is right there.
+ */
+export async function resolveCategoryId(
+  nameOrId: string,
+  options: { includeHidden?: boolean; prefer?: 'visible' | 'hidden' } = {},
+): Promise<string> {
   await ensureConnection();
   const categories = await api.getCategories();
 
@@ -204,22 +220,72 @@ export async function resolveCategoryId(nameOrId: string): Promise<string> {
 
   // Case-insensitive name match (filter only actual categories, not groups;
   // exact wins over substring)
-  const candidates = categories.filter((c) => 'group_id' in c && !c.hidden);
+  const visible = (c: { hidden?: boolean }) => options.includeHidden === true || !c.hidden;
+  const candidates = categories.filter((c) => 'group_id' in c && visible(c));
   const cats = matchByName(candidates, nameOrId, (c) => c.name);
 
   if (cats.length === 0) {
     const names = categories
-      .filter((c) => 'group_id' in c && !c.hidden)
+      .filter((c) => 'group_id' in c && visible(c))
       .map((c) => c.name)
       .join(', ');
+    // A hidden one that matches is the likeliest reason for being here, and
+    // the list above cannot say so.
+    const hiddenMatch =
+      options.includeHidden === true
+        ? []
+        : matchByName(
+            categories.filter((c) => 'group_id' in c && c.hidden),
+            nameOrId,
+            (c) => c.name,
+          );
+    const alsoHidden =
+      hiddenMatch.length === 0
+        ? ''
+        : ` A hidden category is named "${hiddenMatch[0].name}": unhide it with ` +
+          `update_category, or pass its id.`;
     throw new Error(
-      `No category found matching "${nameOrId}". Available: ${names}`,
+      `No category found matching "${nameOrId}". Available: ${names}.${alsoHidden}`,
     );
   }
   if (cats.length > 1) {
-    const names = cats.map((c) => c.name).join(', ');
+    // Actual allows one name in two groups, so a tie is ordinary rather than
+    // a mistake. When the caller has said which kind it wants and exactly one
+    // match is of that kind, that is the answer: unhiding "Groceries" means
+    // the hidden one, and hiding or renaming it means the one in the way.
+    const wanted =
+      options.prefer === undefined
+        ? []
+        : cats.filter((c) =>
+            options.prefer === 'hidden'
+              ? (c as { hidden?: boolean }).hidden === true
+              : (c as { hidden?: boolean }).hidden !== true,
+          );
+    if (wanted.length === 1) return wanted[0].id;
+
+    // Still tied: say what tells them apart, which the names cannot.
+    let groups: Array<{ id: string; name: string }> = [];
+    try {
+      // `?? []`, not only the catch: a caller that stubs this out answers
+      // `undefined` rather than throwing, and the names below are worth
+      // having without the groups.
+      groups = ((await api.getCategoryGroups()) ?? []) as Array<{ id: string; name: string }>;
+    } catch {
+      // Same reason.
+    }
+    const described = cats
+      .map((c) => {
+        const row = c as { id: string; name: string; group_id?: string; hidden?: boolean };
+        const group = groups.find((g) => g.id === row.group_id)?.name;
+        return (
+          `${row.name}${group === undefined ? '' : ` in ${group}`}` +
+          `${row.hidden === true ? ', hidden' : ''} (${row.id})`
+        );
+      })
+      .join('; ');
     throw new Error(
-      `Ambiguous category name "${nameOrId}". Matches: ${names}`,
+      `Ambiguous category name "${nameOrId}". Matches: ${described}. Pass the id of ` +
+        `the one you mean.`,
     );
   }
 
