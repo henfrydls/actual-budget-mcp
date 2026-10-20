@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
-const WORKFLOWS = '.github/workflows';
+// From this file, not from wherever the runner happened to start: the first
+// version used a relative path and found nothing on the Windows job, so the
+// guard passed by reading no files at all.
+const WORKFLOWS = fileURLToPath(new URL('../../../.github/workflows', import.meta.url));
 
 /** Every `uses:` in every workflow, with where it is, for a message worth reading. */
 function usesLines(): Array<{ file: string; line: number; value: string }> {
@@ -10,7 +14,9 @@ function usesLines(): Array<{ file: string; line: number; value: string }> {
   for (const file of readdirSync(WORKFLOWS)) {
     if (!file.endsWith('.yml') && !file.endsWith('.yaml')) continue;
     readFileSync(join(WORKFLOWS, file), 'utf8')
-      .split('\n')
+      // `\r` and all: a checkout with CRLF endings would otherwise leave one
+      // on the end of every line, where it is invisible and fails the match.
+      .split(/\r?\n/)
       .forEach((text, index) => {
         const match = /^\s*(?:-\s*)?uses:\s*(\S+)(.*)$/.exec(text);
         if (match) found.push({ file, line: index + 1, value: `${match[1]}${match[2]}` });
@@ -54,7 +60,10 @@ describe('the actions these workflows run', () => {
  */
 describe('what keeps the pins current', () => {
   it('has Dependabot watching the actions', () => {
-    const config = readFileSync('.github/dependabot.yml', 'utf8');
+    const config = readFileSync(
+      fileURLToPath(new URL('../../../.github/dependabot.yml', import.meta.url)),
+      'utf8',
+    );
 
     expect(config).toMatch(/package-ecosystem:\s*github-actions/);
   });
