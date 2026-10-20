@@ -786,6 +786,25 @@ export async function ensureConnection(): Promise<void> {
     await initializing;
   } catch (error) {
     initializing = null;
+    // A startup that signed in and then failed leaves a session on the
+    // server, and from Actual 26.11 that row never expires. The next tool
+    // call tries again and makes another: measured against a disposable
+    // server whose download was cut, three calls took the count from 20 to
+    // 26, and only the last was ever closed. So it is closed here, before
+    // the error goes back to the caller.
+    //
+    // `api.shutdown` and not this module's, which also gives back the data
+    // directory: this process is still running and still holds it.
+    if (signedIn) {
+      signedIn = false;
+      internal = null;
+      try {
+        await api.shutdown();
+      } catch {
+        // The session is the only thing being given back, and a server that
+        // cannot be reached is why we are here.
+      }
+    }
     throw error;
   }
 }

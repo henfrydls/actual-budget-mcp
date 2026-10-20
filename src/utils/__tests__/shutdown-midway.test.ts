@@ -84,6 +84,27 @@ describe('shutting down while the connection is still being made', () => {
     await connecting;
   });
 
+  it('closes the session of each startup that failed, not only the last', async () => {
+    // Every call that fails tries again and signs in again. Measured
+    // against a disposable server whose download was cut: three calls took
+    // the session count from 20 to 26, and leaving closed one of them.
+    downloadBudget.mockRejectedValue(new Error('the download was cut'));
+    const { ensureConnection } = await import('../../connection.js');
+
+    await ensureConnection().catch(() => undefined);
+    await ensureConnection().catch(() => undefined);
+    await ensureConnection().catch(() => undefined);
+
+    expect(apiShutdown, 'one close per sign-in that failed').toHaveBeenCalledTimes(3);
+  });
+
+  it('still reports the failure after closing the session', async () => {
+    downloadBudget.mockRejectedValue(new Error('the download was cut'));
+    const { ensureConnection } = await import('../../connection.js');
+
+    await expect(ensureConnection()).rejects.toThrow();
+  });
+
   it('closes the session of a startup that signed in and then failed', async () => {
     // `initialized` is only true once the budget is open, so a download that
     // fails left a session on the server and a claimed directory with

@@ -60,6 +60,10 @@ export function whenIdle(): Promise<void> {
  * being closed: before this, a request that had not been dispatched yet
  * answered `Error: No budget file is open` and wrote its rows anyway.
  */
+export const LEAVING_MESSAGE =
+  'This server is shutting down and did not run that: the client it was started by ' +
+  'has gone. Nothing was read or written. Start it again.';
+
 export function startLeaving(): void {
   leaving = true;
 }
@@ -91,14 +95,7 @@ export function withInFlight<T extends McpServerLike>(server: T): T {
     const counted = async (...a: unknown[]) => {
       if (leaving) {
         return {
-          content: [
-            {
-              type: 'text',
-              text:
-                'This server is shutting down and did not run that: the client it was ' +
-                'started by has gone. Nothing was read or written. Start it again.',
-            },
-          ],
+          content: [{ type: 'text', text: LEAVING_MESSAGE }],
           isError: true,
         };
       }
@@ -106,6 +103,27 @@ export function withInFlight<T extends McpServerLike>(server: T): T {
     };
     return originalTool(...args.slice(0, -1), counted);
   };
+
+  // The resources too. They read the budget exactly as a read tool does, and
+  // leaving them out meant a `resources/read` arriving five milliseconds
+  // after the signal answered `No budget file is open` from inside the
+  // engine: measured on accounts, categories and payees. `resources/list`
+  // reads nothing, so it is left alone.
+  const resource = server.resource;
+  if (typeof resource === 'function') {
+    const originalResource = resource.bind(server) as (...args: unknown[]) => unknown;
+    (wrapped as { resource: unknown }).resource = (...args: unknown[]) => {
+      const handler = args[args.length - 1] as (...a: unknown[]) => Promise<unknown>;
+      const counted = async (...a: unknown[]) => {
+        // A resource has no shape for "this went wrong", so it says so the
+        // way the protocol does, which is better than the engine's own
+        // sentence about a budget that is not open.
+        if (leaving) throw new Error(LEAVING_MESSAGE);
+        return trackInFlight(() => handler(...a));
+      };
+      return originalResource(...args.slice(0, -1), counted);
+    };
+  }
 
   return wrapped;
 }

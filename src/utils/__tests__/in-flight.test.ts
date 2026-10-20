@@ -158,6 +158,53 @@ describe('what is in flight', () => {
       await expect(call).resolves.toBe('the reply');
     });
 
+    it('refuses a resource read once the server is leaving', async () => {
+      // A resource reads the budget exactly as a read tool does. Left out of
+      // this, a `resources/read` arriving five milliseconds after the signal
+      // answered the engine's own `No budget file is open`.
+      let handler: ((...a: unknown[]) => Promise<unknown>) | undefined;
+      const server = withInFlight({
+        tool: () => {},
+        resource: (...args: unknown[]) => {
+          handler = args[args.length - 1] as never;
+        },
+      } as unknown as McpServerLike);
+      const ran = vi.fn().mockResolvedValue({ contents: [] });
+      (server as unknown as { resource: (...a: unknown[]) => unknown }).resource(
+        'accounts',
+        'actual://accounts',
+        ran,
+      );
+
+      startLeaving();
+
+      await expect(handler!()).rejects.toThrow(/shutting down/);
+      expect(ran).not.toHaveBeenCalled();
+    });
+
+    it('counts a resource read while it runs', async () => {
+      let handler: ((...a: unknown[]) => Promise<unknown>) | undefined;
+      const server = withInFlight({
+        tool: () => {},
+        resource: (...args: unknown[]) => {
+          handler = args[args.length - 1] as never;
+        },
+      } as unknown as McpServerLike);
+      let finish: (() => void) | undefined;
+      (server as unknown as { resource: (...a: unknown[]) => unknown }).resource(
+        'accounts',
+        'actual://accounts',
+        () => new Promise<void>((r) => { finish = r; }),
+      );
+
+      const call = handler!();
+      expect(inFlightCount()).toBe(1);
+      finish!();
+      await call;
+
+      expect(inFlightCount()).toBe(0);
+    });
+
     it('passes the arguments and the reply through untouched', async () => {
       const { server, handlerOf } = registered();
       server.tool(
@@ -186,5 +233,18 @@ describe('the wiring', () => {
     );
 
     expect(source).toContain('withInFlight(withWriteNotice(');
+  });
+
+  it('puts the resources through it too', async () => {
+    // They are registered in their own file and were left out: a resource
+    // read is the same read, against the same budget.
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const source = readFileSync(
+      fileURLToPath(new URL('../../resources.ts', import.meta.url)),
+      'utf8',
+    );
+
+    expect(source).toContain('withInFlight(withReadSync(');
   });
 });
