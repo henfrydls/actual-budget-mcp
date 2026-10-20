@@ -222,6 +222,11 @@ export interface ClaimedDataDir {
  * pids: what clears this is closing the sessions that left them, and a list
  * of numbers reads as something to go and kill one by one.
  *
+ * From Actual 26.11 a leftover server costs one more thing: it holds a
+ * session on the server as well as a directory here, and a session only ends
+ * when the process shuts down in an orderly way. One that is killed outright
+ * leaves its row behind for good, since those never expire (#219).
+ *
  * Nothing is reclaimed on a guess, which was decided when this was written.
  * A directory whose holder is gone is taken over already, which is
  * `readDataDirLock` answering null for a pid that no longer exists. What is

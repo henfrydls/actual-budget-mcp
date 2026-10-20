@@ -3,6 +3,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from './connection.js';
 import { formatMoney } from './utils/money.js';
 import { withReadSync } from './utils/read-sync.js';
+import { withInFlight } from './utils/in-flight.js';
 
 export function registerAllResources(rawServer: McpServer): void {
   // Resources are reads, so they pull the server's changes first and carry the
@@ -10,7 +11,10 @@ export function registerAllResources(rawServer: McpServer): void {
   // time round: `actual://accounts` went on serving balances from a copy that
   // was behind while every tool had stopped doing it, which is worse than
   // before, because now only one of the two ways of asking is honest.
-  const server = withReadSync(rawServer);
+  // And through the in-flight counter, outside it: a resource read is work
+  // this server is in the middle of, and one that arrives while it is
+  // leaving must not reach a budget being closed (#219).
+  const server = withInFlight(withReadSync(rawServer));
 
   server.resource(
     'accounts',

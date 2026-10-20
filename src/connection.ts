@@ -15,6 +15,14 @@ import { refreshBudgetDecimalPlaces, resetBudgetDecimalPlaces } from './utils/cu
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
+/**
+ * Whether `api.init` got as far as signing in.
+ *
+ * Not the same question as `initialized`, which is only true once the budget
+ * is open: a startup that fails on the download has a session on the server
+ * and a claimed directory, and both are this process's to give back (#219).
+ */
+let signedIn = false;
 /** The directory this process actually claimed, which may not be the configured one. */
 let claimedDataDir: string | null = null;
 
@@ -513,9 +521,22 @@ export function resetReauthClock(): void {
  * in with: the only thing that path offers is setting the token you already
  * have, and the one you have is the expired one.
  *
- * Measured too: signing in again does not pile up sessions on the server. The
- * row for a password login is reused, token and all, so four sign-ins leave
- * one session.
+ * What a sign-in leaves on the server depends on the version, and both were
+ * measured against a disposable server (#219):
+ *
+ *   - Up to 26.10 the row for a password login is reused, token and all, so
+ *     four sign-ins leave one session.
+ *   - From 26.11 each sign-in makes its own row, with its own token and
+ *     `expires_at = -1`, which nothing ever clears: four sign-ins leave four.
+ *     A new one does not revoke the old ones, measured, so signing in again
+ *     here cannot knock another server off its session.
+ *
+ * That makes the limits above do a second job from 26.11: twice an hour is
+ * also how many rows a server that keeps losing its session can leave behind.
+ * Nothing is left behind by the sign-in itself, though, because the session
+ * being replaced is one the server has already revoked or deleted: that is
+ * why we are here. Measured, deleting our row and signing in again moves the
+ * count by exactly one.
  *
  * And measured on an **encrypted** budget, because `api.init` reloads the
  * global store and the encryption keys live in it: against a disposable
@@ -627,6 +648,8 @@ export async function ensureConnection(): Promise<void> {
           ? { sessionToken: config.sessionToken }
           : { password: config.password }),
       });
+      // From here there is a session on the server, whatever happens next.
+      signedIn = true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = errorCode(error);
@@ -763,12 +786,62 @@ export async function ensureConnection(): Promise<void> {
     await initializing;
   } catch (error) {
     initializing = null;
+    // A startup that signed in and then failed leaves a session on the
+    // server, and from Actual 26.11 that row never expires. The next tool
+    // call tries again and makes another: measured against a disposable
+    // server whose download was cut, three calls took the count from 20 to
+    // 26, and only the last was ever closed. So it is closed here, before
+    // the error goes back to the caller.
+    //
+    // `api.shutdown` and not this module's, which also gives back the data
+    // directory: this process is still running and still holds it.
+    if (signedIn) {
+      signedIn = false;
+      internal = null;
+      try {
+        await api.shutdown();
+      } catch {
+        // The session is the only thing being given back, and a server that
+        // cannot be reached is why we are here.
+      }
+    }
     throw error;
   }
 }
 
+/**
+ * Resolves once a connection being established has settled, either way.
+ *
+ * The exit waits on this along with the tool calls (#219): `api.init` signs
+ * in at the start of a download that can take minutes, so a client that
+ * leaves during one has a session on the server and nothing has finished
+ * that would let us close it.
+ *
+ * It is bounded by whoever is leaving, and that bound is the honest limit of
+ * this: a download longer than it still leaves the session open. There is no
+ * way to close one from here without the token, and the token is inside the
+ * engine's own store.
+ */
+export async function connectionSettled(): Promise<void> {
+  if (initializing) await initializing.catch(() => undefined);
+}
+
 export async function shutdown(): Promise<void> {
-  if (!initialized) return;
+  // A client can go away while the budget is still opening: the first
+  // download takes minutes and `initialized` is only set at the end of it.
+  // By then `api.init` has already signed in, so there is a session on the
+  // server that this process made, and leaving on "nothing to close" is what
+  // strands it. Measured against a disposable 26.11 server: ending stdin
+  // during startup left a session row behind every time.
+  //
+  // Whoever is leaving puts a limit on how long this may take, so joining a
+  // connection in flight cannot hold the exit open.
+  if (initializing) await initializing.catch(() => undefined);
+  // `signedIn`, not only `initialized`: a startup that signed in and then
+  // failed on the download leaves a session on the server and a claimed
+  // directory, and reading "not initialised" as "nothing to give back"
+  // stranded both (#219).
+  if (!initialized && !signedIn) return;
   await api.shutdown();
   // The claimed directory, not the configured one: they differ whenever this
   // server stepped aside, and releasing the wrong lock would drop someone
@@ -778,6 +851,7 @@ export async function shutdown(): Promise<void> {
   forgetActiveDataDir();
   resetBudgetDecimalPlaces();
   initialized = false;
+  signedIn = false;
   initializing = null;
   internal = null;
 }
