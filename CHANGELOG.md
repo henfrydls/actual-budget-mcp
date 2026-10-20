@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.10.9
+
+A server that would not go away, and two things `update_category` and
+`create_rule` could not do.
+
+### It leaves when you close the client (#219)
+
+A server started over stdio ends when its client does, and the way that
+arrives is the end of its input. Nothing here was listening for it, so
+closing the client left the server running: with its copy of your budget
+held open, and, from Actual 26.11, with a session on your server that
+nothing ever clears.
+
+That is where the servers in the startup warning came from. If you have
+several of them running against one budget, the ones left by closed sessions
+will not come back after this.
+
+It now leaves on that, and on the signals, and on its way out it closes its
+session and gives back the directory it was holding. A call that arrives
+while it is leaving is answered with a sentence saying so, instead of
+reaching a budget that is being closed.
+
+What it waits for before closing anything is whatever it was already doing,
+so a batch being written is never cut in half. There is a limit to that, and
+it is worth saying plainly: a client that stops the server and waits will
+see the write finish, and a client that gives it half a second, which is
+what Claude Code gives, will cut a write that takes longer than that. The
+write is lost whole in that case, never half, and nothing reaches your
+Actual server.
+
+Starting the server with its input already closed, which is what `docker
+run` without `-i` does, now ends it at once instead of leaving it running.
+
+### Hiding a category without renaming it (#218)
+
+`update_category` could not hide or unhide a category unless you also
+renamed it: Actual needs a name on every update and the tool only sent one
+when you gave it. Hiding works now, and so does unhiding by name, which
+could not work before because a hidden category is left out of the search by
+name everywhere else.
+
+When two categories share a name, which Actual allows across groups, what
+you are asking for says which one you mean: unhiding is about the hidden
+one, hiding or renaming about the one you can see. When both fit, the reply
+names each with its group, whether it is hidden, and its id.
+
+### create_rule takes a null stage (#220)
+
+`stage` means "no stage" when it is absent, which Actual stores as null. A
+client that fills every optional field with null was refused for saying
+exactly that.
+
+### Also
+
+- The GitHub Actions this project runs are pinned to commits with the
+  version in a comment, and Dependabot raises them. (#224)
+- Actual 26.11 changes how password sessions work, and this release is ready
+  for it: measured against the nightly, the whole suite and the session
+  handling behave the same on both. The library itself moves in the next
+  release.
+
 ## 0.10.8
 
 Mostly the inside of the thing. Three changes show.
