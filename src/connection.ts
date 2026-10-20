@@ -780,6 +780,23 @@ export async function ensureConnection(): Promise<void> {
   }
 }
 
+/**
+ * Resolves once a connection being established has settled, either way.
+ *
+ * The exit waits on this along with the tool calls (#219): `api.init` signs
+ * in at the start of a download that can take minutes, so a client that
+ * leaves during one has a session on the server and nothing has finished
+ * that would let us close it.
+ *
+ * It is bounded by whoever is leaving, and that bound is the honest limit of
+ * this: a download longer than it still leaves the session open. There is no
+ * way to close one from here without the token, and the token is inside the
+ * engine's own store.
+ */
+export async function connectionSettled(): Promise<void> {
+  if (initializing) await initializing.catch(() => undefined);
+}
+
 export async function shutdown(): Promise<void> {
   // A client can go away while the budget is still opening: the first
   // download takes minutes and `initialized` is only set at the end of it.

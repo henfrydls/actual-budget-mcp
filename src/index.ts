@@ -11,8 +11,9 @@ import { registerAllTools } from './tools/index.js';
 import { isReadOnly } from './utils/mode.js';
 import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
-import { ensureConnection, shutdown } from './connection.js';
+import { connectionSettled, ensureConnection, shutdown } from './connection.js';
 import { installExitPaths } from './utils/orderly-exit.js';
+import { inFlightCount, whenIdle } from './utils/in-flight.js';
 import { installProcessGuards } from './utils/process-guards.js';
 import { describeError } from './utils/errors.js';
 import * as api from '@actual-app/api';
@@ -129,6 +130,13 @@ if (isReadOnly()) {
 // process running until it was killed.
 installExitPaths({
   stop: shutdown,
+  // Tool calls and the first connection both count as work in flight: one
+  // must not be cut in half, and the other is what opened the session that
+  // the shutdown is there to close.
+  whenIdle: async () => {
+    await Promise.all([whenIdle(), connectionSettled()]);
+  },
+  busy: () => inFlightCount() > 0,
   exit: (code) => process.exit(code),
   stdin: process.stdin,
   signals: process,

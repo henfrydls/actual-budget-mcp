@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isReadOnly } from '../utils/mode.js';
+import { withInFlight } from '../utils/in-flight.js';
 
 // Read tools
 import { registerListAccounts } from './read/list-accounts.js';
@@ -59,7 +60,9 @@ export function registerAllTools(rawServer: McpServer): void {
   // Two wrappers, one per direction. Reads pull the server's changes first
   // (#126); writes re-read the budget currency, which scales the amount they
   // are about to convert (#141).
-  const server = withWriteNotice(withReadSync(withCurrentCurrency(rawServer)));
+  // And `withInFlight` outside both, so leaving can wait for a call that is
+  // half way through instead of closing the budget underneath it (#219).
+  const server = withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(rawServer))));
   // Read
   registerListAccounts(server);
   registerGetBudgetMonth(server);

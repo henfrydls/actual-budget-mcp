@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { installExitPaths, EXIT_GRACE_MS } from '../orderly-exit.js';
+import {
+  installExitPaths,
+  EXIT_GRACE_MS,
+  EXIT_IN_FLIGHT_MS,
+  EXIT_QUIET_MS,
+} from '../orderly-exit.js';
 
 /** A stand-in for `process.stdin` and `process`, so nothing here really exits. */
 function wiring() {
@@ -76,11 +81,12 @@ describe('leaving when the client goes away', () => {
         stdin: w.stdin,
         signals: w.signals,
         timeoutMs: 50,
+        quietMs: 10,
       });
 
       w.signalListeners.get('SIGTERM')!();
       expect(w.exits, 'not before the grace period').toEqual([]);
-      await vi.advanceTimersByTimeAsync(60);
+      await vi.advanceTimersByTimeAsync(80);
 
       expect(w.exits).toEqual([0]);
     } finally {
@@ -112,6 +118,7 @@ describe('leaving when the client goes away', () => {
         stdin: w.stdin,
         signals: w.signals,
         timeoutMs: 10_000,
+        quietMs: 10,
       });
 
       w.signalListeners.get('SIGINT')!();
@@ -129,6 +136,148 @@ describe('leaving when the client goes away', () => {
   it('gives the shutdown seconds and not minutes', () => {
     expect(EXIT_GRACE_MS).toBeLessThanOrEqual(10_000);
     expect(EXIT_GRACE_MS).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A tool that is still running when the client goes away (#219, round two).
+ *
+ * Measured against a disposable server: a batch of three thousand rows with
+ * a signal sent 300ms in answered `Error: No budget file is open` and wrote
+ * all three thousand anyway, because the shutdown ran beside the handler
+ * rather than after it. A tool that writes in several steps could be cut
+ * between two of them.
+ */
+describe('leaving while a tool is still running', () => {
+  it('does not shut down until the call has finished', async () => {
+    vi.useFakeTimers();
+    try {
+      const w = wiring();
+      const stop = vi.fn().mockResolvedValue(undefined);
+      let finishCall: (() => void) | undefined;
+      installExitPaths({
+        stop,
+        whenIdle: () => new Promise<void>((resolve) => { finishCall = resolve; }),
+        exit: w.exit,
+        stdin: w.stdin,
+        signals: w.signals,
+        quietMs: 10,
+      });
+
+      w.signalListeners.get('SIGTERM')!();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(stop, 'the budget is still being written to').not.toHaveBeenCalled();
+      expect(w.exits).toEqual([]);
+
+      finishCall!();
+      await vi.advanceTimersByTimeAsync(40);
+
+      expect(stop).toHaveBeenCalledOnce();
+      expect(w.exits).toEqual([0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves without closing when the call never finishes', async () => {
+    // A session left open costs one row. A write cut in half costs the thing
+    // this server is for.
+    vi.useFakeTimers();
+    try {
+      const w = wiring();
+      const stop = vi.fn().mockResolvedValue(undefined);
+      installExitPaths({
+        stop,
+        whenIdle: () => new Promise<void>(() => {}),
+        exit: w.exit,
+        stdin: w.stdin,
+        signals: w.signals,
+        inFlightMs: 100,
+        quietMs: 10,
+      });
+
+      w.stdinListeners.get('end')!();
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(stop, 'never beside a call that is still running').not.toHaveBeenCalled();
+      expect(w.exits).toEqual([0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shuts down at once when nothing is running', async () => {
+    const w = wiring();
+    const stop = vi.fn().mockResolvedValue(undefined);
+    installExitPaths({
+      stop,
+      whenIdle: () => Promise.resolve(),
+      exit: w.exit,
+      stdin: w.stdin,
+      signals: w.signals,
+    });
+
+    w.signalListeners.get('SIGINT')!();
+    await vi.waitFor(() => expect(w.exits).toEqual([0]));
+
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('looks again before deciding nothing is running', async () => {
+    // Counting starts when a handler starts. A request that arrived a moment
+    // before the signal has not been dispatched yet, so the count says zero:
+    // measured, a batch sent 300ms before a SIGTERM was still in the pipe,
+    // the budget was closed, and the call that then started answered
+    // `Error: No budget file is open`.
+    vi.useFakeTimers();
+    try {
+      const w = wiring();
+      const stop = vi.fn().mockResolvedValue(undefined);
+      let running = false;
+      let finish: (() => void) | undefined;
+      installExitPaths({
+        stop,
+        whenIdle: () =>
+          running ? new Promise<void>((resolve) => { finish = () => { running = false; resolve(); }; })
+                  : Promise.resolve(),
+        busy: () => running,
+        exit: w.exit,
+        stdin: w.stdin,
+        signals: w.signals,
+        quietMs: 50,
+      });
+
+      w.signalListeners.get('SIGTERM')!();
+      // The request reaches its handler just after the signal.
+      running = true;
+      await vi.advanceTimersByTimeAsync(60);
+
+      expect(stop, 'it was dispatched while we were looking away').not.toHaveBeenCalled();
+      expect(w.exits).toEqual([]);
+
+      finish!();
+      await vi.advanceTimersByTimeAsync(60);
+
+      expect(stop).toHaveBeenCalledOnce();
+      expect(w.exits).toEqual([0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('that second look is a beat, not a wait', () => {
+    // It is paid on every exit, including the ordinary one where nothing is
+    // happening: measured, an idle server leaves in about 300ms with it.
+    expect(EXIT_QUIET_MS).toBeLessThanOrEqual(500);
+    expect(EXIT_QUIET_MS).toBeGreaterThan(0);
+  });
+
+  it('waits far longer for a call than for the shutdown', () => {
+    // Reaching this limit means leaving while the call runs, which kills it:
+    // it is a "something is stuck" threshold, not a budget for real work.
+    // Measured, three thousand rows took fifty seconds on one machine.
+    expect(EXIT_IN_FLIGHT_MS).toBeGreaterThan(EXIT_GRACE_MS);
+    expect(EXIT_IN_FLIGHT_MS).toBeGreaterThanOrEqual(120_000);
   });
 });
 
