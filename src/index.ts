@@ -12,6 +12,7 @@ import { isReadOnly } from './utils/mode.js';
 import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
 import { ensureConnection, shutdown } from './connection.js';
+import { installExitPaths } from './utils/orderly-exit.js';
 import { installProcessGuards } from './utils/process-guards.js';
 import { describeError } from './utils/errors.js';
 import * as api from '@actual-app/api';
@@ -116,6 +117,23 @@ if (isReadOnly()) {
   );
 }
 
+// Signals, and the way a stdio client really leaves: end-of-file on stdin.
+// Nothing watched for that, so a client that went away left this process
+// running with its data directory held (#207), and from Actual 26.11 with a
+// session on the server that nothing ever clears (#219).
+//
+// Before the budget is opened, not after: the first download can take
+// minutes, a client that gives up during it closes stdin, and a listener
+// registered afterwards never hears the event that already happened.
+// Measured: ending stdin while the budget was still downloading left the
+// process running until it was killed.
+installExitPaths({
+  stop: shutdown,
+  exit: (code) => process.exit(code),
+  stdin: process.stdin,
+  signals: process,
+});
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
@@ -129,12 +147,3 @@ try {
   // on the first tool call via ensureConnection's error propagation
 }
 
-process.on('SIGINT', async () => {
-  await shutdown();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  await shutdown();
-  process.exit(0);
-});

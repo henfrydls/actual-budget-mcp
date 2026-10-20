@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { actualApiVersion } from '../version.js';
 
 /**
  * A budget newer than the library that has to open it (#139).
@@ -35,6 +36,22 @@ vi.mock('@actual-app/api', () => ({
   sync: vi.fn(async () => {}),
 }));
 
+/**
+ * The versions this file talks about, taken from the library rather than
+ * written down (#219).
+ *
+ * They were literals, and the 26.11 nightly turned "the server matches" into
+ * a server a minor behind, so the warning fired and the test failed for
+ * being right. What these cases are about is the relationship between the
+ * two versions, and only one of them is a fact about this repository.
+ */
+const LIBRARY = actualApiVersion();
+const [MAJOR, MINOR] = LIBRARY.split('.').map((part) => Number.parseInt(part, 10));
+/** A server one minor behind the library, which is the case #139 is about. */
+const OLDER = `${MINOR === 1 ? MAJOR - 1 : MAJOR}.${MINOR === 1 ? 12 : MINOR - 1}.0`;
+/** A server one minor ahead, which this warning is not about. */
+const NEWER = `${MINOR === 12 ? MAJOR + 1 : MAJOR}.${MINOR === 12 ? 1 : MINOR + 1}.0`;
+
 /** What the engine prints on its way to resolving anyway. */
 const ENGINE_LOG = 'Error updating Error: out-of-sync-migrations';
 
@@ -56,7 +73,7 @@ describe('a budget that does not open (#139)', () => {
     vi.resetModules();
     downloadBudget.mockReset();
     getBudgetMonths.mockReset();
-    getServerVersion.mockReset().mockResolvedValue({ version: '26.10.0' });
+    getServerVersion.mockReset().mockResolvedValue({ version: LIBRARY });
     process.env.ACTUAL_SERVER_URL = 'http://127.0.0.1:5099';
     process.env.ACTUAL_BUDGET_ID = 'a-sync-id';
     process.env.ACTUAL_PASSWORD = 'not-a-real-password';
@@ -233,7 +250,7 @@ describe('a budget that does not open (#139)', () => {
     // which `test:connection` pays for on every successful run.
     vi.useFakeTimers();
     try {
-      getServerVersion.mockResolvedValue({ version: '26.10.0' });
+      getServerVersion.mockResolvedValue({ version: LIBRARY });
       downloadBudget.mockImplementation(async () => {});
       getBudgetMonths.mockResolvedValue(['2026-01']);
 
@@ -363,8 +380,8 @@ describe('a budget that does not open (#139)', () => {
       // Measured: a 26.10 library against a 26.9 server takes the budget from
       // 59 migrations to 60 and uploads it, after which a 26.9 app downloading
       // from scratch fails exactly the way #139 did.
-      const said = await connectCleanly('26.9.0');
-      expect(said).toMatch(/26\.9\.0/);
+      const said = await connectCleanly(OLDER);
+      expect(said).toContain(OLDER);
       expect(said).toMatch(/migrate/i);
       expect(said).toMatch(/no longer open it/i);
     });
@@ -375,7 +392,7 @@ describe('a budget that does not open (#139)', () => {
       const order: string[] = [];
       getServerVersion.mockImplementation(async () => {
         order.push('version');
-        return { version: '26.9.0' };
+        return { version: OLDER };
       });
       downloadBudget.mockImplementation(async () => {
         order.push('download');
@@ -389,13 +406,13 @@ describe('a budget that does not open (#139)', () => {
     });
 
     it('says nothing when the server matches', async () => {
-      expect(await connectCleanly('26.10.0')).not.toMatch(/migrate/i);
+      expect(await connectCleanly(LIBRARY)).not.toMatch(/migrate/i);
     });
 
     it('says nothing when the server is newer', async () => {
       // That direction is the one #139 is about and is reported elsewhere; it
       // is not this warning's business.
-      expect(await connectCleanly('26.11.0')).not.toMatch(/migrate/i);
+      expect(await connectCleanly(NEWER)).not.toMatch(/migrate/i);
     });
 
     it('works when the server does not report a version', async () => {
