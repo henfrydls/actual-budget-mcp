@@ -165,4 +165,74 @@ describe.skipIf(skip)('update_category against the real engine', () => {
       await handlerFor()({ category: archived, hidden: true });
     }, 60_000);
   });
+
+  /**
+   * What the reply says (#237).
+   *
+   * It used to answer with the fields alone, so hiding one came back as
+   * `Category updated:\n  Hidden: true` and nothing in it said which
+   * category that was. By id, or with a name that matched one of several,
+   * confirming the right one meant a second call to `get_categories`.
+   */
+  describe('the reply', () => {
+    let snacks = '';
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        const group = await api.createCategoryGroup({ name: 'Everyday' } as never);
+        snacks = await api.createCategory({ name: 'Snacks', group_id: group } as never);
+      }, 'update-cat-reply');
+    }, 60_000);
+
+    it('names the category and its group when it was asked for by id', async () => {
+      const reply = await handlerFor()({ category: snacks, name: 'Treats' });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      const text = reply.content[0].text;
+      expect(text).toContain('Updated Treats in Everyday.');
+      expect(text).toContain('  Name   Snacks -> Treats');
+    }, 60_000);
+
+    it('gives the old and the new value of what it hid', async () => {
+      const reply = await handlerFor()({ category: snacks, hidden: true });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      const text = reply.content[0].text;
+      expect(text).toContain('Updated Treats in Everyday.');
+      expect(text).toContain('  Hidden false -> true');
+      expect(text, 'the name was not touched, so it is not listed').not.toContain('Name');
+    }, 60_000);
+
+    it('says when the category already had what was asked for', async () => {
+      const reply = await handlerFor()({ category: snacks, name: 'Treats', hidden: true });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      const text = reply.content[0].text;
+      expect(text).toContain('already had those values, so nothing changed');
+      expect(text).toContain('  Name   Treats (already that)');
+      expect(text).toContain('  Hidden true (already that)');
+    }, 60_000);
+
+    it('quotes the name the budget stored, not the one that was sent', async () => {
+      // Measured: Actual trims the name, so answering with the argument
+      // would quote a name that is not in the budget.
+      const reply = await handlerFor()({ category: snacks, name: '  Groceries  ' });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      const text = reply.content[0].text;
+      expect(text).toContain('  Name   Treats -> Groceries');
+      expect(text).not.toContain('  Groceries  ');
+      expect(await readBack(snacks)).toEqual({ name: 'Groceries', hidden: true });
+    }, 60_000);
+
+    it('lists both fields when both changed', async () => {
+      const reply = await handlerFor()({ category: snacks, name: 'Snacks', hidden: false });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      const text = reply.content[0].text;
+      expect(text).toContain('Updated Snacks in Everyday.');
+      expect(text).toContain('  Name   Groceries -> Snacks');
+      expect(text).toContain('  Hidden true -> false');
+    }, 60_000);
+  });
 });
