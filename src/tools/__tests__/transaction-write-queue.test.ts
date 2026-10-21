@@ -57,6 +57,11 @@ const NOT_QUEUED = new Map([
     'transfer-between-categories.ts',
     'budget figures only, creates no transaction (#86); on the budget queue (#114)',
   ],
+  ['hold-for-next-month.ts', "the month's held figure; no transaction, on the budget queue (#138)"],
+  [
+    'set-category-carryover.ts',
+    'a flag on a category; no transaction, on the budget queue (#138)',
+  ],
   ['repair-sync.ts', 'rebuilds sync bookkeeping, not budget data'],
 ]);
 
