@@ -17,9 +17,16 @@ vi.mock('../../../connection.js', async () => {
   };
 });
 
-import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './actual-engine.js';
+import {
+  initTestEngine,
+  shutdownTestEngine,
+  createFreshBudget,
+  api,
+  testInternal,
+} from './actual-engine.js';
 import { registerTransferBetweenCategories } from '../../write/transfer-between-categories.js';
 import { getInternal } from '../../../connection.js';
+import { formatMoney } from '../../../utils/money.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../../types.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
@@ -473,6 +480,221 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
       const result = await handlerFor()({ from: 'Groceries', to: collision, amount: 5 });
 
       expect(result.isError, result.content[0]?.text).toBeFalsy();
+    }, 60_000);
+  });
+
+  /**
+   * What the pool costs when it is the **source** (#114, round two).
+   *
+   * `transferCategory` guards the destination and not the source, so asking
+   * the handler for money out of the pool writes a budget row for a category
+   * called `to-budget`, which nobody has. These tests pin both halves: the
+   * engine still does it, and this tool no longer asks it to.
+   */
+  describe('money out of the pool', () => {
+    let groceries = '';
+
+    /** The junk rows, read straight from the table they land in. */
+    const poolRows = async () =>
+      testInternal().db.all<{ id: string; amount: number }>(
+        "select id, amount from zero_budgets where category = 'to-budget'",
+      );
+
+    const pool = async (month: string) =>
+      ((await api.getBudgetMonth(month)) as unknown as BudgetMonth).toBudget;
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        const spending = await api.createCategoryGroup({ name: 'Spending' } as never);
+        groceries = await api.createCategory({ name: 'Groceries', group_id: spending } as never);
+        // The budget's own income group, not one made here: measured,
+        // `createCategoryGroup` ignores `is_income` and the group comes back
+        // as a spending one, so a deposit against it never reaches the pool.
+        const earnings = (await api.getCategoryGroups()).find((g) => g.is_income);
+        if (!earnings) throw new Error('a fresh budget has no income group');
+        const salary = await api.createCategory({
+          name: 'Salary',
+          group_id: earnings.id,
+          is_income: true,
+        } as never);
+        const acct = await api.createAccount({ name: 'Checking', type: 'checking' } as never, 0);
+        // Income on an income category, which is what gives the month a pool
+        // to take from. An uncategorised deposit does not: measured, it leaves
+        // `toBudget` at zero.
+        await api.addTransactions(acct, [
+          { date: `${lastMonth}-01`, amount: 200000, category: salary },
+          { date: `${thisMonth}-01`, amount: 300000, category: salary },
+        ] as never);
+      }, 'xfer-pool-rows');
+      await api.setBudgetAmount(thisMonth, groceries, 12500);
+    }, 60_000);
+
+    it('leaves no budget row for a category nobody has', async () => {
+      const before = await figures(thisMonth, [groceries]);
+
+      const result = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: 30 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const after = await figures(thisMonth, [groceries]);
+      expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted + 3000);
+      expect(await poolRows(), 'nothing addressed to "to-budget" in zero_budgets').toEqual([]);
+    }, 60_000);
+
+    it('reports the pool with the month figure, and only where it belongs', async () => {
+      const month = (await api.getBudgetMonth(thisMonth)) as unknown as BudgetMonth;
+      // The two figures have to differ for this to be able to fail: the pool
+      // is what is left to assign, the total is what is assigned already.
+      expect(month.toBudget).not.toBe(month.totalBudgeted);
+      const poolBefore = month.toBudget;
+
+      const result = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: 30 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const text = result.content[0].text;
+      expect(text).toContain(
+        `To Budget   ${formatMoney(poolBefore)} -> ${formatMoney(poolBefore - 3000)}`,
+      );
+      // Budgeted and available are the same number for the pool, so it is
+      // listed once. The second section is the category's alone.
+      const availableRows = text
+        .split('Available:')[1]
+        .split('\n\n')[0]
+        .split('\n')
+        .filter((line) => line.trim() !== '');
+      expect(availableRows).toHaveLength(1);
+      expect(availableRows[0]).toContain('Groceries');
+      expect(text).toContain(
+        'What changed is how much of this month is assigned, not how much money there is.',
+      );
+      expect(text).not.toContain('the month total is unchanged');
+      // There is money left, so nothing is said about the month being over.
+      expect(poolBefore - 3000).toBeGreaterThan(0);
+      expect(text).not.toContain('assigns more than it has');
+    }, 60_000);
+
+    it('reads the name with the spaces a person leaves around it', async () => {
+      const poolBefore = await pool(thisMonth);
+
+      const result = await handlerFor()({ from: '  To Budget  ', to: 'Groceries', amount: 1 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(await pool(thisMonth)).toBe(poolBefore - 100);
+    }, 60_000);
+
+    it('says what a past month moves, and names one category because there is one', async () => {
+      const before = {
+        past: await pool(lastMonth),
+        now: await pool(thisMonth),
+      };
+
+      const result = await handlerFor()({
+        from: 'To Budget',
+        to: 'Groceries',
+        amount: 30,
+        month: lastMonth,
+      });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      // Measured: the pool falls by the same amount in the month asked for
+      // and in the ones after it, which is what the reply now says.
+      expect(await pool(lastMonth)).toBe(before.past - 3000);
+      expect(await pool(thisMonth)).toBe(before.now - 3000);
+      const text = result.content[0].text;
+      expect(text).toContain('what Groceries carries into');
+      expect(text).toContain('and To Budget in those months');
+      expect(text).not.toContain('both categories');
+    }, 60_000);
+
+    it('is what the engine would have written, which is why this does not ask it to', async () => {
+      // The canary for the guard above. If Actual ever validates the source
+      // the way it validates the destination, this fails, and the handler can
+      // be used in both directions again.
+      expect(await poolRows()).toEqual([]);
+
+      await getInternal().send('budget/transfer-category', {
+        month: thisMonth,
+        amount: 1000,
+        from: 'to-budget',
+        to: groceries,
+      } as never);
+
+      expect(await poolRows()).toEqual([
+        { id: `${thisMonth.replace('-', '')}-to-budget`, amount: -1000 },
+      ]);
+    }, 60_000);
+  });
+
+  /**
+   * A category whose name only contains the reserved word (#114, round two).
+   *
+   * Before this, "To Budget" with no such category to match reached
+   * "To Budget Extra" through the resolver's substring step. It now reaches
+   * the pool, and that is the intended answer rather than an ambiguity: the
+   * reserved word is an exact match and a substring match is the weaker one,
+   * which is the rule the resolver already applies between two categories.
+   * The category keeps its own name, which is what this pins.
+   */
+  describe('a category called "To Budget Extra"', () => {
+    let extra = '';
+    let groceries = '';
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+        extra = await api.createCategory({ name: 'To Budget Extra', group_id: g } as never);
+        groceries = await api.createCategory({ name: 'Groceries', group_id: g } as never);
+      }, 'xfer-pool-substring');
+      await api.setBudgetAmount(thisMonth, groceries, 10000);
+      await api.setBudgetAmount(thisMonth, extra, 4000);
+    }, 60_000);
+
+    it('does not take the reserved word from the pool', async () => {
+      const before = await figures(thisMonth, [groceries, extra]);
+
+      const result = await handlerFor()({ from: 'Groceries', to: 'To Budget', amount: 25 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const after = await figures(thisMonth, [groceries, extra]);
+      expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted - 2500);
+      expect(after.cats[1].budgeted, 'the category is left alone').toBe(before.cats[1].budgeted);
+      expect(result.content[0].text).not.toContain('To Budget Extra');
+    }, 60_000);
+
+    it('is still reached by its own name', async () => {
+      const before = await figures(thisMonth, [groceries, extra]);
+
+      const result = await handlerFor()({ from: 'Groceries', to: 'To Budget Extra', amount: 25 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const after = await figures(thisMonth, [groceries, extra]);
+      expect(after.cats[1].budgeted).toBe(before.cats[1].budgeted + 2500);
+    }, 60_000);
+  });
+
+  /**
+   * The clash is in the category's name, not in how the request spelled it
+   * (#114, round two). Comparing the category against the typed text let
+   * every crossed spelling through.
+   */
+  describe.each([
+    ['to-budget', 'To Budget'],
+    ['to-budget', 'to budget'],
+    ['To Budget', 'to-budget'],
+    ['TO BUDGET', 'to budget'],
+  ])('a category called %s, asked for as %s', (name, typed) => {
+    it('is refused, whichever way round the two are spelled', async () => {
+      let clash = '';
+      await createFreshBudget(async () => {
+        const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+        clash = await api.createCategory({ name, group_id: g } as never);
+        await api.createCategory({ name: 'Groceries', group_id: g } as never);
+      }, 'xfer-pool-spelling');
+
+      const result = await handlerFor()({ from: 'Groceries', to: typed, amount: 5 });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('you also have a category called that');
+      expect(result.content[0].text).toContain(clash);
     }, 60_000);
   });
 });

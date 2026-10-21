@@ -31,6 +31,10 @@ import { syncNow } from '../../utils/sync-clock.js';
  * Reaching an internal handler is not new here: `repair_sync` (#41) does it
  * through the same `getInternal()`.
  *
+ * The one direction that does not use it is money coming **out** of the pool
+ * of unbudgeted money, which it writes a junk row for. That is at the call
+ * site, with the measurement.
+ *
  * ## Why every check below exists
  *
  * The handler validates nothing. Measured against the engine, one case at a
@@ -86,7 +90,6 @@ interface Snapshot {
   isIncome: boolean;
 }
 
-/** A category's figures for the month, plus whether its group is income. */
 /**
  * What the pool of unbudgeted money is called in a request (#114).
  *
@@ -100,7 +103,7 @@ interface Snapshot {
  */
 const POOL = 'to-budget';
 const POOL_LABEL = 'To Budget';
-const POOL_SPELLINGS = new Set(['to budget', 'to-budget', 'tobudget']);
+const POOL_SPELLINGS = new Set(['to budget', 'to-budget']);
 
 function asksForPool(input: string): boolean {
   return POOL_SPELLINGS.has(input.trim().toLowerCase());
@@ -116,8 +119,13 @@ function asksForPool(input: string): boolean {
 async function resolveEndpoint(input: string): Promise<string> {
   if (!asksForPool(input)) return resolveCategoryId(input);
 
+  // A category clashes when **its own name** is a spelling of the pool, not
+  // when it happens to be spelled the way this call was. Comparing against
+  // the input let every cross-spelling through: a category called
+  // "To Budget" with `to-budget` typed, or one called "to budget" with
+  // "To Budget" typed, went to the pool in silence.
   const clash = (await api.getCategories()).filter(
-    (c) => 'group_id' in c && c.name.trim().toLowerCase() === input.trim().toLowerCase(),
+    (c) => 'group_id' in c && asksForPool(c.name),
   );
   if (clash.length > 0) {
     const named = clash.map((c) => `${c.name} (${c.id})`).join('; ');
@@ -147,6 +155,7 @@ function poolSnapshot(budget: BudgetMonth): Snapshot {
   };
 }
 
+/** A category's figures for the month, plus whether its group is income. */
 function snapshot(budget: BudgetMonth, id: string): Snapshot | undefined {
   for (const group of budget.categoryGroups as BudgetMonthGroup[]) {
     const found = (group.categories ?? []).find((c) => c.id === id);
@@ -265,54 +274,74 @@ export function registerTransferBetweenCategories(server: McpServer): void {
           }
         }
 
-        // The budget's own currency, read rather than left to a fallback.
-        //
-        // `getCurrency(code)` is `currencies.find((c) => c.code === code) ||
-        // currencies[0]`, and `currencies[0]` is `{code: "", name: "None",
-        // decimalPlaces: 2}`. That decimal count is the **divisor** the note is
-        // formatted with, so on a zero-decimal currency the figure came out
-        // wrong by a factor of a hundred: measured, 10,000 cents moved in a JPY
-        // budget wrote `100.00` into the month's note instead of `10,000`
-        // (#115).
-        //
-        // Three of the engine's currencies have no decimal places — IRR, JPY,
-        // KRW — so nobody on DOP could hit it, which is why it went unnoticed.
-        //
-        // The engine does not read the preference itself: measured, with
-        // `defaultCurrencyCode: "JPY"` saved and nothing passed, the note still
-        // said `100.00`. The preference comes from the **synced** store,
-        // `preferences/get`; an earlier version of this comment said the
-        // opposite, from a measurement taken after writing to the metadata
-        // store instead of the one the app writes to. `budgetCurrencyCode`
-        // reads both, synced first, and says why.
-        //
-        // What this does not fix is the trailing `.00`. `integerToCurrency`
-        // takes the decimal count for the divisor only; how many decimals are
-        // shown comes from the budget's number format, which is a different
-        // setting and not this tool's to decide.
-        // `undefined` when the budget has no currency set, which is what a
-        // fresh one looks like. Passed either way: the engine's `getCurrency`
-        // treats an absent key and an undefined value identically, both
-        // falling back to its own default, so a conditional spread here would
-        // be a branch with nothing behind it. Mutating one into the other
-        // changed no test, which is how that was found.
-        const payload = {
-          month,
-          amount: cents,
-          from: fromId,
-          to: toId,
-          currencyCode: await budgetCurrencyCode(),
-        };
-        try {
-          await getInternal().send('budget/transfer-category', payload as never);
-        } catch (error) {
-          // An internal handler behind a caret range can go away without anyone
-          // editing this repository. Failing loudly is the right outcome;
-          // failing as `handler is not a function` is not one anyone can act on.
-          throw new Error(
-            `Actual's budget/transfer-category handler did not run, so nothing ` +
-              `was moved: ${describeError(error)}`,
-          );
+        if (fromId === POOL) {
+          // Taking money out of the pool does not go through the handler.
+          //
+          // `transferCategory` guards the destination (`if (to !== 'to-budget')`)
+          // but not the source: given `from: 'to-budget'` it calls `setBudget`
+          // with that literal as the category id. Measured: it writes a row
+          // `202609-to-budget` into `zero_budgets`, category `to-budget`,
+          // which is not a category anyone has, and the CRDT carries it to
+          // every other client. Nothing reads it, which is why it took reading
+          // the table to see it, and it is still junk this server would be
+          // putting in someone's budget file for good.
+          //
+          // There is nothing to compose here anyway. The pool is not stored:
+          // it is what the month has left after what is assigned, so moving
+          // money out of it is one figure changing, and one write is already
+          // all-or-nothing. What is lost is the line the handler appends to
+          // the month's note, which is the price of not writing the row.
+          await api.setBudgetAmount(month, toId, beforeTo.budgeted + cents);
+        } else {
+          // The budget's own currency, read rather than left to a fallback.
+          //
+          // `getCurrency(code)` is `currencies.find((c) => c.code === code) ||
+          // currencies[0]`, and `currencies[0]` is `{code: "", name: "None",
+          // decimalPlaces: 2}`. That decimal count is the **divisor** the note is
+          // formatted with, so on a zero-decimal currency the figure came out
+          // wrong by a factor of a hundred: measured, 10,000 cents moved in a JPY
+          // budget wrote `100.00` into the month's note instead of `10,000`
+          // (#115).
+          //
+          // Three of the engine's currencies have no decimal places — IRR, JPY,
+          // KRW — so nobody on DOP could hit it, which is why it went unnoticed.
+          //
+          // The engine does not read the preference itself: measured, with
+          // `defaultCurrencyCode: "JPY"` saved and nothing passed, the note still
+          // said `100.00`. The preference comes from the **synced** store,
+          // `preferences/get`; an earlier version of this comment said the
+          // opposite, from a measurement taken after writing to the metadata
+          // store instead of the one the app writes to. `budgetCurrencyCode`
+          // reads both, synced first, and says why.
+          //
+          // What this does not fix is the trailing `.00`. `integerToCurrency`
+          // takes the decimal count for the divisor only; how many decimals are
+          // shown comes from the budget's number format, which is a different
+          // setting and not this tool's to decide.
+          // `undefined` when the budget has no currency set, which is what a
+          // fresh one looks like. Passed either way: the engine's `getCurrency`
+          // treats an absent key and an undefined value identically, both
+          // falling back to its own default, so a conditional spread here would
+          // be a branch with nothing behind it. Mutating one into the other
+          // changed no test, which is how that was found.
+          const payload = {
+            month,
+            amount: cents,
+            from: fromId,
+            to: toId,
+            currencyCode: await budgetCurrencyCode(),
+          };
+          try {
+            await getInternal().send('budget/transfer-category', payload as never);
+          } catch (error) {
+            // An internal handler behind a caret range can go away without anyone
+            // editing this repository. Failing loudly is the right outcome;
+            // failing as `handler is not a function` is not one anyone can act on.
+            throw new Error(
+              `Actual's budget/transfer-category handler did not run, so nothing ` +
+                `was moved: ${describeError(error)}`,
+            );
+          }
         }
         await syncNow();
 
@@ -404,10 +433,21 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         }
 
         if (month < resolveMonth()) {
+          // Measured in both shapes. Between two categories, each carries the
+          // change forward. With the pool at one end there is only one
+          // category, and the pool moves too: taking 30.00 out of it in the
+          // previous month left `toBudget` 30.00 lower in that month, in this
+          // one and in the next. Saying "both categories" there named a
+          // second category that is not in the move, and said nothing about
+          // the figure that actually changed in every later month.
+          const category = fromId === POOL ? beforeTo.name : beforeFrom.name;
           lines.push(
             '',
-            `${month} is a past month, so this also moves what both categories carry into`,
-            'every month after it by the same amount.',
+            withPool
+              ? `${month} is a past month, so this also moves what ${category} carries into ` +
+                `every month after it, and ${POOL_LABEL} in those months, by the same amount.`
+              : `${month} is a past month, so this also moves what both categories carry into ` +
+                'every month after it by the same amount.',
           );
         }
 
