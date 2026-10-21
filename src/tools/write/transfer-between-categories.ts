@@ -87,6 +87,66 @@ interface Snapshot {
 }
 
 /** A category's figures for the month, plus whether its group is income. */
+/**
+ * What the pool of unbudgeted money is called in a request (#114).
+ *
+ * Actual's own handler takes the literal `to-budget` at either end, and the
+ * app calls it "To Budget". Both spellings are taken, and the one with a
+ * space is what a person would type.
+ *
+ * A reserved word can collide with a real category: a budget with a category
+ * called "To Budget" is not far-fetched. The collision is not resolved by
+ * guessing, it is refused, and the refusal says which id to pass for which.
+ */
+const POOL = 'to-budget';
+const POOL_LABEL = 'To Budget';
+const POOL_SPELLINGS = new Set(['to budget', 'to-budget', 'tobudget']);
+
+function asksForPool(input: string): boolean {
+  return POOL_SPELLINGS.has(input.trim().toLowerCase());
+}
+
+/**
+ * The pool, a category, or a refusal when the name is both.
+ *
+ * The real categories are read first on purpose: a name this server treats
+ * as reserved must never take precedence over something the person actually
+ * has.
+ */
+async function resolveEndpoint(input: string): Promise<string> {
+  if (!asksForPool(input)) return resolveCategoryId(input);
+
+  const clash = (await api.getCategories()).filter(
+    (c) => 'group_id' in c && c.name.trim().toLowerCase() === input.trim().toLowerCase(),
+  );
+  if (clash.length > 0) {
+    const named = clash.map((c) => `${c.name} (${c.id})`).join('; ');
+    throw new Error(
+      `"${input}" is how this server names the pool of money that is not budgeted yet, ` +
+        `and you also have a category called that: ${named}. Pass the category's id to ` +
+        `mean the category. Nothing was moved.`,
+    );
+  }
+  return POOL;
+}
+
+/**
+ * The pool as a snapshot, so the rest of this reads one shape.
+ *
+ * `toBudget` is the month's own figure, what the app shows at the top as the
+ * money still to assign. It can be negative, which is the month being
+ * over-assigned, and that is a state the budget is allowed to be in: this
+ * tool reports it rather than refusing it.
+ */
+function poolSnapshot(budget: BudgetMonth): Snapshot {
+  return {
+    name: POOL_LABEL,
+    budgeted: budget.toBudget ?? 0,
+    balance: budget.toBudget ?? 0,
+    isIncome: false,
+  };
+}
+
 function snapshot(budget: BudgetMonth, id: string): Snapshot | undefined {
   for (const group of budget.categoryGroups as BudgetMonthGroup[]) {
     const found = (group.categories ?? []).find((c) => c.id === id);
@@ -116,10 +176,20 @@ function snapshot(budget: BudgetMonth, id: string): Snapshot | undefined {
 export function registerTransferBetweenCategories(server: McpServer): void {
   server.tool(
     'transfer_between_categories',
-    'Move budgeted money from one category to another for a month. Creates no transaction.',
+    'Move budgeted money between categories, or between a category and the money that is not budgeted yet, for a month. Creates no transaction.',
     {
-      from: z.string().describe('Category to take the money from (name or ID)'),
-      to: z.string().describe('Category to give the money to (name or ID)'),
+      from: z
+        .string()
+        .describe(
+          'Category to take the money from (name or ID), or "To Budget" for money ' +
+            'that is not budgeted yet',
+        ),
+      to: z
+        .string()
+        .describe(
+          'Category to give the money to (name or ID), or "To Budget" to return it ' +
+            'to the money that is not budgeted yet',
+        ),
       amount: z
         .number()
         .describe('Amount to move (human-readable, e.g., 114.06). Must be positive.'),
@@ -158,22 +228,27 @@ export function registerTransferBetweenCategories(server: McpServer): void {
           throw new Error(`${amount} rounds to zero cents, so there is nothing to move.`);
         }
 
-        const fromId = await resolveCategoryId(from);
-        const toId = await resolveCategoryId(to);
+        const fromId = await resolveEndpoint(from);
+        const toId = await resolveEndpoint(to);
         if (fromId === toId) {
           // Measured: a self-transfer of 10.00 raised the category from 200.00
           // to 210.00, because the handler reads the destination's figure
           // before its own subtraction has landed.
           throw new Error(
-            `"${from}" and "${to}" are the same category. Moving a category to ` +
-              `itself does not leave it unchanged, it adds the amount to it, so ` +
-              `nothing was done.`,
+            fromId === POOL
+              ? `Both ends are ${POOL_LABEL}, so there is nothing to move. Nothing was done.`
+              : `"${from}" and "${to}" are the same category. Moving a category to ` +
+                `itself does not leave it unchanged, it adds the amount to it, so ` +
+                `nothing was done.`,
           );
         }
 
         const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-        const beforeFrom = snapshot(before, fromId);
-        const beforeTo = snapshot(before, toId);
+        // The pool is not a category and has no row of its own: what stands
+        // for it is the month's own `toBudget`, which is the figure the app
+        // shows at the top.
+        const beforeFrom = fromId === POOL ? poolSnapshot(before) : snapshot(before, fromId);
+        const beforeTo = toId === POOL ? poolSnapshot(before) : snapshot(before, toId);
         if (!beforeFrom) throw new Error(`Category "${from}" has no budget row in ${month}.`);
         if (!beforeTo) throw new Error(`Category "${to}" has no budget row in ${month}.`);
 
@@ -242,12 +317,19 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         await syncNow();
 
         const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-        const afterFrom = snapshot(after, fromId);
-        const afterTo = snapshot(after, toId);
+        const afterFrom = fromId === POOL ? poolSnapshot(after) : snapshot(after, fromId);
+        const afterTo = toId === POOL ? poolSnapshot(after) : snapshot(after, toId);
 
         // The handler reports success whatever it did, so the figures are read
         // back and checked rather than assumed. Saying money moved when it did
         // not is the failure that costs the most to discover later.
+        // The same arithmetic on both ends, pool or not. Measured: a move of
+        // 25.00 to the pool took the category from 125.00 to 100.00 and the
+        // month's `toBudget` from 875.00 to 900.00, and a move of 30.00 out
+        // of it did the mirror image. So the figure standing for the pool
+        // rises and falls exactly as a category's budgeted figure does, and
+        // writing a special case for it would be writing two branches that
+        // compute the same thing.
         const moved =
           afterFrom !== undefined &&
           afterTo !== undefined &&
@@ -278,24 +360,46 @@ export function registerTransferBetweenCategories(server: McpServer): void {
           };
         }
 
+        const withPool = fromId === POOL || toId === POOL;
+        // For a category, budgeted and available are two different figures and
+        // both are worth seeing. For the pool they are the same number, so
+        // listing it twice would be padding the reply with a repeat.
+        const available: string[] = [];
+        if (fromId !== POOL) available.push(row(beforeFrom.name, beforeFrom.balance, afterFrom.balance));
+        if (toId !== POOL) available.push(row(beforeTo.name, beforeTo.balance, afterTo.balance));
+
         const lines = [
           `Moved ${formatMoney(cents)} from ${beforeFrom.name} to ${beforeTo.name} in ${month}.`,
           '',
-          'Budgeted:',
+          withPool ? 'Budgeted, and To Budget for the pool:' : 'Budgeted:',
           row(beforeFrom.name, beforeFrom.budgeted, afterFrom.budgeted),
           row(beforeTo.name, beforeTo.budgeted, afterTo.budgeted),
           '',
           'Available:',
-          row(beforeFrom.name, beforeFrom.balance, afterFrom.balance),
-          row(beforeTo.name, beforeTo.balance, afterTo.balance),
+          ...available,
           '',
-          'No transaction was created, and the month total is unchanged.',
+          withPool
+            ? 'No transaction was created. What changed is how much of this month is ' +
+              'assigned, not how much money there is.'
+            : 'No transaction was created, and the month total is unchanged.',
         ];
 
-        if (afterFrom.balance < 0) {
+        if (fromId !== POOL && afterFrom.balance < 0) {
           lines.push(
             '',
             `${beforeFrom.name} is now overspent by ${formatMoney(-afterFrom.balance)}.`,
+          );
+        }
+
+        // A negative pool is the month assigning more than it has. The budget
+        // is allowed to be in that state and the engine does not refuse it,
+        // so this says it rather than standing in the way.
+        if (toId === POOL ? afterTo.budgeted < 0 : fromId === POOL && afterFrom.budgeted < 0) {
+          lines.push(
+            '',
+            `${POOL_LABEL} is now ${formatMoney(
+              -(toId === POOL ? afterTo.budgeted : afterFrom.budgeted),
+            )} over: this month assigns more than it has.`,
           );
         }
 

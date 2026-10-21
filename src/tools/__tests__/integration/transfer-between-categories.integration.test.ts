@@ -370,4 +370,109 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
     expect(after.cats[0].balance).toBe(-5000);
     expect(after.cats[1].balance).toBe(15000);
   }, 60_000);
+
+  /**
+   * Money to and from the pool that is not budgeted yet (#114).
+   *
+   * The engine takes the literal `to-budget` at either end of the same
+   * handler. The other way out of the pool, `budget/transfer-available`, is
+   * not used here: measured, it clamps silently, so asking for more than
+   * there is moves what there is and says nothing, and a negative amount
+   * does nothing and says nothing.
+   */
+  describe('the pool', () => {
+    let groceries = '';
+    let collision = '';
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+        groceries = await api.createCategory({ name: 'Groceries', group_id: g } as never);
+        const acct = await api.createAccount({ name: 'Checking', type: 'checking' } as never, 0);
+        await api.addTransactions(acct, [{ date: `${thisMonth}-01`, amount: 100000 }] as never);
+      }, 'xfer-pool');
+      await api.setBudgetAmount(thisMonth, groceries, 12500);
+    }, 60_000);
+
+    const pool = async (month: string) =>
+      ((await api.getBudgetMonth(month)) as unknown as BudgetMonth).toBudget;
+
+    it('returns money to the pool', async () => {
+      const before = await figures(thisMonth, [groceries]);
+      const poolBefore = await pool(thisMonth);
+
+      const result = await handlerFor()({ from: 'Groceries', to: 'To Budget', amount: 25 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const after = await figures(thisMonth, [groceries]);
+      expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted - 2500);
+      expect(await pool(thisMonth), 'the pool rises by the same amount').toBe(poolBefore + 2500);
+      expect(result.content[0].text).toContain('To Budget');
+    }, 60_000);
+
+    it('takes money out of the pool, the exact amount asked for', async () => {
+      const before = await figures(thisMonth, [groceries]);
+      const poolBefore = await pool(thisMonth);
+
+      const result = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: 30 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const after = await figures(thisMonth, [groceries]);
+      expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted + 3000);
+      expect(await pool(thisMonth)).toBe(poolBefore - 3000);
+    }, 60_000);
+
+    it('moves more than the pool holds, and says the month is over', async () => {
+      // The engine allows a month to assign more than it has, and so does
+      // this: refusing would be inventing a rule Actual does not have. What
+      // it must not do is move a different figure quietly, which is what
+      // `transfer-available` would have done.
+      const poolBefore = await pool(thisMonth);
+      const asking = poolBefore / 100 + 500;
+
+      const result = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: asking });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(await pool(thisMonth)).toBe(poolBefore - Math.round(asking * 100));
+      expect(result.content[0].text).toContain('assigns more than it has');
+    }, 60_000);
+
+    it.each(['to budget', 'TO BUDGET', 'to-budget'])('answers to %s', async (spelling) => {
+      const poolBefore = await pool(thisMonth);
+
+      const result = await handlerFor()({ from: 'Groceries', to: spelling, amount: 1 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(await pool(thisMonth)).toBe(poolBefore + 100);
+    }, 60_000);
+
+    it('refuses both ends being the pool', async () => {
+      const result = await handlerFor()({ from: 'To Budget', to: 'To Budget', amount: 5 });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('nothing to move');
+    }, 60_000);
+
+    it('refuses the name when a real category is called that, and says which id', async () => {
+      // A budget with a category called "To Budget" is not far-fetched, and
+      // guessing which one was meant is the one thing this must not do.
+      await createFreshBudget(async () => {
+        const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+        collision = await api.createCategory({ name: 'To Budget', group_id: g } as never);
+        await api.createCategory({ name: 'Groceries', group_id: g } as never);
+      }, 'xfer-pool-clash');
+
+      const result = await handlerFor()({ from: 'Groceries', to: 'To Budget', amount: 5 });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('you also have a category called that');
+      expect(result.content[0].text).toContain(collision);
+    }, 60_000);
+
+    it('still moves to that category when its id is given', async () => {
+      const result = await handlerFor()({ from: 'Groceries', to: collision, amount: 5 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+    }, 60_000);
+  });
 });
