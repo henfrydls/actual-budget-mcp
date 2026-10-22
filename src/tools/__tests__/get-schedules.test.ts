@@ -3,13 +3,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const getSchedules = vi.fn();
 const getAccounts = vi.fn();
 const getPayees = vi.fn();
-const getTransactions = vi.fn();
+const runQuery = vi.fn();
+
+/** The filter the tool asked for, so the window can be checked. */
+let asked: unknown;
 
 vi.mock('@actual-app/api', () => ({
   getSchedules: (...a: unknown[]) => getSchedules(...a),
   getAccounts: (...a: unknown[]) => getAccounts(...a),
   getPayees: (...a: unknown[]) => getPayees(...a),
-  getTransactions: (...a: unknown[]) => getTransactions(...a),
+  runQuery: (...a: unknown[]) => runQuery(...a),
+  // Enough of the query builder to record what was asked for. That the shape
+  // is one the engine accepts is checked in the integration test.
+  q: () => ({
+    options: () => ({
+      filter: (filter: unknown) => {
+        asked = filter;
+        return { select: () => 'the query' };
+      },
+    }),
+  }),
   utils: {
     amountToInteger: (a: number, places = 2) => Math.round(a * Math.pow(10, places)),
     integerToAmount: (c: number, places = 2) => c / Math.pow(10, places),
@@ -59,7 +72,8 @@ describe('listing schedules (#150)', () => {
       { id: 'acc-2', name: 'Savings' },
     ]);
     getPayees.mockReset().mockResolvedValue([{ id: 'pay-1', name: 'Landlord' }]);
-    getTransactions.mockReset().mockResolvedValue([]);
+    runQuery.mockReset().mockResolvedValue({ data: [] });
+    asked = undefined;
   });
 
   afterEach(() => {
@@ -70,7 +84,7 @@ describe('listing schedules (#150)', () => {
     getSchedules.mockResolvedValue([]);
 
     expect(await text()).toContain('No schedules in this budget');
-    expect(getTransactions).not.toHaveBeenCalled();
+    expect(runQuery).not.toHaveBeenCalled();
     expect(getAccounts).not.toHaveBeenCalled();
   });
 
@@ -114,10 +128,10 @@ describe('listing schedules (#150)', () => {
     ]);
 
     const out = await text();
-    expect(out).toContain('-30.00 to -50.00');
+    expect(out).toContain('-50.00 to -30.00');
     expect(out).not.toContain('[object Object]');
     // No payee, so no empty half of the pair.
-    expect(out).toContain('-30.00 to -50.00  Checking\n');
+    expect(out).toContain('-50.00 to -30.00  Checking\n');
     expect(out).toContain('waits to be approved');
   });
 
@@ -193,7 +207,7 @@ describe('listing schedules (#150)', () => {
     expect(out.match(/due since/g)).toHaveLength(1);
   });
 
-  it('calls a finished schedule finished rather than overdue', async () => {
+  it('says a finished schedule is finished, in place of a day nothing happens on', async () => {
     getSchedules.mockResolvedValue([
       {
         id: 'sch-1',
@@ -207,11 +221,37 @@ describe('listing schedules (#150)', () => {
     ]);
 
     const out = await text();
-    expect(out).toContain('finished');
+    expect(out).toContain('Paid Off  finished  -10.00');
+    expect(out).not.toContain('next 2026-06-01');
     expect(out).not.toContain('due since');
   });
 
-  it('reports the latest transaction the schedule posted, and reads each account once', async () => {
+  it('files the finished ones last, however early their date', async () => {
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Done',
+        next_date: '2020-01-01',
+        completed: true,
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2020-01-01', frequency: 'monthly' },
+      },
+      {
+        id: 'sch-2',
+        name: 'Live',
+        next_date: '2026-07-01',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+
+    const out = await text();
+    expect(out.indexOf('Live')).toBeLessThan(out.indexOf('Done'));
+  });
+
+  it('reports the latest transaction the schedule posted', async () => {
     getSchedules.mockResolvedValue([
       {
         id: 'sch-1',
@@ -230,41 +270,99 @@ describe('listing schedules (#150)', () => {
         date: { start: '2026-01-01', frequency: 'monthly' },
       },
     ]);
-    getTransactions.mockResolvedValue([
-      { date: '2026-04-01', schedule: 'sch-1' },
-      { date: '2026-06-01', schedule: 'sch-1' },
-      { date: '2026-05-01', schedule: 'sch-1' },
-      { date: '2026-05-02', schedule: null },
-    ]);
+    runQuery.mockResolvedValue({
+      data: [
+        { date: '2026-04-01', schedule: 'sch-1' },
+        { date: '2026-06-01', schedule: 'sch-1' },
+        { date: '2026-05-01', schedule: 'sch-1' },
+        { date: '2026-05-02', schedule: null },
+      ],
+    });
 
     const out = await text();
     expect(out).toContain('last posted 2026-06-01');
     expect(out).toContain('nothing posted in the last 365 days');
-    expect(getTransactions).toHaveBeenCalledTimes(1);
-    expect(getTransactions).toHaveBeenCalledWith('acc-1', '2025-06-15', '2026-06-15');
   });
 
-  it('reads every account a schedule points at', async () => {
+  it('asks once, for every account, over a year back', async () => {
+    // Reading the accounts the schedules name was wrong twice over: a
+    // schedule does not have to name one, and one that does can still be
+    // paid from another.
+    getSchedules.mockResolvedValue([
+      { id: 'sch-1', name: 'A', next_date: '2026-07-01', account: null, amount: -1000 },
+      { id: 'sch-2', name: 'B', next_date: '2026-07-02', account: 'acc-2', amount: -1000 },
+    ]);
+    runQuery.mockResolvedValue({ data: [{ date: '2026-06-10', schedule: 'sch-1' }] });
+
+    const out = await text();
+    expect(runQuery).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(asked)).toContain('"$gte":"2025-06-15"');
+    expect(JSON.stringify(asked)).toContain('"$lte":"2026-06-15"');
+    expect(JSON.stringify(asked)).toContain('"schedule":{"$ne":null}');
+    // The schedule with no account of its own is the one that posted.
+    expect(out).toContain('last posted 2026-06-10');
+  });
+
+  it('marks a transfer rather than passing an account off as a payee', async () => {
+    getPayees.mockResolvedValue([
+      { id: 'pay-1', name: 'Landlord' },
+      { id: 'pay-2', name: 'Savings', transfer_acct: 'acc-2' },
+    ]);
     getSchedules.mockResolvedValue([
       {
         id: 'sch-1',
-        name: 'A',
+        name: 'Saving',
         next_date: '2026-07-01',
         account: 'acc-1',
+        payee: 'pay-2',
         amount: -1000,
-      },
-      {
-        id: 'sch-2',
-        name: 'B',
-        next_date: '2026-07-02',
-        account: 'acc-2',
-        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
       },
     ]);
 
-    await text();
-    expect(getTransactions).toHaveBeenCalledTimes(2);
-    expect(getTransactions.mock.calls.map((c) => c[0]).sort()).toEqual(['acc-1', 'acc-2']);
+    expect(await text()).toContain('Checking / transfer: Savings');
+  });
+
+  it('puts the two ends of a range in order, whichever was typed first', async () => {
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Water',
+        next_date: '2026-07-15',
+        account: 'acc-1',
+        amount: { num1: -3000, num2: -5000 },
+        amountOp: 'isbetween',
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+      {
+        id: 'sch-2',
+        name: 'Power',
+        next_date: '2026-07-16',
+        account: 'acc-1',
+        amount: { num1: 5000, num2: 1000 },
+        amountOp: 'isbetween',
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+
+    const out = await text();
+    expect(out).toContain('-50.00 to -30.00');
+    expect(out).toContain('10.00 to 50.00');
+  });
+
+  it('calls a schedule due today due, not late', async () => {
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Today',
+        next_date: '2026-06-15',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+
+    expect(await text()).not.toContain('due since');
   });
 
   it('prints a schedule with nothing filled in rather than failing on it', async () => {
@@ -274,7 +372,6 @@ describe('listing schedules (#150)', () => {
     expect(out).toContain('(unnamed)');
     expect(out).toContain('next (none)');
     expect(out).toContain('(no amount)');
-    expect(getTransactions).not.toHaveBeenCalled();
   });
 
   it('prints a recurrence it cannot read as the config it is', async () => {
