@@ -286,6 +286,42 @@ describe('what an ambiguous name answers with', () => {
     );
   });
 
+  it('names the group in a batch, where the categories come as a list', async () => {
+    // `create_transactions` resolves against a list it already has rather
+    // than asking per row, so it takes a different path to the same
+    // sentence. It now passes the groups too, which is what tells two
+    // categories of the same name apart to whoever reads the reply.
+    const { resolveCategoryIn } = await import('../resolvers.js');
+
+    expect(() =>
+      resolveCategoryIn(
+        [
+          { id: 'c-1', name: 'Groceries', group_id: 'g-1', hidden: false },
+          { id: 'c-2', name: 'Groceries', group_id: 'g-2', hidden: false },
+        ],
+        'Groceries',
+        [
+          { id: 'g-1', name: 'Everyday' },
+          { id: 'g-2', name: 'Archive' },
+        ],
+      ),
+    ).toThrow(/Groceries in Everyday \(c-1\); Groceries in Archive \(c-2\)\. Pass the id/);
+  });
+
+  it('still names the ids without the groups, which is what it had before', async () => {
+    const { resolveCategoryIn } = await import('../resolvers.js');
+
+    expect(() =>
+      resolveCategoryIn(
+        [
+          { id: 'c-1', name: 'Groceries', group_id: 'g-1', hidden: false },
+          { id: 'c-2', name: 'Groceries', group_id: 'g-2', hidden: false },
+        ],
+        'Groceries',
+      ),
+    ).toThrow(/Matches: Groceries \(c-1\); Groceries \(c-2\)\. Pass the id/);
+  });
+
   it('names the categories and their ids, with the group they are in', async () => {
     // This one says more, and has since #218: which group each is in, and
     // whether it is hidden. What it shares with the others is the ids.

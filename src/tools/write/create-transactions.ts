@@ -208,6 +208,8 @@ export async function createTransactions(input: {
     // is the difference between 2 reads and 44.
     const accounts = await api.getAccounts();
     const categories = await api.getCategories();
+    // For the ambiguity message, which names the group each match is in.
+    const categoryGroups = await api.getCategoryGroups();
 
     const problems: Problem[] = [];
     const resolved: ResolvedRow[] = [];
@@ -244,7 +246,7 @@ export async function createTransactions(input: {
         });
 
         const categoryId = row.category
-          ? resolveCategoryIn(categories, row.category)
+          ? resolveCategoryIn(categories, row.category, categoryGroups)
           : undefined;
 
         resolved.push({

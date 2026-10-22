@@ -39,6 +39,12 @@ function registeredToolNames(): string[] {
  * one of the two lists.
  */
 const NOT_IN_CHAT = new Map([
+  // #138's two. Henfry chose set A, which is the everyday gestures; holding
+  // money for next month and carrying a category's overspending are budget
+  // mechanics a person sets up rather than things a conversation about the
+  // month reaches for.
+  ['hold_for_next_month', 'budget mechanics, set up rather than discussed'],
+  ['set_category_carryover', 'budget mechanics, set up rather than discussed'],
   ['budget_vs_actual', 'analysis; the figures it compares are in get_budget_month'],
   ['spending_projection', 'analysis'],
   ['category_trends', 'analysis'],
@@ -72,7 +78,7 @@ describe('the chat toolset (#222)', () => {
   });
 
   it('offers every tool when nothing is set', () => {
-    expect(registeredToolNames().length).toBe(41);
+    expect(registeredToolNames().length).toBe(43);
     expect(chosenToolset()).toBe('full');
   });
 
@@ -120,7 +126,7 @@ describe('the chat toolset (#222)', () => {
   it('offers everything when the setting is not a set, and names it once', () => {
     process.env.ACTUAL_TOOLSET = 'everything please';
 
-    expect(registeredToolNames().length).toBe(41);
+    expect(registeredToolNames().length).toBe(43);
     // Said by the entry point and nowhere else: asking at registration time
     // as well printed it twice, because both places ask the same question.
     expect(unrecognisedToolset()).toBe('everything please');

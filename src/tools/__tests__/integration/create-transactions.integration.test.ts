@@ -563,6 +563,27 @@ describe.skipIf(skip)('create_transactions', () => {
     expect(lines.join('\n').toLowerCase()).toContain('ambiguous');
   }, 60_000);
 
+  it('names the group when two categories are called the same thing', async () => {
+    // The batch resolves against a list it already has, which is a
+    // different path to the same sentence, and the only thing telling two
+    // categories of one name apart is the group they are in (#222).
+    await budget('batch-ambiguous-category', async () => {
+      const other = await api.createCategoryGroup({ name: 'Archive' } as never);
+      await api.createCategory({ name: 'Comida', group_id: other } as never);
+    });
+    const before = await count(checking);
+
+    const lines = await createTransactions({
+      transactions: [{ account: 'Checking', amount: -10, category: 'Comida', date: '2026-09-01' }],
+    });
+
+    const text = lines.join('\n');
+    expect(await count(checking), 'nothing written').toBe(before);
+    expect(text).toContain('Comida in Gastos');
+    expect(text).toContain('Comida in Archive');
+    expect(text).toContain('Pass the id of the one you mean');
+  }, 60_000);
+
   it('reports every unusable row at once, not just the first', async () => {
     await budget('batch-many-problems');
 

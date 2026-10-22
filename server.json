@@ -64,7 +64,7 @@
         },
         {
           "name": "ACTUAL_TOOLSET",
-          "description": "Set to chat to offer the 17 everyday tools instead of all 41, which is 17.0 KiB of tool descriptions instead of 37.4 KiB on every connection. Defaults to full",
+          "description": "Set to chat to offer the 17 everyday tools instead of all 43, which is 17.0 KiB of tool descriptions instead of 39.2 KiB on every connection. Defaults to full",
           "isRequired": false
         },
         {
@@ -115,7 +115,7 @@
         },
         {
           "name": "ACTUAL_TOOLSET",
-          "description": "Set to chat to offer the 17 everyday tools instead of all 41, which is 17.0 KiB of tool descriptions instead of 37.4 KiB on every connection. Defaults to full",
+          "description": "Set to chat to offer the 17 everyday tools instead of all 43, which is 17.0 KiB of tool descriptions instead of 39.2 KiB on every connection. Defaults to full",
           "isRequired": false
         },
         {

@@ -4,9 +4,9 @@ import type { McpServerLike } from './read-sync.js';
 /**
  * Which tools a client is offered (#222).
  *
- * `tools/list` carries every tool on every connection: measured against a
- * real client, 41 tools and 37.0 KB, spent before the first question is
- * asked. Two things come out of that. The context is gone whatever the
+ * `tools/list` carries every tool on every connection: measured with
+ * `scripts/measure-toolset.mjs`, 43 tools and 39.2 KiB, spent before the
+ * first question is asked. Two things come out of that. The context is gone whatever the
  * conversation turns out to be about, and a model choosing between 41
  * descriptions picks the wrong one more often than one choosing between 17.
  *
@@ -23,7 +23,7 @@ export type Toolset = 'chat' | 'full';
 
 /**
  * The everyday set: reading, recording, categorising, and moving budgeted
- * money. 17 tools, 16.7 KB, measured the same way as the 37.0 KB above.
+ * money. 17 tools, 17.0 KiB, measured the same way as the figure above.
  *
  * What is out of it is set-up and repair: creating and deleting accounts,
  * categories, groups, payees and rules, `reconcile_currency_residual` and

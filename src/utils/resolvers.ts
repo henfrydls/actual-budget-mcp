@@ -23,7 +23,7 @@ function matchByName<T>(items: T[], nameOrId: string, getName: (item: T) => stri
  * a name is not enough. `resolveCategoryId` has said it this way since #218;
  * this is the same sentence for the rest.
  */
-function ambiguous(
+export function ambiguous(
   label: string,
   nameOrId: string,
   matches: Array<{ id: string; name: string }>,
@@ -67,6 +67,7 @@ export function resolveAccountIn(
 export function resolveCategoryIn(
   categories: Array<{ id: string; name: string; hidden?: boolean; group_id?: string }>,
   nameOrId: string,
+  groups: Array<{ id: string; name: string }> = [],
 ): string {
   const byId = categories.find((c) => c.id === nameOrId);
   if (byId) return byId.id;
@@ -79,7 +80,18 @@ export function resolveCategoryIn(
     throw new Error(`No category found matching "${nameOrId}". Available: ${names}`);
   }
   if (cats.length > 1) {
-    throw ambiguous('category', nameOrId, cats);
+    // With the groups in hand, say which group each one is in: two
+    // categories called the same thing in one budget are usually in
+    // different groups, and that is what tells them apart to a person
+    // reading the reply (#222).
+    throw ambiguous(
+      'category',
+      nameOrId,
+      cats.map((c) => {
+        const group = groups.find((g) => g.id === c.group_id)?.name;
+        return { id: c.id, name: group === undefined ? c.name : `${c.name} in ${group}` };
+      }),
+    );
   }
   return cats[0].id;
 }
