@@ -697,7 +697,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `get_transactions` | Transactions with filters | "Show me transactions from last week over 5000" |
 | `get_category_balance` | Category history across a window of months | "How did food look in the three months to June?" |
 | `get_budget_summary` | Executive budget overview | "Give me a budget summary for February" |
-| `get_categories` | All category groups and categories | "What categories do I have?" |
+| `get_categories` | All category groups and categories, with `include_hidden` for the hidden ones | "What categories do I have?" |
 | `get_payees` | All payees in the budget | "List all my payees" |
 | `reconcile_account` | Compare an account against a bank figure and explain the gap | "My checking statement says 12,500.00, what am I missing?" |
 | `get_rules` | All transaction rules | "Show me my rules" |
