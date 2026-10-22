@@ -690,14 +690,15 @@ Writes are enabled by default. Read-only is opt-in.
 ### Choosing a toolset
 
 Every connection is sent the whole tool list before anything is asked. Measured
-against a real client:
+with `scripts/measure-toolset.mjs`, which registers the real tools and asks a
+real client for `tools/list`:
 
 | `ACTUAL_TOOLSET` | Tools | `tools/list` |
 |---|---|---|
-| `full` (default) | 41 | 37.0 KB |
-| `chat` | 17 | 16.7 KB |
-| `chat` with `ACTUAL_READ_ONLY=1` | 7 | 5.1 KB |
-| `full` with `ACTUAL_READ_ONLY=1` | 16 | 12.2 KB |
+| `full` (default) | 41 | 37.4 KiB |
+| `chat` | 17 | 17.0 KiB |
+| `chat` with `ACTUAL_READ_ONLY=1` | 7 | 5.3 KiB |
+| `full` with `ACTUAL_READ_ONLY=1` | 16 | 12.0 KiB |
 
 `chat` is the everyday set: reading the budget, recording and categorising
 transactions, and moving budgeted money between categories. What it leaves out
@@ -709,6 +710,10 @@ It is worth setting for two reasons, and the second is the bigger one: the
 context is spent whatever the conversation turns out to be about, and a model
 choosing between 41 descriptions picks the wrong tool more often than one
 choosing between 17.
+
+The prompts go with the tools they call. Each one is a short script naming
+three or four tools, so a prompt whose tools are not offered is not offered
+either: with `chat`, `prompts/list` is empty.
 
 The two settings narrow together rather than fighting: read-only decides which
 tools exist, `ACTUAL_TOOLSET` decides which of those are offered.

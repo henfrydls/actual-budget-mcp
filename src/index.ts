@@ -9,8 +9,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerAllTools } from './tools/index.js';
 import { isReadOnly } from './utils/mode.js';
-import { SERVER_INSTRUCTIONS } from './utils/instructions.js';
-import { chosenToolset } from './utils/toolset.js';
+import { serverInstructions } from './utils/instructions.js';
+import { chosenToolset, unrecognisedToolset } from './utils/toolset.js';
 import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
@@ -111,7 +111,7 @@ const server = new McpServer(
   // What the protocol calls instructions: the conventions that hold across
   // the tools, said once at connection rather than inferred from forty
   // descriptions (#222).
-  { instructions: SERVER_INSTRUCTIONS },
+  { instructions: serverInstructions({ readOnly: isReadOnly() }) },
 );
 
 registerAllTools(server);
@@ -123,6 +123,14 @@ if (isReadOnly()) {
   console.error(
     '[actual-budget-mcp] read-only mode: write tools are hidden from discovery. ' +
       'Unset ACTUAL_READ_ONLY to enable them.',
+  );
+}
+
+const unrecognised = unrecognisedToolset();
+if (unrecognised !== undefined) {
+  console.error(
+    `[actual-budget-mcp] ACTUAL_TOOLSET is "${unrecognised}", which is not "chat" or ` +
+      '"full". Offering every tool.',
   );
 }
 

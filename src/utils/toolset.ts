@@ -63,17 +63,23 @@ export const CHAT_TOOLS: ReadonlySet<string> = new Set([
  * `ACTUAL_READ_ONLY` makes.
  */
 export function chosenToolset(): Toolset {
+  const value = readEnv('ACTUAL_TOOLSET')?.trim().toLowerCase();
+  return value === 'chat' ? 'chat' : 'full';
+}
+
+/**
+ * The value that was set and is not a set, for the one place that says so.
+ *
+ * Saying it where the set is resolved printed it twice, once on
+ * registration and once on the startup line, because both ask the same
+ * question. The answer is the same either way; who announces it is a
+ * separate decision, and the entry point is the one that announces things.
+ */
+export function unrecognisedToolset(): string | undefined {
   const raw = readEnv('ACTUAL_TOOLSET');
-  if (raw === undefined) return 'full';
+  if (raw === undefined) return undefined;
   const value = raw.trim().toLowerCase();
-  if (value === 'chat') return 'chat';
-  if (value === 'full') return 'full';
-  // stdout carries JSON-RPC, so this goes to stderr like every other notice.
-  console.error(
-    `[actual-budget-mcp] ACTUAL_TOOLSET is "${raw}", which is not "chat" or "full". ` +
-      'Offering every tool.',
-  );
-  return 'full';
+  return value === 'chat' || value === 'full' ? undefined : raw;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { SERVER_INSTRUCTIONS } from '../instructions.js';
+import { serverInstructions } from '../instructions.js';
 
 /**
  * What the server says about itself at connection (#222).
@@ -16,22 +16,39 @@ describe('the server instructions', () => {
     // is imported: it connects a transport and opens a budget.
     const entry = readFileSync('src/index.ts', 'utf8');
 
-    expect(entry).toContain('instructions: SERVER_INSTRUCTIONS');
+    expect(entry).toContain('instructions: serverInstructions(');
+    expect(entry).toContain('readOnly: isReadOnly()');
   });
 
   it('say the conventions a caller cannot infer from one description', () => {
-    expect(SERVER_INSTRUCTIONS).toContain('114.06');
-    expect(SERVER_INSTRUCTIONS).toContain('YYYY-MM');
-    expect(SERVER_INSTRUCTIONS).toContain('confirm: true');
-    expect(SERVER_INSTRUCTIONS).toContain('allow_duplicate');
-    expect(SERVER_INSTRUCTIONS).toMatch(/ambiguous name is[\s\S]*refused/);
-    expect(SERVER_INSTRUCTIONS).toContain('creates no transaction');
+    const instructions = serverInstructions();
+
+    expect(instructions).toContain('25.50');
+    expect(instructions).toContain('YYYY-MM');
+    expect(instructions).toContain('confirm: true');
+    expect(instructions).toContain('allow_duplicate');
+    expect(instructions).toMatch(/ambiguous name is[\s\S]*refused, with the ids/);
+    expect(instructions).toContain('creates no transaction');
+  });
+
+  it('leave out what read-only takes away', () => {
+    // Every write tool is hidden there, so a paragraph about what a delete
+    // previews and when a duplicate is refused describes tools the client
+    // cannot see.
+    const instructions = serverInstructions({ readOnly: true });
+
+    expect(instructions).toContain('running read-only');
+    expect(instructions).not.toMatch(/delete|duplicate|confirm: true|allow_duplicate/i);
+    // What survives is how anything is named and how a read behaves.
+    expect(instructions).toContain('YYYY-MM');
+    expect(instructions).toContain('ambiguous name');
+    expect(instructions).toContain("A read pulls the server's changes first");
   });
 
   it('stay short, because they are sent on every connection', () => {
     // The tool list this was written beside is 37.0 KB. A paragraph that
     // grows into a manual spends the saving back.
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(1200);
-    expect(SERVER_INSTRUCTIONS.split('\n').length).toBeLessThan(25);
+    expect(serverInstructions().length).toBeLessThan(1200);
+    expect(serverInstructions().split('\n').length).toBeLessThan(25);
   });
 });

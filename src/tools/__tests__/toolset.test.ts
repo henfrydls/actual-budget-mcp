@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 // As in read-only-mode.test.ts: importing the aggregator pulls in every tool
 // module, and each one imports the SDK bundle. Counting registrations does
@@ -17,7 +18,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import { registerAllTools } from '../index.js';
-import { CHAT_TOOLS, chosenToolset } from '../../utils/toolset.js';
+import { CHAT_TOOLS, chosenToolset, unrecognisedToolset } from '../../utils/toolset.js';
 
 function registeredToolNames(): string[] {
   const names: string[] = [];
@@ -116,19 +117,25 @@ describe('the chat toolset (#222)', () => {
     expect(names).not.toContain('reconcile_account');
   });
 
-  it('offers everything, and says so, when the setting is not a set', () => {
+  it('offers everything when the setting is not a set, and names it once', () => {
     process.env.ACTUAL_TOOLSET = 'everything please';
-    const said: string[] = [];
-    const original = console.error;
-    console.error = (...args: unknown[]) => said.push(args.join(' '));
-    try {
-      expect(registeredToolNames().length).toBe(41);
-    } finally {
-      console.error = original;
-    }
 
-    expect(said.join('\n')).toContain('ACTUAL_TOOLSET is "everything please"');
-    expect(said.join('\n')).toContain('Offering every tool');
+    expect(registeredToolNames().length).toBe(41);
+    // Said by the entry point and nowhere else: asking at registration time
+    // as well printed it twice, because both places ask the same question.
+    expect(unrecognisedToolset()).toBe('everything please');
+    const entry = readFileSync('src/index.ts', 'utf8');
+    expect(entry).toContain('unrecognisedToolset()');
+    expect(entry).toContain('which is not "chat" or ');
+  });
+
+  it('calls nothing unrecognised when the value is one of the two', () => {
+    process.env.ACTUAL_TOOLSET = ' CHAT ';
+    expect(unrecognisedToolset()).toBeUndefined();
+    process.env.ACTUAL_TOOLSET = 'full';
+    expect(unrecognisedToolset()).toBeUndefined();
+    delete process.env.ACTUAL_TOOLSET;
+    expect(unrecognisedToolset()).toBeUndefined();
   });
 
   it('reads the value the way the other settings are read', () => {
