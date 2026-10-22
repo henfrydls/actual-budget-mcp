@@ -63,6 +63,11 @@
           "isRequired": false
         },
         {
+          "name": "ACTUAL_TOOLSET",
+          "description": "Set to chat to offer the 17 everyday tools instead of all 41, which is 16.7 KB of tool descriptions instead of 37.0 KB on every connection. Defaults to full",
+          "isRequired": false
+        },
+        {
           "name": "ACTUAL_DATA_DIR",
           "description": "Directory for the local budget cache",
           "isRequired": false
@@ -106,6 +111,11 @@
         {
           "name": "ACTUAL_READ_ONLY",
           "description": "Set to 1 to hide every write tool from the model, exposing only reads and analysis",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_TOOLSET",
+          "description": "Set to chat to offer the 17 everyday tools instead of all 41, which is 16.7 KB of tool descriptions instead of 37.0 KB on every connection. Defaults to full",
           "isRequired": false
         },
         {

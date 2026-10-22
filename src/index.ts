@@ -9,6 +9,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerAllTools } from './tools/index.js';
 import { isReadOnly } from './utils/mode.js';
+import { SERVER_INSTRUCTIONS } from './utils/instructions.js';
+import { chosenToolset } from './utils/toolset.js';
 import { registerAllPrompts } from './prompts.js';
 import { registerAllResources } from './resources.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
@@ -101,10 +103,16 @@ if (process.argv.includes('--verify')) {
   }
 }
 
-const server = new McpServer({
-  name: 'actual-budget-mcp',
-  version: packageVersion,
-});
+const server = new McpServer(
+  {
+    name: 'actual-budget-mcp',
+    version: packageVersion,
+  },
+  // What the protocol calls instructions: the conventions that hold across
+  // the tools, said once at connection rather than inferred from forty
+  // descriptions (#222).
+  { instructions: SERVER_INSTRUCTIONS },
+);
 
 registerAllTools(server);
 registerAllPrompts(server);
@@ -115,6 +123,16 @@ if (isReadOnly()) {
   console.error(
     '[actual-budget-mcp] read-only mode: write tools are hidden from discovery. ' +
       'Unset ACTUAL_READ_ONLY to enable them.',
+  );
+}
+
+if (chosenToolset() === 'chat') {
+  // Said for the same reason the line above is: a tool that is missing
+  // because of a setting looks exactly like a tool that is missing because
+  // something is broken, and only one of those is worth investigating.
+  console.error(
+    '[actual-budget-mcp] chat toolset: the everyday tools are offered and the ones for ' +
+      'setting up and repairing a budget are not. Set ACTUAL_TOOLSET=full for all of them.',
   );
 }
 

@@ -32,6 +32,8 @@ const FROZEN_TITLES: Record<string, string> = {
   // New in 0.10.1. Nobody has answered it yet, so freezing it now costs
   // nothing and means the next rewording is a deliberate act like the rest.
   http_timeout_ms: 'Server reply timeout (ms)',
+  // New in 0.11.0 (#222), and frozen on arrival for the same reason.
+  toolset: 'Toolset',
 };
 
 describe('the configuration titles a user has already answered', () => {
