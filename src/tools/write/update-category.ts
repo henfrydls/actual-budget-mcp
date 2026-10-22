@@ -160,8 +160,8 @@ export function registerUpdateCategory(server: McpServer): void {
           hidden === false && Boolean(group?.hidden)
             ? [
                 '',
-                `${group?.name} is hidden, so ${after.name} is still not in the budget table. ` +
-                  `Unhide the group with update_category_group to bring it back.`,
+                `The group ${group?.name} is hidden, so ${after.name} is still not in the ` +
+                  `budget table. Unhide the group with update_category_group to bring it back.`,
               ]
             : [];
 

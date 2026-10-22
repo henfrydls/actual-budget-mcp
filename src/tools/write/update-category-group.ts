@@ -31,18 +31,13 @@ export function registerUpdateCategoryGroup(server: McpServer): void {
         const oldName = grp?.name || group;
 
         const updates: Record<string, unknown> = {};
-        const changes: string[] = [];
+        const was = grp as { name?: string; hidden?: boolean } | undefined;
 
-        if (wanted !== undefined) {
-          updates.name = wanted;
-          changes.push(`Name: ${oldName} → ${wanted}`);
-        }
-        if (hidden !== undefined) {
-          updates.hidden = hidden;
-          changes.push(`Hidden: ${hidden}`);
-        }
+        if (wanted !== undefined) updates.name = wanted;
+        if (hidden !== undefined) updates.hidden = hidden;
+        const changes = Object.keys(updates).length;
 
-        if (changes.length === 0) {
+        if (changes === 0) {
           return { content: [{ type: 'text', text: 'No fields to update.' }], isError: true };
         }
 
@@ -71,11 +66,57 @@ export function registerUpdateCategoryGroup(server: McpServer): void {
         await api.updateCategoryGroup(groupId, updates as any);
         await syncNow();
 
+        // Read back and named, the way `update_category` answers since #237
+        // (#266). "Category group updated: Hidden: true" did not say which
+        // group, and by id that was the only place to find out.
+        const after = ((await api.getCategoryGroups()) as unknown as Array<{
+          id: string;
+          name: string;
+          hidden?: boolean;
+        }>).find((g) => g.id === groupId);
+        if (!after) {
+          throw new Error(
+            `"${group}" was updated but is no longer in the budget, which should not happen. ` +
+              `Check it in Actual before doing anything else.`,
+          );
+        }
+
+        const rows: string[] = [];
+        let moved = false;
+        const row = (label: string, text: string) => rows.push(`  ${label.padEnd(6)} ${text}`);
+
+        if (name !== undefined) {
+          if (was?.name !== after.name) {
+            moved = true;
+            row('Name', `${was?.name ?? '(unknown)'} -> ${after.name}`);
+          } else {
+            row('Name', `${after.name} (already that)`);
+          }
+        }
+        if (hidden !== undefined) {
+          const before = Boolean(was?.hidden);
+          const now = Boolean(after.hidden);
+          if (before !== now) {
+            moved = true;
+            row('Hidden', `${before} -> ${now}`);
+          } else {
+            row('Hidden', `${now} (already that)`);
+          }
+        }
+
         return {
-          content: [{
-            type: 'text',
-            text: `Category group updated:\n${changes.map((c) => `  ${c}`).join('\n')}`,
-          }],
+          content: [
+            {
+              type: 'text',
+              text: [
+                moved
+                  ? `Updated the group ${after.name}.`
+                  : `The group ${after.name} already had those values, so nothing changed.`,
+                '',
+                ...rows,
+              ].join('\n'),
+            },
+          ],
         };
       } catch (error) {
         const message = describeError(error);

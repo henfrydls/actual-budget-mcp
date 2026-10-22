@@ -8,9 +8,15 @@ import { requireConfirmation } from '../../utils/confirm.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
+/** Throw from inside an expression, where a statement will not fit. */
+function raise(message: string): never {
+  throw new Error(message);
+}
+
 export interface DeleteCategoryGroupInput {
   group: string;
-  transfer_to: string;
+  /** Where the transactions go. Not needed by a group with no categories. */
+  transfer_to?: string;
   confirm?: boolean;
   confirm_name?: string;
 }
@@ -27,26 +33,45 @@ export async function deleteCategoryGroupGuarded(
 ): Promise<{ deleted: boolean; lines: string[] }> {
   await ensureConnection();
   const groupId = await resolveCategoryGroupId(input.group);
-  const transferId = await resolveCategoryId(input.transfer_to);
 
   const groups = await api.getCategoryGroups();
   const grp = groups.find((g) => g.id === groupId);
   const groupName = grp?.name || input.group;
 
   const categories = await api.getCategories();
-  const transferCat = categories.find((c) => c.id === transferId);
   const inGroup = categories.filter((c) => 'group_id' in c && c.group_id === groupId);
+
+  // An empty group has no transactions to move, so it needs nowhere to move
+  // them to (#266). Asking for one anyway made the caller name a category
+  // that had nothing to do with the deletion, and the reply then said their
+  // transactions had been transferred there, which was not true of anything.
+  const transferId =
+    inGroup.length === 0
+      ? undefined
+      : await resolveCategoryId(
+          input.transfer_to ??
+            raise(
+              `"${groupName}" has ${inGroup.length} ${
+                inGroup.length === 1 ? 'category' : 'categories'
+              } in it, so deleting it needs transfer_to: the category their transactions move ` +
+                `to. Nothing was deleted.`,
+            ),
+        );
+  const transferCat = categories.find((c) => c.id === transferId);
 
   const confirmation = requireConfirmation({
     subject: `Category group: ${groupName}`,
-    losses: [
-      `  Categories destroyed: ${inGroup.length}`,
-      ...inGroup.map((c) => `    - ${c.name}`),
-      `  Their transactions move to: ${transferCat?.name || input.transfer_to}`,
-      '',
-      'Every category in the group is deleted along with its budget and',
-      'rollover history, which Actual cannot restore.',
-    ],
+    losses:
+      inGroup.length === 0
+        ? ['  The group is empty: no categories, no transactions to move.']
+        : [
+            `  Categories destroyed: ${inGroup.length}`,
+            ...inGroup.map((c) => `    - ${c.name}`),
+            `  Their transactions move to: ${transferCat?.name || input.transfer_to}`,
+            '',
+            'Every category in the group is deleted along with its budget and',
+            'rollover history, which Actual cannot restore.',
+          ],
     confirmName: groupName,
     input,
   });
@@ -62,7 +87,9 @@ export async function deleteCategoryGroupGuarded(
     deleted: true,
     lines: [
       `Category group "${groupName}" deleted.`,
-      `Transactions transferred to: ${transferCat?.name || input.transfer_to}`,
+      ...(transferCat === undefined
+        ? ['It was empty, so nothing moved.']
+        : [`Transactions transferred to: ${transferCat.name}`]),
     ],
   };
 }
@@ -72,11 +99,17 @@ export function registerDeleteCategoryGroup(server: McpServer): void {
     'delete_category_group',
     'Delete a category group and every category in it. Destructive and irreversible: the ' +
       'first call only previews, and deleting requires confirm: true plus confirm_name set ' +
-      "to the group's exact name. You must specify a category to transfer orphaned " +
-      "categories' transactions to.",
+      "to the group's exact name. A group with categories in it also needs transfer_to, the " +
+      'category their transactions move to; an empty group does not.',
     {
       group: z.string().describe('Category group name or ID to delete'),
-      transfer_to: z.string().describe('Category name or ID to transfer orphaned transactions to'),
+      transfer_to: z
+        .string()
+        .optional()
+        .describe(
+          'Category name or ID to transfer the transactions of the deleted categories to. ' +
+            'Required unless the group is empty.',
+        ),
       confirm: z
         .boolean()
         .optional()

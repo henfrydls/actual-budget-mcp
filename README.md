@@ -852,7 +852,7 @@ tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
 
 **update_category_group** - `group` (required): name or ID | `name` (optional): new name | `hidden` (optional): true/false
 
-**delete_category_group** - `group` (required) | `transfer_to` (required): category for orphaned transactions | `confirm` + `confirm_name` (required to delete)
+**delete_category_group** - `group` (required) | `transfer_to`: category for the orphaned transactions, required unless the group is empty | `confirm` + `confirm_name` (required to delete)
 
 </details>
 
