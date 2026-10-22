@@ -487,16 +487,30 @@ export function registerTransferBetweenCategories(server: McpServer): void {
             );
           }
 
-          // A negative pool is the month assigning more than it has. The budget
-          // is allowed to be in that state and the engine does not refuse it,
-          // so this says it rather than standing in the way.
-          if (toId === POOL ? afterTo.budgeted < 0 : fromId === POOL && afterFrom.budgeted < 0) {
-            lines.push(
-              '',
-              `${POOL_LABEL} is now ${formatMoney(
-                -(toId === POOL ? afterTo.budgeted : afterFrom.budgeted),
-              )} over: this month assigns more than it has.`,
-            );
+          // A negative pool is the month assigning more than it has. The
+          // budget is allowed to be in that state and the engine does not
+          // refuse it, so this says it rather than standing in the way.
+          //
+          // Whether this move put it there is the difference (#267). Seen in
+          // the live test of 0.11.0: a move out of a past month's pool
+          // answered "To Budget is now 60.00 over", which was true and read
+          // as though the move had done it, when the month had been over by
+          // that much before either call. The figure before is what tells
+          // those apart, so both are said.
+          if (withPool) {
+            const poolBefore = (fromId === POOL ? beforeFrom : beforeTo).budgeted;
+            const poolAfter = (fromId === POOL ? afterFrom : afterTo).budgeted;
+            if (poolAfter < 0) {
+              lines.push(
+                '',
+                poolBefore < 0
+                  ? `${POOL_LABEL} was already ${formatMoney(-poolBefore)} over before this ` +
+                    `move, and is ${formatMoney(-poolAfter)} over now: this month assigns more ` +
+                    `than it has.`
+                  : `${POOL_LABEL} is now ${formatMoney(-poolAfter)} over: this month assigns ` +
+                    `more than it has.`,
+              );
+            }
           }
 
           if (noteTrouble !== undefined) {
