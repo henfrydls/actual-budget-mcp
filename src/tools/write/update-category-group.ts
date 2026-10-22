@@ -41,6 +41,28 @@ export function registerUpdateCategoryGroup(server: McpServer): void {
           return { content: [{ type: 'text', text: 'No fields to update.' }], isError: true };
         }
 
+        // Actual needs a name on every group update, whatever else is being
+        // changed. `db.updateCategoryGroup` opens by looking for another
+        // group with the same name, `group.name.toUpperCase()`, without
+        // checking there is one, so hiding a group without renaming it threw
+        // `Cannot read properties of undefined (reading 'toUpperCase')` and
+        // wrote nothing (#260). It is the same shape as
+        // actualbudget/actual#8857, which `update_category` already works
+        // around the same way.
+        //
+        // The name comes from the budget, never from the argument that named
+        // the group: that argument can be an id, and writing it as the name
+        // would rename the group to its own id.
+        if (updates.name === undefined) {
+          if (grp?.name === undefined) {
+            throw new Error(
+              `Could not read the current name of "${group}", and Actual needs a name on ` +
+                `every category group update. Nothing was changed.`,
+            );
+          }
+          updates.name = grp.name;
+        }
+
         await api.updateCategoryGroup(groupId, updates as any);
         await syncNow();
 
