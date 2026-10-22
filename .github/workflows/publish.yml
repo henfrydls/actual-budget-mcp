@@ -13,7 +13,10 @@ jobs:
       # workflow does not push code. Narrower than it looks: a release asset
       # upload cannot modify the repository.
       contents: write
-      id-token: write # npm provenance
+      # The identity npm publishes with, and the one provenance is built from
+      # (#241). It was here for provenance alone while a token did the
+      # authenticating.
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -24,16 +27,71 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
+      # Publishing with the workflow's own identity needs npm 11.5.1 or
+      # newer, and Node 22 bundles 10.9.x. Node 24 and 26 bundle a new enough
+      # one, and moving the release build to a different Node to get a tool
+      # version would be deciding one thing by changing another: the npm that
+      # publishes is named here instead.
+      #
+      # Pinned, like mcp-publisher further down and for the same reason. A
+      # release is the worst moment to discover a tool changed underneath it.
+      # Staying on 11 rather than 12 is deliberate too: npm 12 stops running
+      # install scripts by default, which is a change to how every `npm ci`
+      # in this job behaves and belongs in its own pull request.
+      - name: Use an npm that can publish over OIDC
+        run: |
+          npm install -g npm@11.21.0
+          npm --version
+
       - run: npm ci
       - run: npm test
       - run: npm run build
 
-      # Publishes with provenance. Auth uses an npm Automation token (bypasses
-      # 2FA/OTP) stored in the NPM_TOKEN repository secret.
+      # No token. The workflow proves who it is with the OIDC identity
+      # `id-token: write` grants, and npm checks it against the trusted
+      # publisher configured for this package: this repository, this workflow
+      # filename. What it replaces is an automation token that bypassed 2FA,
+      # which is the kind npm is taking away: those lost account changes in
+      # August 2026 and lose direct publishing around January 2027, when they
+      # will only be able to stage a publish for a human to approve.
+      #
+      # `--provenance` stays, although npm's documentation says provenance is
+      # automatic over OIDC. Read in npm 11.21's `lib/utils/oidc.js`: every
+      # failure on that path is logged at verbose level and swallowed, and
+      # the automatic branch only runs when provenance was not configured
+      # explicitly. Without the flag, a publish that cannot be signed is a
+      # publish that goes out unsigned and says so in a log nobody reads.
+      # With it, it fails.
+      #
+      # If the trusted publisher is not configured, or is configured with a
+      # different workflow filename, this fails before anything is published
+      # and the job can be re-run once it is fixed. npm does not check that
+      # configuration when it is saved, so the first release after this is
+      # where it gets checked, and the error it answers with says little:
+      # hence the hint.
       - name: Publish
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Whatever `setup-node` left behind. With `registry-url` it writes an
+          # .npmrc with `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
+          # and up to and including v6 it also exports a placeholder token,
+          # `XXXXX-XXXXX-XXXXX-XXXXX`, when the variable is unset: read in
+          # `src/authutil.ts`, present in v4.4.0 and v6.0.0, removed in v7 by
+          # actions/setup-node#1558, whose own description says it "could
+          # corrupt the user's .npmrc by injecting a non-functional token
+          # value into the environment, potentially causing confusing
+          # behaviour during OIDC publish".
+          #
+          # An OIDC publish must reach npm with no credential configured, so
+          # the line goes before publishing rather than after a release has
+          # failed. Measured: this removes the key when it is there, exits 0
+          # when it is not, and leaves the registry line alone. It also means
+          # the release does not depend on which version of `setup-node` the
+          # pin happens to be at.
+          npm config delete //registry.npmjs.org/:_authToken
+          npm publish --provenance --access public || {
+            echo "::error::npm refused the publish. If this is the first release with trusted publishing, check the configuration on npmjs.com: organisation or user henfrydls, repository actual-budget-mcp, workflow filename publish.yml, and npm publish among the allowed actions. The fields are case-sensitive and npm does not check them when they are saved."
+            exit 1
+          }
 
       # Attach the Desktop Extension to the release, so the README's download
       # link points at something that exists for every version.
