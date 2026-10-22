@@ -99,12 +99,15 @@ describe('the prompts and the tools they call', () => {
   });
 
   it('registers the tools before the prompts, which is what makes this work', () => {
-    // The prompts ask what was registered. Reading the entry point rather
-    // than running it: importing it starts a server.
-    const entry = readFileSync('src/index.ts', 'utf8');
+    // The prompts ask what was registered, and the record they ask is
+    // overwritten by the tool registration, so the order is the wiring. Read
+    // from the factory rather than run: building a server is cheap, but the
+    // thing being checked is the order in the source, and in HTTP mode this
+    // runs once per request (#228).
+    const factory = readFileSync('src/mcp-server.ts', 'utf8');
 
-    expect(entry.indexOf('registerAllTools(server)')).toBeLessThan(
-      entry.indexOf('registerAllPrompts(server)'),
+    expect(factory.indexOf('registerAllTools(server')).toBeLessThan(
+      factory.indexOf('registerAllPrompts(server)'),
     );
   });
 });

@@ -13,11 +13,16 @@ import { serverInstructions } from '../instructions.js';
 describe('the server instructions', () => {
   it('are passed to the server rather than only defined', () => {
     // Read from the source because the entry point starts a server when it
-    // is imported: it connects a transport and opens a budget.
-    const entry = readFileSync('src/index.ts', 'utf8');
+    // is imported: it connects a transport and opens a budget. The factory
+    // is where every server is built, stdio's one and HTTP's one per
+    // request (#228), so this is the one place the field can go missing.
+    const factory = readFileSync('src/mcp-server.ts', 'utf8');
 
-    expect(entry).toContain('instructions: serverInstructions(');
-    expect(entry).toContain('readOnly: isReadOnly()');
+    expect(factory).toContain('instructions: serverInstructions(');
+    // Read-only decides what the instructions say, and in HTTP mode the read
+    // path is read-only whatever the process is allowed to do.
+    expect(factory).toContain('serverInstructions({ readOnly })');
+    expect(factory).toContain('options.readOnly ?? isReadOnly()');
   });
 
   it('say the conventions a caller cannot infer from one description', () => {
