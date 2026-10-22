@@ -44,9 +44,11 @@ describe('the npm publish step', () => {
   });
 
   it('publishes without a token anywhere in the job', () => {
-    // A token in the environment is used in preference to the OIDC identity,
-    // so one left behind here does not fail: it publishes, with the
-    // credential this change exists to stop using.
+    // npm tries the OIDC exchange first, so a token left behind would not
+    // announce itself by failing: it would sit there as a second credential
+    // for the same package, of exactly the kind being taken away, and it
+    // would be what publishes on any path where the exchange does not
+    // happen.
     const file = readFileSync('.github/workflows/publish.yml', 'utf8');
     expect(file).not.toContain('NODE_AUTH_TOKEN');
     expect(file).not.toContain('NPM_TOKEN');
@@ -71,6 +73,20 @@ describe('the npm publish step', () => {
     );
     const publishIndex = steps.findIndex((step) => (step.run ?? '').includes('npm publish'));
     expect(installIndex).toBeLessThan(publishIndex);
+  });
+
+  it('asks for provenance rather than hoping for it', () => {
+    // npm's own OIDC path swallows every failure at verbose level and only
+    // turns provenance on by itself when it was not asked for explicitly.
+    // Without the flag a publish that cannot be signed goes out unsigned.
+    expect(publishStep?.run).toContain('--provenance');
+  });
+
+  it('says what to check when npm refuses the publish', () => {
+    // A misconfigured trusted publisher answers with a bare 401 or 404,
+    // during a release, with nothing in it about the configuration.
+    expect(publishStep?.run).toContain('::error::');
+    expect(publishStep?.run).toContain('publish.yml');
   });
 
   it('stays on npm 11, where install scripts still run', () => {

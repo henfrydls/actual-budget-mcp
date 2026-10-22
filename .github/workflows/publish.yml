@@ -40,7 +40,7 @@ jobs:
       # in this job behaves and belongs in its own pull request.
       - name: Use an npm that can publish over OIDC
         run: |
-          npm install -g npm@11.21.1
+          npm install -g npm@11.21.0
           npm --version
 
       - run: npm ci
@@ -55,18 +55,26 @@ jobs:
       # August 2026 and lose direct publishing around January 2027, when they
       # will only be able to stage a publish for a human to approve.
       #
-      # `--provenance` is gone rather than lost. npm generates provenance by
-      # itself for a publish that arrives over OIDC from a public repository,
-      # which is what this is, so the flag would be asking for what already
-      # happens.
+      # `--provenance` stays, although npm's documentation says provenance is
+      # automatic over OIDC. Read in npm 11.21's `lib/utils/oidc.js`: every
+      # failure on that path is logged at verbose level and swallowed, and
+      # the automatic branch only runs when provenance was not configured
+      # explicitly. Without the flag, a publish that cannot be signed is a
+      # publish that goes out unsigned and says so in a log nobody reads.
+      # With it, it fails.
       #
       # If the trusted publisher is not configured, or is configured with a
-      # different workflow filename, this step fails before anything is
-      # published and the job can be re-run once it is fixed. npm does not
-      # check that configuration when it is saved, so the first release after
-      # this is where it gets checked.
+      # different workflow filename, this fails before anything is published
+      # and the job can be re-run once it is fixed. npm does not check that
+      # configuration when it is saved, so the first release after this is
+      # where it gets checked, and the error it answers with says little:
+      # hence the hint.
       - name: Publish
-        run: npm publish --access public
+        run: |
+          npm publish --provenance --access public || {
+            echo "::error::npm refused the publish. If this is the first release with trusted publishing, check the configuration on npmjs.com: organisation or user henfrydls, repository actual-budget-mcp, workflow filename publish.yml, and npm publish among the allowed actions. The fields are case-sensitive and npm does not check them when they are saved."
+            exit 1
+          }
 
       # Attach the Desktop Extension to the release, so the README's download
       # link points at something that exists for every version.
