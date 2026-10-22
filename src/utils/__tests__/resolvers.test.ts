@@ -119,8 +119,8 @@ describe('resolveCategoryId', () => {
 describe('resolveCategoryGroupId', () => {
   beforeEach(() => {
     vi.mocked(api.getCategoryGroups).mockResolvedValue([
-      { id: 'grp-1', name: 'Gastos Fijos', is_income: false },
-      { id: 'grp-2', name: 'Gastos Variables', is_income: false },
+      { id: 'grp-1', name: 'Fixed Spending', is_income: false },
+      { id: 'grp-2', name: 'Variable Spending', is_income: false },
       { id: 'grp-3', name: 'Income', is_income: true },
     ] as any);
   });
@@ -130,11 +130,12 @@ describe('resolveCategoryGroupId', () => {
   });
 
   it('resolves by partial name', async () => {
-    expect(await resolveCategoryGroupId('Fijos')).toBe('grp-1');
+    expect(await resolveCategoryGroupId('Fixed')).toBe('grp-1');
   });
 
   it('throws on ambiguous match', async () => {
-    await expect(resolveCategoryGroupId('Gastos')).rejects.toThrow('Ambiguous category group name');
+    // Two groups sharing a word, which is what makes the name ambiguous.
+    await expect(resolveCategoryGroupId('Spending')).rejects.toThrow('Ambiguous category group name');
   });
 
   it('throws on no match', async () => {
@@ -154,7 +155,7 @@ describe('resolveCategoryGroupId', () => {
     try {
       await resolveCategoryGroupId('xyz');
     } catch (e: any) {
-      expect(e.message).toContain('Gastos Fijos');
+      expect(e.message).toContain('Fixed Spending');
       expect(e.message).toContain('Income');
     }
   });

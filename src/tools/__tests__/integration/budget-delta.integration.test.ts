@@ -41,14 +41,14 @@ const PREV = '2026-08';
  * that reaches a given balance is a number produced to reach a number.
  */
 describe.skipIf(skip)('update_budget_amount delta mode', () => {
-  let salud = '';
+  let health = '';
   let bonus = '';
 
   async function budget(name: string) {
     await createFreshBudget(async () => {
       const acct = await api.createAccount({ name: 'Checking', type: 'checking' } as never, 0);
       const g = await api.createCategoryGroup({ name: 'Gastos' } as never);
-      salud = await api.createCategory({ name: 'Salud', group_id: g } as never);
+      health = await api.createCategory({ name: 'Health', group_id: g } as never);
       const groups = await api.getCategoryGroups();
       const income = groups.find((x) => (x as { is_income?: boolean }).is_income);
       bonus = await api.createCategory({
@@ -58,10 +58,10 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
       } as never);
 
       // 5,500.00 carried forward from August, 19,161.07 spent in September.
-      await api.setBudgetAmount(PREV, salud, 550000);
-      await api.setBudgetCarryover(PREV, salud, true);
+      await api.setBudgetAmount(PREV, health, 550000);
+      await api.setBudgetCarryover(PREV, health, true);
       await api.addTransactions(acct, [
-        { date: '2026-09-10', amount: -1916107, category: salud, cleared: true },
+        { date: '2026-09-10', amount: -1916107, category: health, cleared: true },
       ] as never);
     }, name);
   }
@@ -84,7 +84,7 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
 
   it('is the situation the issue describes', async () => {
     await budget('delta-shape');
-    const before = await figures(salud);
+    const before = await figures(health);
 
     // Nothing budgeted this month, 5,500.00 carried in, 19,161.07 spent.
     expect(before.budgeted).toBe(0);
@@ -94,17 +94,17 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
 
   it('adds to what is there, rollover and spending included', async () => {
     await budget('delta-add');
-    const before = await figures(salud);
+    const before = await figures(health);
 
     const result = await handlerFor()({
-      category: 'Salud',
+      category: 'Health',
       amount: 10000,
       month: MONTH,
       mode: 'delta',
     });
 
     expect(result.isError).toBeFalsy();
-    const after = await figures(salud);
+    const after = await figures(health);
 
     expect(after.budgeted).toBe(before.budgeted! + 1000000);
     // The point of the mode: the envelope has 10,000.00 more in it than it did.
@@ -114,11 +114,11 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
 
   it('takes money back out with a negative delta', async () => {
     await budget('delta-negative');
-    await handlerFor()({ category: 'Salud', amount: 10000, month: MONTH, mode: 'delta' });
-    const before = await figures(salud);
+    await handlerFor()({ category: 'Health', amount: 10000, month: MONTH, mode: 'delta' });
+    const before = await figures(health);
 
-    await handlerFor()({ category: 'Salud', amount: -3000, month: MONTH, mode: 'delta' });
-    const after = await figures(salud);
+    await handlerFor()({ category: 'Health', amount: -3000, month: MONTH, mode: 'delta' });
+    const after = await figures(health);
 
     expect(after.budgeted).toBe(before.budgeted! - 300000);
     expect(after.balance).toBe(before.balance! - 300000);
@@ -133,25 +133,25 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
     // showed and what the mutation counts in my own sweep had already said,
     // if I had read which test caught it rather than how many.
     await budget('delta-equivalence');
-    await handlerFor()({ category: 'Salud', amount: 4000, month: MONTH });
+    await handlerFor()({ category: 'Health', amount: 4000, month: MONTH });
 
-    await handlerFor()({ category: 'Salud', amount: 23661.07, month: MONTH });
-    const viaAbsolute = await figures(salud);
+    await handlerFor()({ category: 'Health', amount: 23661.07, month: MONTH });
+    const viaAbsolute = await figures(health);
     expect(viaAbsolute.balance).toBe(1000000);
 
     await budget('delta-equivalence-2');
-    await handlerFor()({ category: 'Salud', amount: 4000, month: MONTH });
-    const start = await figures(salud);
+    await handlerFor()({ category: 'Health', amount: 4000, month: MONTH });
+    const start = await figures(health);
     expect(start.budgeted).toBe(400000);
 
     // 10,000.00 wanted, and the gap from where it already sits.
     await handlerFor()({
-      category: 'Salud',
+      category: 'Health',
       amount: (1000000 - start.balance!) / 100,
       month: MONTH,
       mode: 'delta',
     });
-    const viaDelta = await figures(salud);
+    const viaDelta = await figures(health);
 
     expect(viaDelta.budgeted).toBe(viaAbsolute.budgeted);
     expect(viaDelta.balance).toBe(1000000);
@@ -166,13 +166,13 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
     const handler = handlerFor();
 
     const [first, second] = await Promise.all([
-      handler({ category: 'Salud', amount: 1000, month: MONTH, mode: 'delta' }),
-      handler({ category: 'Salud', amount: 1000, month: MONTH, mode: 'delta' }),
+      handler({ category: 'Health', amount: 1000, month: MONTH, mode: 'delta' }),
+      handler({ category: 'Health', amount: 1000, month: MONTH, mode: 'delta' }),
     ]);
 
     expect(first.isError).toBeFalsy();
     expect(second.isError).toBeFalsy();
-    expect((await figures(salud)).budgeted).toBe(200000);
+    expect((await figures(health)).budgeted).toBe(200000);
 
     // And the two replies describe a sequence rather than both claiming the
     // same starting point.
@@ -184,10 +184,10 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
   it('leaves absolute mode exactly as it was', async () => {
     await budget('delta-absolute');
 
-    const result = await handlerFor()({ category: 'Salud', amount: 2500, month: MONTH });
+    const result = await handlerFor()({ category: 'Health', amount: 2500, month: MONTH });
 
     expect(result.isError).toBeFalsy();
-    expect((await figures(salud)).budgeted).toBe(250000);
+    expect((await figures(health)).budgeted).toBe(250000);
     const text = result.content[0].text;
     expect(text).toContain('Old: 0.00');
     expect(text).toContain('New: 2,500.00');

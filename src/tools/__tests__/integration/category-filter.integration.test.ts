@@ -44,7 +44,7 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
     await createFreshBudget(async () => {
       account = await api.createAccount({ name: 'Checking', offbudget: false } as never, 0);
       const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
-      groceriesId = await api.createCategory({ name: 'Supermercado', group_id: group } as never);
+      groceriesId = await api.createCategory({ name: 'Market', group_id: group } as never);
       const other = await api.createCategory({ name: 'Transporte', group_id: group } as never);
       await api.addTransactions(account, [
         { date: '2026-09-10', amount: -5000, payee_name: 'Colmado', category: groceriesId },
@@ -70,7 +70,7 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
   it('gives the same rows for the id as for the name', async () => {
     // The acceptance the issue asks for: the two spellings of one argument
     // must mean the same thing.
-    const byName = await ask('Supermercado');
+    const byName = await ask('Market');
     const byId = await ask(groceriesId);
 
     expect(byName).toContain('Colmado');
@@ -81,7 +81,7 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
 
   it('matches an id whole, and does not treat part of one as a search', async () => {
     // A name is matched on a substring, which is what makes "Super" find
-    // "Supermercado". Half an id is not a search, it is a typo, and answering
+    // "Market". Half an id is not a search, it is a typo, and answering
     // it with rows would be worse than saying nothing.
     const partial = await ask(groceriesId.slice(0, 8));
 
@@ -92,7 +92,7 @@ describe.skipIf(skip)('get_transactions filtered by category', () => {
   it('still finds a category by part of its name', async () => {
     // The behaviour that existed before and that someone may be using: this
     // change must not turn the name filter into an exact match.
-    const partial = await ask('Super');
+    const partial = await ask('Mark');
 
     expect(partial).toContain('Colmado');
     expect(partial).toContain('Bravo');

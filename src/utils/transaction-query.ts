@@ -13,7 +13,7 @@ import * as api from '@actual-app/api';
  *    retried" — the answer that duplicates a parent and every child under it.
  *    Four rounds of review missed it, because every mock returned the parent.
  *  - #82: a note on a split parent cannot be found by a text search, which is
- *    exactly where a `#Soventix` tag lands when a reimbursable purchase is
+ *    exactly where a `#Reimbursable` tag lands when a reimbursable purchase is
  *    split across categories. A reimbursement nobody chases, with nothing to
  *    signal it was missed.
  *

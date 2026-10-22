@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@actual-app/api', () => ({
   default: {},
   getCategories: vi.fn().mockResolvedValue([
-    { id: 'cat-1', name: 'Salud', group_id: 'g1', hidden: false },
+    { id: 'cat-1', name: 'Health', group_id: 'g1', hidden: false },
   ]),
   getBudgetMonth: vi.fn(),
   setBudgetAmount: vi.fn().mockResolvedValue(undefined),
@@ -45,7 +45,7 @@ const month = (budgeted: number | undefined) => ({
       id: 'g1',
       name: 'Gastos',
       is_income: false,
-      categories: [{ id: 'cat-1', name: 'Salud', budgeted, spent: 0, balance: 0 }],
+      categories: [{ id: 'cat-1', name: 'Health', budgeted, spent: 0, balance: 0 }],
     },
   ],
 });
@@ -69,7 +69,7 @@ describe('update_budget_amount', () => {
     // would be a lie.
     vi.mocked(api.getBudgetMonth).mockResolvedValue(month(250000) as never);
 
-    const result = await handlerFor()({ category: 'Salud', amount: 4000, month: '2026-09' });
+    const result = await handlerFor()({ category: 'Health', amount: 4000, month: '2026-09' });
 
     const text = result.content[0].text;
     expect(text).toContain('Old: 2,500.00');
@@ -80,7 +80,7 @@ describe('update_budget_amount', () => {
   it('reports a negative change as negative', async () => {
     vi.mocked(api.getBudgetMonth).mockResolvedValue(month(400000) as never);
 
-    const result = await handlerFor()({ category: 'Salud', amount: 2500, month: '2026-09' });
+    const result = await handlerFor()({ category: 'Health', amount: 2500, month: '2026-09' });
 
     expect(result.content[0].text).toContain('Change: -1,500.00');
   });
@@ -102,7 +102,7 @@ describe('update_budget_amount', () => {
       order.push('sync');
     });
 
-    await handlerFor()({ category: 'Salud', amount: 1000, month: '2026-09' });
+    await handlerFor()({ category: 'Health', amount: 1000, month: '2026-09' });
 
     expect(order).toEqual(['read', 'write', 'sync']);
   });
@@ -120,7 +120,7 @@ describe('update_budget_amount', () => {
       order.push('sync');
     });
 
-    await handlerFor()({ category: 'Salud', amount: 1000, month: '2026-09', mode: 'delta' });
+    await handlerFor()({ category: 'Health', amount: 1000, month: '2026-09', mode: 'delta' });
 
     expect(order).toEqual(['read', 'write', 'sync']);
   });
@@ -138,7 +138,7 @@ describe('update_budget_amount', () => {
       vi.mocked(api.setBudgetAmount).mockRejectedValue(new Error('engine said no'));
 
       const result = await handlerFor()({
-        category: 'Salud',
+        category: 'Health',
         amount: 1000,
         month: '2026-09',
         mode: 'delta',
@@ -163,7 +163,7 @@ describe('update_budget_amount', () => {
 
     const handler = handlerFor();
     const failed = await handler({
-      category: 'Salud',
+      category: 'Health',
       amount: 1000,
       month: '2026-09',
       mode: 'delta',
@@ -171,7 +171,7 @@ describe('update_budget_amount', () => {
     expect(failed.isError).toBe(true);
 
     const after = await handler({
-      category: 'Salud',
+      category: 'Health',
       amount: 1000,
       month: '2026-09',
       mode: 'delta',

@@ -56,7 +56,7 @@ describe.skipIf(skip)('create_transactions', () => {
 
     const lines = await createTransactions({
       transactions: [
-        { account: 'Checking', amount: -125.5, payee: 'Supermercado', category: 'Comida', date: '2026-09-01' },
+        { account: 'Checking', amount: -125.5, payee: 'Market', category: 'Comida', date: '2026-09-01' },
         { account: 'Checking', amount: -48.25, payee: 'Gasolina', category: 'Transporte', date: '2026-09-02' },
         { account: 'Checking', amount: -9.99, payee: 'Farmacia', date: '2026-09-03' },
       ],

@@ -101,34 +101,34 @@ describe('transfer_between_categories (#86)', () => {
     // whole with the suite still green. All four figures below are distinct.
     vi.mocked(api.getBudgetMonth)
       .mockResolvedValueOnce(month(20000, 5000, [25000, 1000]) as never)
-      .mockResolvedValueOnce(month(8594, 16406, [13594, 12406]) as never);
+      .mockResolvedValueOnce(month(7450, 17550, [12450, 13550]) as never);
 
     const result = await handlerFor()({
       from: 'Groceries',
       to: 'Dining',
-      amount: 114.06,
+      amount: 125.50,
       month: '2026-09',
     });
 
     expect(result.isError).toBeFalsy();
     expect(sendMock).toHaveBeenCalledWith('budget/transfer-category', {
       month: '2026-09',
-      amount: 11406,
+      amount: 12550,
       from: 'cat-1',
       to: 'cat-2',
     });
 
     const text = result.content[0].text;
-    expect(text).toContain('Moved 114.06 from Groceries to Dining in 2026-09');
+    expect(text).toContain('Moved 125.50 from Groceries to Dining in 2026-09');
 
     // What the person actually reads to see what happened, which is the part
     // that can rot without anything noticing.
     expect(text).toContain('Budgeted:');
-    expect(text).toMatch(/Groceries\s+200\.00 -> 85\.94/);
-    expect(text).toMatch(/Dining\s+50\.00 -> 164\.06/);
+    expect(text).toMatch(/Groceries\s+200\.00 -> 74\.50/);
+    expect(text).toMatch(/Dining\s+50\.00 -> 175\.50/);
     expect(text).toContain('Available:');
-    expect(text).toMatch(/Groceries\s+250\.00 -> 135\.94/);
-    expect(text).toMatch(/Dining\s+10\.00 -> 124\.06/);
+    expect(text).toMatch(/Groceries\s+250\.00 -> 124\.50/);
+    expect(text).toMatch(/Dining\s+10\.00 -> 135\.50/);
   });
 
   describe('what it refuses before touching the engine', () => {
@@ -226,7 +226,7 @@ describe('transfer_between_categories (#86)', () => {
 
   it('does not claim a move when the source did not give the money up', async () => {
     // Half of the read-back check. Removing this comparison alone left the
-    // suite green, and the reply would then say "Moved 114.06" about money
+    // suite green, and the reply would then say "Moved 125.50" about money
     // that never left the source: the destination is credited and the source
     // still holds it, which is money invented.
     vi.mocked(api.getBudgetMonth)
@@ -236,7 +236,7 @@ describe('transfer_between_categories (#86)', () => {
     const result = await handlerFor()({
       from: 'Groceries',
       to: 'Dining',
-      amount: 114.06,
+      amount: 125.50,
       month: '2026-09',
     });
 
@@ -255,7 +255,7 @@ describe('transfer_between_categories (#86)', () => {
     const result = await handlerFor()({
       from: 'Groceries',
       to: 'Dining',
-      amount: 114.06,
+      amount: 125.50,
       month: '2026-09',
     });
 

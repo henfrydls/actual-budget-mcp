@@ -122,7 +122,7 @@ describe.skipIf(skip)('spending shares with money coming in', () => {
     let cat = '';
     await createFreshBudget(async () => {
       const acct = await api.createAccount({ name: 'Checking', type: 'checking' } as never, 0);
-      const g = await api.createCategoryGroup({ name: 'Reembolsos Raros' } as never);
+      const g = await api.createCategoryGroup({ name: 'Odd Refunds' } as never);
       cat = await api.createCategory({ name: 'Cosa', group_id: g } as never);
       await api.addTransactions(acct, [
         { date: '2026-09-07', amount: 19000, category: cat },
@@ -136,7 +136,7 @@ describe.skipIf(skip)('spending shares with money coming in', () => {
     // Anchored on the indented row, and on a name that is not a substring of
     // the section header: "Group B" also matches "Group Breakdown:", which is
     // how a first version of this test passed against the wrong line.
-    const groupLine = text.split('\n').find((l) => l.startsWith('  Reembolsos Raros')) ?? '';
+    const groupLine = text.split('\n').find((l) => l.startsWith('  Odd Refunds')) ?? '';
     expect(groupLine).not.toBe('');
     expect(groupLine).not.toMatch(/\d+(\.\d+)?%/);
     expect(groupLine).toContain('nothing budgeted to measure against');

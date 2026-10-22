@@ -21,7 +21,7 @@ Listed in the [official Actual Budget community projects](https://actualbudget.o
 - **Ask about your budget in plain language** - "How much did I spend on food this month?" or "Am I over budget on anything?"
 - **Create and manage transactions** - Add expenses, transfers, and edits without opening the app
 - **Manage categories, payees, and rules** - Full CRUD without opening the app
-- **Use names, not IDs** - Say "Cartera" instead of `a1b2c3d4-...`, with helpful suggestions if ambiguous
+- **Use names, not IDs** - Say "Wallet" instead of `a1b2c3d4-...`, with helpful suggestions if ambiguous
 - **Natural dates in English and Spanish** - "last month", "este mes", "hace 3 meses", "yesterday"
 - **Clean formatted output** - Aligned tables and clear summaries, not raw JSON
 - **Clear error messages** - If something's wrong, you'll know exactly what to fix
@@ -749,13 +749,13 @@ Writes are enabled by default. Read-only is opt-in.
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
-| `create_transaction` | Add a new transaction | "I spent 500 on groceries from Cartera today" |
+| `create_transaction` | Add a new transaction | "I spent 500 on groceries from Wallet today" |
 | `create_transactions` | Add several at once, all or nothing | "Record these 22 movements from the 18th" |
 | `create_split_transaction` | One charge across several categories | "Split that 3,000 charge: 2,000 groceries, 1,000 household" |
 | `update_transaction` | Edit an existing transaction | "Change the amount on that transaction to 600" |
 | `delete_transaction` | Remove a transaction (previews first, see [Safety](#safety)) | "Delete that test transaction" |
-| `update_budget_amount` | Set a budget amount, or add to it | "Put 10,000 more into Salud this month" |
-| `transfer_between_categories` | Move budgeted money between categories, creating no transaction | "Move 114.06 from Reembolsos pendientes to Familia" |
+| `update_budget_amount` | Set a budget amount, or add to it | "Put 10,000 more into Health this month" |
+| `transfer_between_categories` | Move budgeted money between categories, creating no transaction | "Move 125.50 from Pending Refunds to Family" |
 | `hold_for_next_month` | Keep part of a month's unassigned money for the next month | "Hold 5,000 of what is left for next month" |
 | `set_category_carryover` | Carry a category's overspending forward instead of taking it off the top | "Let Groceries carry its own overspending from now on" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
@@ -798,7 +798,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
-| `create_category` | Create a new category | "Create a category called Gym in Gastos Variables" |
+| `create_category` | Create a new category | "Create a category called Gym in Variable Spending" |
 | `update_category` | Rename or hide a category | "Rename Gym to Fitness" |
 | `delete_category` | Delete a category (previews first, see [Safety](#safety)) | "Delete the Fitness category" |
 | `create_category_group` | Create a new group | "Create a category group called Health" |
@@ -952,13 +952,13 @@ Here are real prompts you can use:
 
 "What's my savings rate this month?"
 
-"Show me all transactions from Cartera in the last 30 days"
+"Show me all transactions from Wallet in the last 30 days"
 
 "Transfer 5,000 from Checking to Savings"
 
 "What are my spending trends for food over the last 6 months?"
 
-"Create a category called Gym in Gastos Variables"
+"Create a category called Gym in Variable Spending"
 
 "Rename the Gym category to Fitness"
 
@@ -974,7 +974,7 @@ Compared to other Actual Budget MCP servers:
 | Feature | actual-budget-mcp | Others |
 |---------|-------------------|--------|
 | Natural language dates | "last month", "este mes", "hace 3 meses" | Only YYYY-MM-DD |
-| Name resolution | Type "Cartera" instead of UUIDs | Requires exact IDs |
+| Name resolution | Type "Wallet" instead of UUIDs | Requires exact IDs |
 | Output format | Aligned tables, readable text | Raw JSON |
 | Error messages | Clear instructions on how to fix | Generic errors |
 | Analysis tools | Budget vs actual, projections, trends | Not available |

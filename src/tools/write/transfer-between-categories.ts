@@ -260,7 +260,7 @@ export function registerTransferBetweenCategories(server: McpServer): void {
         ),
       amount: z
         .number()
-        .describe('Amount to move (human-readable, e.g., 114.06). Must be positive.'),
+        .describe('Amount to move (human-readable, e.g., 125.50). Must be positive.'),
       month: z
         .string()
         .optional()

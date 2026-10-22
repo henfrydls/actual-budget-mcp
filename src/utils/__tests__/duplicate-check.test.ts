@@ -27,7 +27,7 @@ vi.mock('@actual-app/api', () => ({
   }),
   getPayees: vi.fn().mockResolvedValue([
     { id: 'p-1', name: 'Farmacia Carol' },
-    { id: 'p-2', name: 'Supermercado Nacional' },
+    { id: 'p-2', name: 'Market East' },
   ]),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -243,7 +243,7 @@ describe('findPossibleDuplicates: the question it asks', () => {
 
     const found = await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
 
-    expect(found[0].payeeName).toBe('Supermercado Nacional');
+    expect(found[0].payeeName).toBe('Market East');
   });
 
   it('reports a row carrying a transfer id as a transfer', async () => {
