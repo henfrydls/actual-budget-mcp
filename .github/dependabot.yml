@@ -68,12 +68,37 @@ updates:
     schedule:
       interval: weekly
     groups:
-      # One pull request for the lot. They move together often enough, and
-      # four open PRs that each change one line is how a config like this
-      # gets ignored.
+      # Two groups, by what a pull request can show about the bump.
+      #
+      # Every `actions/*` one runs on every pull request, so the PR that
+      # raises the pin is also the proof: checkout, setup-node and
+      # upload-artifact all run in CI before anyone reads the diff.
+      #
+      # The `docker/*` ones are only half covered, and the half that is not is
+      # the half that publishes. `setup-buildx-action` and
+      # `build-push-action` build the image and smoke-test it on every pull
+      # request, which is real coverage. `login-action` and `metadata-action`
+      # are gated on `github.event_name == 'release'`, as is the push itself,
+      # and `docker.yml` has no `workflow_dispatch`, so nothing before a
+      # release runs them. A bump there next runs while a release is being
+      # published, with nothing ahead of it to say whether it works. Which
+      # half of the release gets there first is not fixed either: `docker.yml`
+      # and `publish.yml` both trigger on `release: published` and run in
+      # parallel.
+      #
+      # Grouped with the rest they rode along with actions CI had just proved,
+      # which reads as one green pull request and is two different claims.
+      #
+      # One PR for the lot was the earlier shape and the reason behind it
+      # still holds: four PRs that each change one line is how a config like
+      # this gets ignored. Two is not four. An action from anywhere else gets
+      # its own, which is the right default for one nobody here has weighed.
       actions:
         patterns:
-          - "*"
+          - "actions/*"
+      docker:
+        patterns:
+          - "docker/*"
     open-pull-requests-limit: 3
     labels:
       - dependencies

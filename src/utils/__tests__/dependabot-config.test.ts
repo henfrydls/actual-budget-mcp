@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { parse } from 'yaml';
 
 /**
@@ -73,6 +73,26 @@ const config = parse(readFileSync('.github/dependabot.yml', 'utf8')) as {
 };
 
 const npm = config.updates.find((u) => u['package-ecosystem'] === 'npm');
+const workflows = config.updates.find((u) => u['package-ecosystem'] === 'github-actions');
+
+/** Every action the workflows use, as Dependabot sees the name. */
+function actionsInUse(): string[] {
+  const names = new Set<string>();
+  for (const file of readdirSync('.github/workflows')) {
+    for (const line of readFileSync(`.github/workflows/${file}`, 'utf8').split('\n')) {
+      const match = /^\s*(?:-\s*)?uses:\s*([^@\s]+)@/.exec(line);
+      // A local action has no version to bump and no group to be in.
+      if (match && !match[1].startsWith('./')) names.add(match[1]);
+    }
+  }
+  return [...names];
+}
+
+/** Whether a Dependabot pattern matches a name. */
+function matches(pattern: string, name: string): boolean {
+  const prefix = pattern.replace(/\*$/, '');
+  return pattern.endsWith('*') ? name.startsWith(prefix) : name === pattern;
+}
 
 describe('the dependency watch', () => {
   it('is a schema version GitHub reads', () => {
@@ -219,6 +239,45 @@ describe('the dependency watch', () => {
         }),
       );
       expect(matchesSomething, `group "${name}" matches nothing that is watched`).toBe(true);
+    }
+  });
+
+  it('keeps the actions a pull request proves apart from the ones it cannot', () => {
+    // Every `actions/*` one runs on the pull request that raises its pin, so
+    // CI speaks for the bump. Of the `docker/*` ones, the build and the
+    // smoke test run on a pull request and the login, the tags and the push
+    // are gated on a release, in a workflow with no manual trigger: those
+    // next run while a release is being published. One group carried both
+    // claims under one green tick.
+    const groups = Object.entries(workflows?.groups ?? {});
+    expect(groups.map(([name]) => name).sort()).toEqual(['actions', 'docker']);
+    expect(workflows?.groups?.actions?.patterns).toEqual(['actions/*']);
+    expect(workflows?.groups?.docker?.patterns).toEqual(['docker/*']);
+  });
+
+  it('puts every action it watches in one group at most', () => {
+    // Two groups that both match an action would be two pull requests for
+    // one bump. An action in neither gets its own, which is the right
+    // default for one nobody here has weighed yet.
+    const groups = Object.entries(workflows?.groups ?? {});
+    const used = actionsInUse();
+    expect(used.length, 'no actions found in the workflows').toBeGreaterThan(0);
+    for (const action of used) {
+      const matching = groups.filter(([, g]) =>
+        (g.patterns ?? []).some((pattern) => matches(pattern, action)),
+      );
+      expect(
+        matching.map(([name]) => name).length,
+        `${action} is matched by ${matching.length} groups`,
+      ).toBeLessThanOrEqual(1);
+    }
+    // And no group that matches nothing in use, which is how a split stops
+    // meaning anything.
+    for (const [name, group] of groups) {
+      const hits = used.filter((action) =>
+        (group.patterns ?? []).some((pattern) => matches(pattern, action)),
+      );
+      expect(hits.length, `group "${name}" matches no action the workflows use`).toBeGreaterThan(0);
     }
   });
 
