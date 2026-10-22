@@ -7,6 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { describeError } from '../../utils/errors.js';
 import type { BudgetMonth } from '../../types.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { queueBudgetWrite } from '../../utils/budget-writes.js';
 
 /**
  * Keep some of this month's unassigned money for the next one (#138).
@@ -30,6 +31,14 @@ import { syncNow } from '../../utils/sync-clock.js';
  * rather than two: the gesture is "how much of this month is held", and zero
  * is a perfectly good answer to it.
  */
+/** What a tool call answers with, so the queued body can be typed. */
+interface ToolReply {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+  /** What the SDK's own result type asks for; nothing here sets one. */
+  [key: string]: unknown;
+}
+
 export function registerHoldForNextMonth(server: McpServer): void {
   server.tool(
     'hold_for_next_month',
@@ -69,93 +78,103 @@ export function registerHoldForNextMonth(server: McpServer): void {
           );
         }
 
-        const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-        // A tracking budget has no money to assign and nothing to hold: both
-        // figures come back null, and `holdBudgetForNextMonth` writes nothing
-        // and says nothing. Measured. Without this the reply described an
-        // envelope month that does not exist here.
-        if (before?.forNextMonth === null || before?.toBudget === null) {
-          throw new Error(
-            `Holding money for next month is part of an envelope budget, and this is a ` +
-              `tracking budget: ${month} has no money to assign and nothing to hold. ` +
-              `Nothing was changed.`,
-          );
-        }
+        // The hold reads what is held, adds to it through the engine and
+        // reads it back, and the pool it takes from is the one
+        // `transfer_between_categories` and `update_budget_amount` write.
+        // Measured in #114: two of those together, without the queue, each
+        // read before either wrote. What goes in is everything from the
+        // first read to the last, because the reply quotes both and another
+        // call landing between them describes two different months.
+        const run = async (): Promise<ToolReply> => {
+          const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+          // A tracking budget has no money to assign and nothing to hold: both
+          // figures come back null, and `holdBudgetForNextMonth` writes nothing
+          // and says nothing. Measured. Without this the reply described an
+          // envelope month that does not exist here.
+          if (before?.forNextMonth === null || before?.toBudget === null) {
+            throw new Error(
+              `Holding money for next month is part of an envelope budget, and this is a ` +
+                `tracking budget: ${month} has no money to assign and nothing to hold. ` +
+                `Nothing was changed.`,
+            );
+          }
 
-        const cents = amountToCents(amount);
-        // Releasing is asked for with zero, and only with zero. Reading the
-        // rounded figure instead let an amount below the smallest unit clear
-        // the whole hold: after holding 200.00, asking to add 0.004 answered
-        // "Released the 200.00" and left nothing. Someone adding a little got
-        // everything taken away.
-        if (amount > 0 && cents === 0) {
-          throw new Error(
-            `${amount} rounds to zero, so there is nothing to hold. Pass 0 if you mean to ` +
-              `release the whole hold.`,
-          );
-        }
+          const cents = amountToCents(amount);
+          // Releasing is asked for with zero, and only with zero. Reading the
+          // rounded figure instead let an amount below the smallest unit clear
+          // the whole hold: after holding 200.00, asking to add 0.004 answered
+          // "Released the 200.00" and left nothing. Someone adding a little got
+          // everything taken away.
+          if (amount > 0 && cents === 0) {
+            throw new Error(
+              `${amount} rounds to zero, so there is nothing to hold. Pass 0 if you mean to ` +
+                `release the whole hold.`,
+            );
+          }
 
-        if (cents === 0) {
-          await api.resetBudgetHold(month);
+          if (cents === 0) {
+            await api.resetBudgetHold(month);
+            await syncNow();
+            const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: [
+                    before.forNextMonth === 0
+                      ? `Nothing was held for next month in ${month}, so nothing changed.`
+                      : `Released the ${formatMoney(before.forNextMonth)} held for next month in ${month}.`,
+                    '',
+                    `  Held for next month   ${formatMoney(before.forNextMonth)} -> ${formatMoney(after.forNextMonth)}`,
+                    `  Left to assign        ${formatMoney(before.toBudget)} -> ${formatMoney(after.toBudget)}`,
+                  ].join('\n'),
+                },
+              ],
+            };
+          }
+
+          await api.holdBudgetForNextMonth(month, cents);
           await syncNow();
+
           const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-          return {
-            content: [
-              {
-                type: 'text',
-                text: [
-                  before.forNextMonth === 0
-                    ? `Nothing was held for next month in ${month}, so nothing changed.`
-                    : `Released the ${formatMoney(before.forNextMonth)} held for next month in ${month}.`,
-                  '',
-                  `  Held for next month   ${formatMoney(before.forNextMonth)} -> ${formatMoney(after.forNextMonth)}`,
-                  `  Left to assign        ${formatMoney(before.toBudget)} -> ${formatMoney(after.toBudget)}`,
-                ].join('\n'),
-              },
-            ],
-          };
-        }
+          const held = after.forNextMonth - before.forNextMonth;
 
-        await api.holdBudgetForNextMonth(month, cents);
-        await syncNow();
+          // The engine's answer is read back rather than trusted: it holds what
+          // it can and says nothing about the difference.
+          const lines: string[] = [];
+          if (held === 0) {
+            lines.push(
+              `Nothing was held in ${month}: it has ${formatMoney(before.toBudget)} left to assign.`,
+              '',
+              before.toBudget <= 0
+                ? 'A month can only hold money it has not assigned yet, and this one has none.'
+                : 'The engine held nothing even though there was money to hold, which is worth checking in Actual.',
+            );
+          } else if (held < cents) {
+            lines.push(
+              `Asked to hold ${formatMoney(cents)} and held ${formatMoney(held)}, which is all ` +
+                `${month} had left to assign.`,
+            );
+          } else {
+            lines.push(`Held ${formatMoney(held)} for next month in ${month}.`);
+          }
 
-        const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-        const held = after.forNextMonth - before.forNextMonth;
-
-        // The engine's answer is read back rather than trusted: it holds what
-        // it can and says nothing about the difference.
-        const lines: string[] = [];
-        if (held === 0) {
-          lines.push(
-            `Nothing was held in ${month}: it has ${formatMoney(before.toBudget)} left to assign.`,
-            '',
-            before.toBudget <= 0
-              ? 'A month can only hold money it has not assigned yet, and this one has none.'
-              : 'The engine held nothing even though there was money to hold, which is worth checking in Actual.',
-          );
-        } else if (held < cents) {
-          lines.push(
-            `Asked to hold ${formatMoney(cents)} and held ${formatMoney(held)}, which is all ` +
-              `${month} had left to assign.`,
-          );
-        } else {
-          lines.push(`Held ${formatMoney(held)} for next month in ${month}.`);
-        }
-
-        lines.push(
-          '',
-          `  Held for next month   ${formatMoney(before.forNextMonth)} -> ${formatMoney(after.forNextMonth)}`,
-          `  Left to assign        ${formatMoney(before.toBudget)} -> ${formatMoney(after.toBudget)}`,
-        );
-
-        if (held > 0 && before.forNextMonth > 0) {
           lines.push(
             '',
-            `This added to what was already held. Pass 0 to release all ${formatMoney(after.forNextMonth)}.`,
+            `  Held for next month   ${formatMoney(before.forNextMonth)} -> ${formatMoney(after.forNextMonth)}`,
+            `  Left to assign        ${formatMoney(before.toBudget)} -> ${formatMoney(after.toBudget)}`,
           );
-        }
 
-        return { content: [{ type: 'text', text: lines.join('\n') }] };
+          if (held > 0 && before.forNextMonth > 0) {
+            lines.push(
+              '',
+              `This added to what was already held. Pass 0 to release all ${formatMoney(after.forNextMonth)}.`,
+            );
+          }
+
+          return { content: [{ type: 'text', text: lines.join('\n') }] };
+        };
+        return await queueBudgetWrite(run);
       } catch (error) {
         return {
           content: [{ type: 'text', text: `Error: ${describeError(error)}` }],

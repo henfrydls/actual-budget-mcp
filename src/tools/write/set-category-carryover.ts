@@ -8,6 +8,7 @@ import { isIncome } from '../../utils/income.js';
 import { describeError } from '../../utils/errors.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../types.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { queueBudgetWrite } from '../../utils/budget-writes.js';
 
 /** The category as the month reports it, which is where carryover is readable. */
 function carryoverOf(
@@ -67,6 +68,14 @@ function listMonths(months: string[]): string {
  * category outright. So the work here is reading the flag back, which is the
  * part nothing else does.
  */
+/** What a tool call answers with, so the queued body can be typed. */
+interface ToolReply {
+  content: Array<{ type: 'text'; text: string }>;
+  isError?: boolean;
+  /** What the SDK's own result type asks for; nothing here sets one. */
+  [key: string]: unknown;
+}
+
 export function registerSetCategoryCarryover(server: McpServer): void {
   server.tool(
     'set_category_carryover',
@@ -99,96 +108,105 @@ export function registerSetCategoryCarryover(server: McpServer): void {
         }
         const categoryId = await resolveCategoryId(category);
 
-        const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-        const was = carryoverOf(before, categoryId);
-        if (!was) throw new Error(`Category "${category}" has no budget row in ${month}.`);
-        // The engine refuses an income category, in a message that names it
-        // by id. The id is not what anyone asked with, and there is nothing
-        // to do with it: say which category it is.
-        if (was.isIncome) {
-          throw new Error(
-            `"${was.name}" is an income category, and carryover is about overspending, ` +
-              `which an income category does not have. Nothing was changed.`,
-          );
-        }
-
-        // Every month the write reaches, read before it happens. What
-        // "changed" means is this list, not the one month that was asked
-        // about: saying "already had carryover on" while turning it on in
-        // nine other months is a true sentence about a small part of what
-        // just happened.
-        const months = await monthsTouched(month);
-        const flagBefore = new Map<string, boolean>();
-        for (const touched of months) {
-          const read =
-            touched === month
-              ? was
-              : carryoverOf((await api.getBudgetMonth(touched)) as unknown as BudgetMonth, categoryId);
-          if (read) flagBefore.set(touched, read.carryover);
-        }
-
-        await api.setBudgetCarryover(month, categoryId, enabled);
-        await syncNow();
-
-        const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
-        const now = carryoverOf(after, categoryId);
-
-        if (now?.carryover !== enabled) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text:
-                  `Actual accepted the change but ${was.name} still reports carryover ` +
-                  `${now?.carryover === true ? 'on' : 'off'} in ${month}. Nothing can be ` +
-                  `promised about it; check the category in Actual.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // Read back rather than counted from what was asked for, the same
-        // way the one month is.
-        const changed: string[] = [];
-        for (const touched of months) {
-          const read =
-            touched === month
-              ? now
-              : carryoverOf((await api.getBudgetMonth(touched)) as unknown as BudgetMonth, categoryId);
-          if (read && read.carryover === enabled && flagBefore.get(touched) !== enabled) {
-            changed.push(touched);
+        // On the same queue as the rest (#114). This one writes a flag
+        // rather than a figure, so it cannot lose anybody's money, but it
+        // reads every month before the write and reads them again after,
+        // and a budget write landing in between would make those two
+        // readings describe different budgets. Which is the same reason the
+        // others are in it.
+        const run = async (): Promise<ToolReply> => {
+          const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+          const was = carryoverOf(before, categoryId);
+          if (!was) throw new Error(`Category "${category}" has no budget row in ${month}.`);
+          // The engine refuses an income category, in a message that names it
+          // by id. The id is not what anyone asked with, and there is nothing
+          // to do with it: say which category it is.
+          if (was.isIncome) {
+            throw new Error(
+              `"${was.name}" is an income category, and carryover is about overspending, ` +
+                `which an income category does not have. Nothing was changed.`,
+            );
           }
-        }
-        const already = months.length - changed.length;
-        const last = months[months.length - 1];
 
-        const lines = [
-          changed.length === 0
-            ? `${was.name} already had carryover ${enabled ? 'on' : 'off'} in ${month} and in ` +
-              `every month to ${last}, so nothing changed.`
-            : `Carryover for ${was.name} is ${enabled ? 'on' : 'off'} from ${month}.`,
-          ...(changed.length === 0
-            ? []
-            : [
-                '',
-                `  Changed in ${listMonths(changed)}.`,
-                ...(already > 0
-                  ? [`  Already ${enabled ? 'on' : 'off'} in ${already} of the other months.`]
-                  : []),
-              ]),
-          '',
-          `Actual writes this flag into every month from ${month} to ${last}, which is the ` +
-            `last month the budget has. Months created after that start without it.`,
-          '',
-          enabled
-            ? 'Overspending in this category now rolls into the category next month, instead ' +
-              'of coming off the money there is to assign.'
-            : 'Overspending in this category now comes off the money there is to assign next ' +
-              'month, instead of staying with the category.',
-        ];
+          // Every month the write reaches, read before it happens. What
+          // "changed" means is this list, not the one month that was asked
+          // about: saying "already had carryover on" while turning it on in
+          // nine other months is a true sentence about a small part of what
+          // just happened.
+          const months = await monthsTouched(month);
+          const flagBefore = new Map<string, boolean>();
+          for (const touched of months) {
+            const read =
+              touched === month
+                ? was
+                : carryoverOf((await api.getBudgetMonth(touched)) as unknown as BudgetMonth, categoryId);
+            if (read) flagBefore.set(touched, read.carryover);
+          }
 
-        return { content: [{ type: 'text', text: lines.join('\n') }] };
+          await api.setBudgetCarryover(month, categoryId, enabled);
+          await syncNow();
+
+          const after = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+          const now = carryoverOf(after, categoryId);
+
+          if (now?.carryover !== enabled) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text:
+                    `Actual accepted the change but ${was.name} still reports carryover ` +
+                    `${now?.carryover === true ? 'on' : 'off'} in ${month}. Nothing can be ` +
+                    `promised about it; check the category in Actual.`,
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          // Read back rather than counted from what was asked for, the same
+          // way the one month is.
+          const changed: string[] = [];
+          for (const touched of months) {
+            const read =
+              touched === month
+                ? now
+                : carryoverOf((await api.getBudgetMonth(touched)) as unknown as BudgetMonth, categoryId);
+            if (read && read.carryover === enabled && flagBefore.get(touched) !== enabled) {
+              changed.push(touched);
+            }
+          }
+          const already = months.length - changed.length;
+          const last = months[months.length - 1];
+
+          const lines = [
+            changed.length === 0
+              ? `${was.name} already had carryover ${enabled ? 'on' : 'off'} in ${month} and in ` +
+                `every month to ${last}, so nothing changed.`
+              : `Carryover for ${was.name} is ${enabled ? 'on' : 'off'} from ${month}.`,
+            ...(changed.length === 0
+              ? []
+              : [
+                  '',
+                  `  Changed in ${listMonths(changed)}.`,
+                  ...(already > 0
+                    ? [`  Already ${enabled ? 'on' : 'off'} in ${already} of the other months.`]
+                    : []),
+                ]),
+            '',
+            `Actual writes this flag into every month from ${month} to ${last}, which is the ` +
+              `last month the budget has. Months created after that start without it.`,
+            '',
+            enabled
+              ? 'Overspending in this category now rolls into the category next month, instead ' +
+                'of coming off the money there is to assign.'
+              : 'Overspending in this category now comes off the money there is to assign next ' +
+                'month, instead of staying with the category.',
+          ];
+
+          return { content: [{ type: 'text', text: lines.join('\n') }] };
+        };
+        return await queueBudgetWrite(run);
       } catch (error) {
         return {
           content: [{ type: 'text', text: `Error: ${describeError(error)}` }],
