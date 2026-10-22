@@ -116,6 +116,26 @@ describe('repairSyncState (#41 recover from an out-of-sync budget)', () => {
     expect(text.match(/check the budget before retrying/g) ?? []).toHaveLength(1);
   });
 
+  it('does not send the reader back to itself when the app could be closed', async () => {
+    // The server is the desktop app's address, which is where the clause
+    // from #240 lives: "the app is probably closed, and repair_sync saying
+    // nothing is listening is how you tell". This tool has already probed
+    // the server and had an answer, and it is the thing being quoted, so
+    // inside its own failure the sentence is both contradicted and circular.
+    const original = process.env.ACTUAL_SERVER_URL;
+    process.env.ACTUAL_SERVER_URL = 'http://localhost:5007';
+    send.mockRejectedValue(new Error('We had an unknown problem opening "b"'));
+    try {
+      const text = (await callTheTool()).content[0].text;
+
+      expect(text).toContain('Sync repair failed');
+      expect(text).not.toContain('desktop app');
+    } finally {
+      if (original === undefined) delete process.env.ACTUAL_SERVER_URL;
+      else process.env.ACTUAL_SERVER_URL = original;
+    }
+  });
+
   it('says the repair did not finish when the sync that checks it fails', async () => {
     // This sync is not the push after a write that #162 turned into a notice
     // on an otherwise successful reply. It is the verification, and the whole
