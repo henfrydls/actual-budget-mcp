@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 export function registerCreatePayee(server: McpServer): void {
   server.tool(
@@ -16,6 +17,7 @@ export function registerCreatePayee(server: McpServer): void {
     async ({ name }) => {
       try {
         await ensureConnection();
+        requireName(name, 'payee', 'Nothing was created.');
         const id = await api.createPayee({ name } as any);
         await syncNow();
 

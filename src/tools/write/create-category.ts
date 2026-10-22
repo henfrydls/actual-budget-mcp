@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveCategoryGroupId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 export function registerCreateCategory(server: McpServer): void {
   server.tool(
@@ -18,6 +19,7 @@ export function registerCreateCategory(server: McpServer): void {
     async ({ name, group }) => {
       try {
         await ensureConnection();
+        requireName(name, 'category', 'Nothing was created.');
         const groupId = await resolveCategoryGroupId(group);
         const groups = await api.getCategoryGroups();
         const grp = groups.find((g) => g.id === groupId);

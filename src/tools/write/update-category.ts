@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 /**
  * A category as `getCategories` hands it over.
@@ -32,6 +33,7 @@ export function registerUpdateCategory(server: McpServer): void {
     async ({ category, name, hidden }) => {
       try {
         await ensureConnection();
+        if (name !== undefined) requireName(name, 'category', 'Nothing was changed.');
         // Including the hidden ones: unhiding a category is this tool's job,
         // and a hidden one does not resolve by name anywhere else (#218).
         //
