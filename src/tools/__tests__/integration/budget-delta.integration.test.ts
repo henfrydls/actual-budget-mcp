@@ -57,11 +57,11 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
         is_income: true,
       } as never);
 
-      // 5,500.00 carried forward from August, 19,161.07 spent in September.
-      await api.setBudgetAmount(PREV, health, 550000);
+      // 4,250.00 carried forward from August, 18,795.50 spent in September.
+      await api.setBudgetAmount(PREV, health, 425000);
       await api.setBudgetCarryover(PREV, health, true);
       await api.addTransactions(acct, [
-        { date: '2026-09-10', amount: -1916107, category: health, cleared: true },
+        { date: '2026-09-10', amount: -1879550, category: health, cleared: true },
       ] as never);
     }, name);
   }
@@ -86,10 +86,10 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
     await budget('delta-shape');
     const before = await figures(health);
 
-    // Nothing budgeted this month, 5,500.00 carried in, 19,161.07 spent.
+    // Nothing budgeted this month, 4,250.00 carried in, 18,795.50 spent.
     expect(before.budgeted).toBe(0);
-    expect(before.spent).toBe(-1916107);
-    expect(before.balance).toBe(-1366107);
+    expect(before.spent).toBe(-1879550);
+    expect(before.balance).toBe(-1454550);
   }, 60_000);
 
   it('adds to what is there, rollover and spending included', async () => {
@@ -128,14 +128,14 @@ describe.skipIf(skip)('update_budget_amount delta mode', () => {
     // Both routes to the same place, from a category that **already has a
     // figure budgeted**. Starting from zero, as this test first did, adding and
     // replacing are the same operation, so it passed with the delta ignoring
-    // what was there: 23,661.07 + 0 and 23,661.07 are the same number. The
+    // what was there: 24,545.50 + 0 and 24,545.50 are the same number. The
     // mutation that drops the addition survived it, which is what an audit
     // showed and what the mutation counts in my own sweep had already said,
     // if I had read which test caught it rather than how many.
     await budget('delta-equivalence');
     await handlerFor()({ category: 'Health', amount: 4000, month: MONTH });
 
-    await handlerFor()({ category: 'Health', amount: 23661.07, month: MONTH });
+    await handlerFor()({ category: 'Health', amount: 24545.50, month: MONTH });
     const viaAbsolute = await figures(health);
     expect(viaAbsolute.balance).toBe(1000000);
 

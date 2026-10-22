@@ -15,16 +15,16 @@ import { syncNow } from '../../utils/sync-clock.js';
  *
  * Absolute was the only mode, and it turned every ordinary adjustment into
  * arithmetic the caller had to do first. The example in #84, assigning
- * envelopes from a bonus, is exact: a category carrying 5,500.00 forward with
- * 19,161.07 spent sits at -13,661.07, so reaching a balance of 10,000.00 means
- * budgeting 23,661.07. Measured against the engine, that is the right figure
+ * envelopes from a bonus, is exact: a category carrying 4,250.00 forward with
+ * 18,795.50 spent sits at -14,545.50, so reaching a balance of 10,000.00 means
+ * budgeting 24,545.50. Measured against the engine, that is the right figure
  * and the balance lands on 10,000.00. It is also a number produced to reach a
- * number: nothing about 23,661.07 shows it was computed wrongly, and a wrong
+ * number: nothing about 24,545.50 shows it was computed wrongly, and a wrong
  * one corrupts the month quietly.
  *
  * `mode: "delta"` reads the figure and adds to it, so the caller can say what
  * they mean, which is almost always "put 10,000 more into this envelope".
- * Measured: +10,000.00 moved the balance from -13,661.07 to -3,661.07, and a
+ * Measured: +10,000.00 moved the balance from -14,545.50 to -4,545.50, and a
  * negative delta moved it back down by exactly its size.
  *
  * ## The delta is a read and then a write, so it is serialised

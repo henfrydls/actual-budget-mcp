@@ -760,7 +760,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `set_category_carryover` | Carry a category's overspending forward instead of taking it off the top | "Let Groceries carry its own overspending from now on" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
-| `reconcile_currency_residual` | Clear accumulated FX-rate residual | "Reconcile my USD card to 213.82 USD" |
+| `reconcile_currency_residual` | Clear accumulated FX-rate residual | "Reconcile my USD card to 250.00 USD" |
 | `run_bank_sync` | Sync with linked banks | "Sync my bank transactions" |
 
 <details>
@@ -774,7 +774,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **delete_transaction** - `transaction_id` (required) | `confirm` (optional): must be true to delete; without it the tool only previews
 
-**update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional) | `mode` (optional): `absolute` (default) sets the budgeted figure, `delta` adds the amount to what is already there and may be negative. A delta is what an ordinary adjustment is: with rollover and spending in the way, setting an absolute figure means working out a number like 23,661.07 first, and nothing about that number shows it was computed wrongly.
+**update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional) | `mode` (optional): `absolute` (default) sets the budgeted figure, `delta` adds the amount to what is already there and may be negative. A delta is what an ordinary adjustment is: with rollover and spending in the way, setting an absolute figure means working out a number like 24,545.50 first, and nothing about that number shows it was computed wrongly.
 
 **transfer_between_categories** - `from` (required): category to take from | `to` (required): category to give to | `amount` (required): positive | `month` (optional, defaults to the current month). Refuses an income category at either end (Actual marks income per category, so one can sit in a spending group), a month that is not `YYYY-MM` with the month between 01 and 12, and moving a category to itself. Actual's own handler accepts all three and silently loses, destroys or invents money. Covering an overspent category is allowed and reported.
 
