@@ -110,12 +110,15 @@ jobs:
       # how the ninth gets missed, so the step said them and let the build
       # pass.
       #
-      # With the tree at zero, failing is the only thing that keeps it there.
-      # When an advisory lands in the tooling with no fix available, the
-      # honest move is to say so here, in a line that names it and why it is
-      # being carried, rather than to turn the check back off for everything.
+      # Not `npm audit --audit-level=high`, because npm cannot ignore one
+      # advisory: the day one lands in the tooling with no fix, that command
+      # offers carrying it silently or switching the step off for everything,
+      # and this repository ran the second for a year. The script carries one
+      # by GHSA id with the reason written beside it, in
+      # .github/audit-allowlist.json, and fails on everything else at high or
+      # above.
       - name: Audit development dependencies
-        run: npm audit --audit-level=high
+        run: node scripts/audit-tooling.mjs
 
   # The Desktop Extension is built on every change so a broken manifest or a
   # version that drifted from package.json fails here, not when someone is

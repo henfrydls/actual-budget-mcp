@@ -1,0 +1,4 @@
+{
+  "$comment": "Advisories the development tree carries on purpose, by GHSA id, each with why and when to revisit. Everything else at high or above fails CI, through scripts/audit-tooling.mjs. Production dependencies are never carried here: that gate is `npm audit --omit=dev` and it has no allowlist.",
+  "allowed": {}
+}
