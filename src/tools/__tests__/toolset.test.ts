@@ -78,7 +78,7 @@ describe('the chat toolset (#222)', () => {
   });
 
   it('offers every tool when nothing is set', () => {
-    expect(registeredToolNames().length).toBe(43);
+    expect(registeredToolNames().length).toBe(44);
     expect(chosenToolset()).toBe('full');
   });
 
@@ -86,7 +86,7 @@ describe('the chat toolset (#222)', () => {
     process.env.ACTUAL_TOOLSET = 'chat';
     const names = registeredToolNames();
 
-    expect(names.length).toBe(17);
+    expect(names.length).toBe(18);
     expect([...names].sort()).toEqual([...CHAT_TOOLS].sort());
     // The ones a conversation about money actually reaches for.
     expect(names).toContain('get_transactions');
@@ -117,7 +117,7 @@ describe('the chat toolset (#222)', () => {
     process.env.ACTUAL_READ_ONLY = '1';
     const names = registeredToolNames();
 
-    expect(names.length).toBe(7);
+    expect(names.length).toBe(8);
     expect(names).toContain('get_budget_month');
     expect(names).not.toContain('create_transaction');
     expect(names).not.toContain('reconcile_account');
@@ -126,7 +126,7 @@ describe('the chat toolset (#222)', () => {
   it('offers everything when the setting is not a set, and names it once', () => {
     process.env.ACTUAL_TOOLSET = 'everything please';
 
-    expect(registeredToolNames().length).toBe(43);
+    expect(registeredToolNames().length).toBe(44);
     // Said by the entry point and nowhere else: asking at registration time
     // as well printed it twice, because both places ask the same question.
     expect(unrecognisedToolset()).toBe('everything please');

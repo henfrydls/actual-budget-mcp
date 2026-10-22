@@ -32,7 +32,7 @@
     },
     {
       "name": "Toolset",
-      "description": "Set to chat to offer the 17 everyday tools instead of all 43: reading, recording and categorising transactions, and moving budgeted money. Setting up and repairing a budget is left out. Defaults to full.",
+      "description": "Set to chat to offer the 18 everyday tools instead of all 44: reading, recording and categorising transactions, and moving budgeted money. Setting up and repairing a budget is left out. Defaults to full.",
       "envVar": "ACTUAL_TOOLSET"
     }
   ],
