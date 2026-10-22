@@ -81,7 +81,10 @@ updates:
       # are gated on `github.event_name == 'release'`, as is the push itself,
       # and `docker.yml` has no `workflow_dispatch`, so nothing before a
       # release runs them. A bump there next runs while a release is being
-      # published, after npm has already gone out.
+      # published, with nothing ahead of it to say whether it works. Which
+      # half of the release gets there first is not fixed either: `docker.yml`
+      # and `publish.yml` both trigger on `release: published` and run in
+      # parallel.
       #
       # Grouped with the rest they rode along with actions CI had just proved,
       # which reads as one green pull request and is two different claims.
