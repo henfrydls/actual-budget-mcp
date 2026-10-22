@@ -197,7 +197,11 @@ describe.skipIf(skip)('update_category against the real engine', () => {
       expect(reply.isError, reply.content[0]?.text).toBeUndefined();
       const text = reply.content[0].text;
       expect(text).toContain('Hidden true -> false');
-      expect(text).toContain('Archive is hidden, so Old Thing is still not in the budget table');
+      // "The group Archive", because a group and a category can share a
+      // name and "Archive is hidden" then reads as nonsense (#266).
+      expect(text).toContain(
+        'The group Archive is hidden, so Old Thing is still not in the budget table',
+      );
       expect(text).toContain('update_category_group');
       expect(await readBack(archived)).toEqual({ name: 'Old Thing', hidden: false });
     }, 60_000);
@@ -209,7 +213,7 @@ describe.skipIf(skip)('update_category against the real engine', () => {
 
       expect(reply.isError, reply.content[0]?.text).toBeUndefined();
       expect(reply.content[0].text).toContain(
-        'Archive is hidden, so Old Thing is still not in the budget table',
+        'The group Archive is hidden, so Old Thing is still not in the budget table',
       );
     }, 60_000);
 
@@ -221,7 +225,11 @@ describe.skipIf(skip)('update_category against the real engine', () => {
       expect(reply.isError, reply.content[0]?.text).toBeUndefined();
       const text = reply.content[0].text;
       expect(text).toContain('already had those values');
-      expect(text).toContain('Archive is hidden, so Old Thing is still not in the budget table');
+      // "The group Archive", because a group and a category can share a
+      // name and "Archive is hidden" then reads as nonsense (#266).
+      expect(text).toContain(
+        'The group Archive is hidden, so Old Thing is still not in the budget table',
+      );
     }, 60_000);
 
     it('says nothing of the sort for a rename, which is not about coming back', async () => {

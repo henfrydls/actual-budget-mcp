@@ -99,6 +99,38 @@ describe.skipIf(skip)('update_category_group without a new name', () => {
     await handlerFor()({ group: everyday, name: 'Everyday', hidden: false });
   }, 60_000);
 
+  it('names the group and both values, the way update_category does', async () => {
+    // "Category group updated: Hidden: true" did not say which group, and by
+    // id that reply was the only place to find out (#266).
+    const reply = await handlerFor()({ group: everyday, hidden: true });
+
+    expect(reply.isError, reply.content[0]?.text).toBeFalsy();
+    const text = reply.content[0].text;
+    expect(text).toContain('Updated the group Everyday.');
+    expect(text).toContain('  Hidden false -> true');
+    expect(text, 'the name was not touched, so it is not listed').not.toContain('Name');
+    await handlerFor()({ group: everyday, hidden: false });
+  }, 60_000);
+
+  it('says when the group already had what was asked for', async () => {
+    const reply = await handlerFor()({ group: everyday, name: 'Everyday', hidden: false });
+
+    expect(reply.isError, reply.content[0]?.text).toBeFalsy();
+    const text = reply.content[0].text;
+    expect(text).toContain('The group Everyday already had those values, so nothing changed.');
+    expect(text).toContain('  Name   Everyday (already that)');
+    expect(text).toContain('  Hidden false (already that)');
+  }, 60_000);
+
+  it('quotes the name the budget stored, not the one that was sent', async () => {
+    const reply = await handlerFor()({ group: everyday, name: '  Day to Day  ' });
+
+    expect(reply.isError, reply.content[0]?.text).toBeFalsy();
+    expect(reply.content[0].text).toContain('  Name   Everyday -> Day to Day');
+    expect(reply.content[0].text).not.toContain('  Day to Day  ');
+    await handlerFor()({ group: everyday, name: 'Everyday' });
+  }, 60_000);
+
   it('still refuses a call with nothing to change', async () => {
     const reply = await handlerFor()({ group: everyday });
 
