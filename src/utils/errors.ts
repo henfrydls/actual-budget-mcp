@@ -12,6 +12,7 @@
  */
 
 import { readDataDirLock, activeDataDir, effectiveDataDir } from './data-dir-lock.js';
+import { readEnv } from './env.js';
 
 /**
  * #47: two servers sharing an ACTUAL_DATA_DIR drive the budget out-of-sync, but
@@ -99,6 +100,48 @@ const MAY_ALREADY_BE_APPLIED =
   'can be applied and still report an error, and repeating it would duplicate it.';
 
 /**
+ * The one cause of this failure that is nothing to do with the server (#240).
+ *
+ * The desktop app runs its own sync server on 127.0.0.1:5007, and only while
+ * the app is open. Close the app mid-session and every call fails exactly
+ * like a server that is down, so the reader of this message is sent to check
+ * a self-hosted server they do not have. The field report that opened the
+ * issue is hours spent doing that.
+ *
+ * It is a clause rather than its own message because the same text serves
+ * everyone, and it is behind the address so the person with a self-hosted
+ * server never reads it: both halves of #206's lesson about the most-read
+ * failure text in this server.
+ *
+ * The tell comes with it. Both causes fail the same way, and what separates
+ * them is that `repair_sync` fails too when the app is closed, because it
+ * probes the server before repairing anything. That is in the README, where
+ * nobody is while they are reading this.
+ *
+ * `connection.ts` names the same port for the same reason, and the two do not
+ * share a sentence on purpose: that one is about a server that never answered
+ * at startup and offers the other port as the likely mistake, this one is
+ * about a session that was working a moment ago.
+ */
+function desktopAppClause(): string {
+  const configured = readEnv('ACTUAL_SERVER_URL');
+  if (configured === undefined) return '';
+  let url: URL;
+  try {
+    url = new URL(configured.trim());
+  } catch {
+    return '';
+  }
+  const ownMachine = ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
+  if (!ownMachine || url.port !== '5007') return '';
+  return (
+    'On this address that usually means the Actual desktop app is closed: it runs its ' +
+    'own server on 5007, and only while the app is open. If repair_sync fails too, ' +
+    'that is the difference from a sync problem. '
+  );
+}
+
+/**
  * Actual's generic failure, which names the one thing that may not have happened.
  *
  * `getSyncError` in the bundle returns `We had an unknown problem opening
@@ -146,6 +189,7 @@ function unknownOpenHelp(reason: string): string {
   return (
     'The Actual server did not answer: check that it is running and reachable. ' +
     sure +
+    desktopAppClause() +
     'Actual reports it as a problem opening the budget, which is the message it falls ' +
     `back on for anything it has no specific case for${noCode}. If the budget was ` +
     'already open, nothing was being opened and this came from a sync.'

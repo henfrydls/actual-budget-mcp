@@ -96,3 +96,68 @@ describe('alreadyDescribed', () => {
     expect(describeError(new Error('plain'))).toBe('plain');
   });
 });
+
+/**
+ * The desktop app, in the message every other failure gets (#240).
+ *
+ * Its server runs on 127.0.0.1:5007 and only while the app is open, so
+ * closing it mid-session fails exactly like a server that is down. The
+ * field report is hours spent checking a self-hosted server that does not
+ * exist, with "check that it is running" in front of the reader the whole
+ * time.
+ */
+describe('the clause for a closed desktop app', () => {
+  const unknownOpen = () => new Error('We had an unknown problem opening "b"');
+  const original = process.env.ACTUAL_SERVER_URL;
+
+  const withServer = (url: string | undefined, run: () => void) => {
+    if (url === undefined) delete process.env.ACTUAL_SERVER_URL;
+    else process.env.ACTUAL_SERVER_URL = url;
+    try {
+      run();
+    } finally {
+      if (original === undefined) delete process.env.ACTUAL_SERVER_URL;
+      else process.env.ACTUAL_SERVER_URL = original;
+    }
+  };
+
+  it.each(['http://127.0.0.1:5007', 'http://localhost:5007', 'http://[::1]:5007'])(
+    'says so on %s, with what tells it from a sync problem',
+    (url) => {
+      withServer(url, () => {
+        const described = describeError(unknownOpen());
+
+        expect(described).toContain('the Actual desktop app is closed');
+        expect(described).toContain('only while the app is open');
+        expect(described).toContain(
+          'If repair_sync fails too, that is the difference from a sync problem.',
+        );
+      });
+    },
+  );
+
+  it.each([
+    ['http://localhost:5006', 'a self-hosted server on its usual port'],
+    ['https://budget.example.com:5007', 'that port on someone else'],
+    ['https://budget.example.com', 'a server that is not on this machine'],
+    [undefined, 'nothing configured'],
+    ['not a url at all', 'an address that cannot be read'],
+  ])('leaves it out for %s', (url) => {
+    withServer(url, () => {
+      expect(describeError(unknownOpen())).not.toContain('desktop app');
+    });
+  });
+
+  it('leaves it out when Actual named a reason of its own', () => {
+    // The clause belongs to the failure that says nothing. A wrong
+    // encryption key on the desktop app is not the app being closed.
+    withServer('http://127.0.0.1:5007', () => {
+      const described = describeError(
+        Object.assign(unknownOpen(), { code: 'decrypt-failure' }),
+      );
+
+      expect(described).toContain('decrypt');
+      expect(described).not.toContain('desktop app');
+    });
+  });
+});
