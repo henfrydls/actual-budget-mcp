@@ -401,20 +401,28 @@ describe('transfer_between_categories (#86)', () => {
     });
 
     it('says nothing about the note when it was written', async () => {
-      const result = await handlerFor()({
-        from: 'To Budget',
-        to: 'Groceries',
-        amount: 30,
-        month: '2026-09',
-      });
+      // The clock is held at a single-digit day on purpose: the engine pads
+      // it, and on any day after the ninth a line that did not pad would
+      // pass. Only `Date` is faked, so nothing that waits on a timer stalls.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2026, 8, 5, 12, 0, 0));
+      try {
+        const result = await handlerFor()({
+          from: 'To Budget',
+          to: 'Groceries',
+          amount: 30,
+          month: '2026-09',
+        });
 
-      expect(result.isError).toBeFalsy();
-      expect(result.content[0].text).not.toContain("note");
-      expect(api.updateNote).toHaveBeenCalledWith(
-        'budget-2026-09',
-        '- Reassigned 30.00 from To Budget \u2192 Groceries on ' +
-          new Intl.DateTimeFormat('en-US', { month: 'long', day: '2-digit' }).format(new Date()),
-      );
+        expect(result.isError).toBeFalsy();
+        expect(result.content[0].text).not.toContain('note');
+        expect(api.updateNote).toHaveBeenCalledWith(
+          'budget-2026-09',
+          '- Reassigned 30.00 from To Budget \u2192 Groceries on September 05',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
