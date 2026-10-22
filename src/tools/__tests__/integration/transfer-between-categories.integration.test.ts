@@ -629,6 +629,63 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
       expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted + 3000);
     }, 60_000);
 
+    it('says the move caused it when the month was not over before', async () => {
+      // The other half of the sentence #267 split: here the pool has money
+      // and this call is what takes the month past what it has.
+      const poolBefore = await pool(thisMonth);
+      expect(poolBefore).toBeGreaterThan(0);
+
+      const result = await handlerFor()({
+        from: 'To Budget',
+        to: 'Groceries',
+        amount: poolBefore / 100 + 50,
+      });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(result.content[0].text).toContain(
+        'To Budget is now 50.00 over: this month assigns more than it has.',
+      );
+      expect(result.content[0].text).not.toContain('was already');
+    }, 60_000);
+
+    it('says nothing when the move lands the month exactly on zero', async () => {
+      // The boundary: a pool of exactly nothing is not over, so neither
+      // sentence belongs. `< 0` and `<= 0` differ only here, and the test
+      // before this one leaves the month over, so it puts it back first.
+      const over = await pool(thisMonth);
+      if (over < 0) {
+        await handlerFor()({ from: 'Groceries', to: 'To Budget', amount: -over / 100 + 25 });
+      }
+      const poolBefore = await pool(thisMonth);
+      expect(poolBefore).toBeGreaterThan(0);
+
+      const result = await handlerFor()({
+        from: 'To Budget',
+        to: 'Groceries',
+        amount: poolBefore / 100,
+      });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(await pool(thisMonth), 'exactly nothing left to assign').toBe(0);
+      expect(result.content[0].text).not.toContain('over: this month assigns more than it has');
+      expect(result.content[0].text).not.toContain('was already');
+    }, 60_000);
+
+    it('blames the move when the month was at exactly nothing', async () => {
+      // The other side of the same boundary, which the test above leaves set
+      // up: a month with nothing left is not a month that was already over,
+      // so this move is what put it there.
+      expect(await pool(thisMonth), 'the test above leaves it at zero').toBe(0);
+
+      const result = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: 25 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(result.content[0].text).toContain(
+        'To Budget is now 25.00 over: this month assigns more than it has.',
+      );
+      expect(result.content[0].text).not.toContain('was already');
+    }, 60_000);
+
     it('does not answer to a spelling nobody agreed to', async () => {
       // `tobudget` was in the reserved word for a while and is not in the
       // design. With no category of that name it has to fail as a name that
@@ -716,9 +773,10 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
       expect(lines[1]).toBe(`- Reassigned 5.00 from To Budget \u2192 Rent on ${today}`);
     }, 60_000);
 
-    it('says the figure by which the month is over, not its negative', async () => {
-      // Into the pool while the month is still over-assigned: the notice has
-      // to be there, and the figure has to be what is missing.
+    it('says the month was already over, with the figure before and after', async () => {
+      // Into the pool while the month is already over-assigned. The notice
+      // has to be there, the figures have to be what is missing before and
+      // after, and it must not read as though this move caused it (#267).
       await api.setBudgetAmount(thisMonth, rent, 900000);
       const poolBefore =
         ((await api.getBudgetMonth(thisMonth)) as unknown as BudgetMonth).toBudget;
@@ -727,10 +785,12 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
       const result = await handlerFor()({ from: 'Rent', to: 'To Budget', amount: 100 });
 
       expect(result.isError, result.content[0]?.text).toBeFalsy();
-      const short = -(poolBefore + 10000);
+      const after = poolBefore + 10000;
       expect(result.content[0].text).toContain(
-        `To Budget is now ${formatMoney(short)} over: this month assigns more than it has.`,
+        `To Budget was already ${formatMoney(-poolBefore)} over before this move, and is ` +
+          `${formatMoney(-after)} over now: this month assigns more than it has.`,
       );
+      expect(result.content[0].text).not.toContain('is now');
     }, 60_000);
 
     it('leaves the sentence about a past month exactly as it was', async () => {
