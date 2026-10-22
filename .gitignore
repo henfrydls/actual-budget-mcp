@@ -15,3 +15,6 @@ backlog.md
 
 # Built Desktop Extension bundle
 *.mcpb
+
+# Coverage output, written by `vitest run --coverage`
+coverage/
