@@ -32,7 +32,7 @@ export function registerUpdatePayee(server: McpServer): void {
         return {
           content: [{
             type: 'text',
-            text: `Payee renamed: ${oldName} → ${name}`,
+            text: `Payee renamed: ${oldName} → ${wanted}`,
           }],
         };
       } catch (error) {

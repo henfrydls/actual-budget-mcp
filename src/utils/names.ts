@@ -34,7 +34,37 @@
  * trims a category's name itself and does not trim a group's or a payee's,
  * so `"  Padded  "` was stored with its padding on four of the six.
  */
-const INVISIBLE = /[\p{Z}\p{Cf}\p{Cc}]/gu;
+/**
+ * What counts as nothing, and what counts as the edge of a name.
+ *
+ * `trim()` is not enough twice over. It leaves a zero-width space alone,
+ * which is a format character rather than whitespace, so `"\u200b"` went
+ * through all six and stored a name one invisible character long. And it
+ * leaves one at the edge of a real name, so `"\u200bFood\u200b"` was stored
+ * with its invisible padding.
+ *
+ * The characters below are the ones that render as nothing and are not
+ * spaces:
+ *
+ *   \u115F \u1160 \u3164 \uFFA0   Hangul fillers, which are letters
+ *   \u2800                        the blank braille pattern, a symbol
+ *
+ * Combining marks are blank too, and they are the case that needs care: a
+ * mark over a letter is part of the name, and `"Cafe\u0301"` must survive
+ * whole. So they count as nothing only when nothing is left after taking
+ * every other invisible out, which is how `"\u0301"` on its own is refused
+ * while `"Café"` is not. The same keeps emoji: a variation selector is a
+ * combining mark and the emoji it follows is not.
+ */
+const BLANK_EDGE = '\\p{Z}\\p{Cf}\\p{Cc}\u115F\u1160\u3164\uFFA0\u2800';
+const EDGES = new RegExp(`^[${BLANK_EDGE}]+|[${BLANK_EDGE}]+$`, 'gu');
+const LEADING_MARKS = /^[\p{Mn}\p{Me}]+/u;
+const NOTHING_VISIBLE = new RegExp(`[${BLANK_EDGE}\\p{Mn}\\p{Me}]`, 'gu');
+
+/** The name as it should be stored: no invisible padding at either end. */
+function clean(given: string): string {
+  return given.replace(EDGES, '').replace(LEADING_MARKS, '');
+}
 
 /** How to show a name that cannot be shown, so the message is readable. */
 function describeBlank(given: string): string {
@@ -47,7 +77,7 @@ function describeBlank(given: string): string {
       if (character === ' ') return ' ';
       // A tab printed as a tab, or a zero-width space printed as itself,
       // makes the message as unreadable as the name it is complaining about.
-      if (/[\p{Cf}\p{Cc}]/u.test(character)) {
+      if (/[\p{Cf}\p{Cc}\p{Mn}\p{Me}\u115F\u1160\u3164\uFFA0\u2800]/u.test(character)) {
         return `\\u${(character.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`;
       }
       return character;
@@ -57,8 +87,8 @@ function describeBlank(given: string): string {
 }
 
 export function requireName(given: string, what: string, outcome: string): string {
-  const name = given.trim();
-  if (name.replace(INVISIBLE, '') !== '') return name;
+  const name = clean(given);
+  if (name.replace(NOTHING_VISIBLE, '') !== '') return name;
   throw new Error(
     `A ${what} needs a name, and ${describeBlank(given)}. Actual accepts it and stores a ` +
       `${what} with no readable name, which nothing can find by name afterwards. ${outcome}`,

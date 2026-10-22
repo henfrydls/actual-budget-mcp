@@ -24,7 +24,7 @@ export function registerCreateCategoryGroup(server: McpServer): void {
         return {
           content: [{
             type: 'text',
-            text: `Category group created:\n  Name: ${name}\n  ID: ${id}`,
+            text: `Category group created:\n  Name: ${wanted}\n  ID: ${id}`,
           }],
         };
       } catch (error) {

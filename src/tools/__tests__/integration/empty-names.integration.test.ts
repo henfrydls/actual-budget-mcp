@@ -93,6 +93,24 @@ describe.skipIf(skip)('a name that is nothing but spaces', () => {
     // A control character that `trim()` does not touch, which is the half
     // of the rule the tabs and newlines above cannot show.
     ['create_payee with a control character', registerCreatePayee, { name: '\u0001' }, 'payee'],
+    // Characters that are letters or symbols by their Unicode category and
+    // render as nothing at all.
+    ['create_payee with a Hangul filler', registerCreatePayee, { name: '\u3164' }, 'payee'],
+    ['create_payee with a choseong filler', registerCreatePayee, { name: '\u115f' }, 'payee'],
+    ['create_payee with a blank braille pattern', registerCreatePayee, { name: '\u2800' }, 'payee'],
+    // Combining marks with nothing to combine with.
+    ['create_payee with a grapheme joiner', registerCreatePayee, { name: '\u034f' }, 'payee'],
+    ['create_payee with a variation selector', registerCreatePayee, { name: '\ufe0f' }, 'payee'],
+    ['create_payee with a lone accent', registerCreatePayee, { name: '\u0301' }, 'payee'],
+    // A mark that is not the first character, so taking the leading ones off
+    // is not what catches it: what does is that nothing visible is left.
+    ['create_payee with a space and an accent', registerCreatePayee, { name: ' \u0301' }, 'payee'],
+    [
+      'create_payee with accents around a space',
+      registerCreatePayee,
+      { name: '\u0301 \u0301' },
+      'payee',
+    ],
   ])('refuses it in %s, and creates nothing', async (_tool, register, args, what) => {
     const before = await names();
 
@@ -168,6 +186,38 @@ describe.skipIf(skip)('a name that is nothing but spaces', () => {
     expect(reply.content[0].text).toContain('\\u200b');
   });
 
+  it('keeps a name whose marks and emoji are the point of it', async () => {
+    // The rule takes combining marks out before asking whether anything is
+    // left, so it has to leave them in the name itself: an accent over a
+    // letter is part of the name, and a variation selector is part of an
+    // emoji.
+    const accented = await handlerFor(registerCreatePayee)({ name: 'Cafe\u0301 Luna' });
+    // The accent at the very end, which is where trimming marks off the
+    // edges would eat it.
+    const ending = await handlerFor(registerCreatePayee)({ name: 'Cafe\u0301' });
+    const emoji = await handlerFor(registerCreatePayee)({ name: '\u{1f642} Corner' });
+
+    expect(accented.isError, accented.content[0]?.text).toBeFalsy();
+    expect(emoji.isError, emoji.content[0]?.text).toBeFalsy();
+    const stored = await names();
+    expect(ending.isError, ending.content[0]?.text).toBeFalsy();
+    expect(stored.payees).toContain('Cafe\u0301 Luna');
+    expect(stored.payees).toContain('Cafe\u0301');
+    expect(stored.payees).toContain('\u{1f642} Corner');
+  }, 60_000);
+
+  it('takes invisible padding off a real name', async () => {
+    // `trim()` leaves a zero-width space where it finds one, so this was
+    // stored with its padding: a name nobody can type.
+    const reply = await handlerFor(registerCreatePayee)({ name: '\u200bBakery\u200b' });
+
+    expect(reply.isError, reply.content[0]?.text).toBeFalsy();
+    expect(reply.content[0].text).toContain('Name: Bakery');
+    const stored = await names();
+    expect(stored.payees).toContain('Bakery');
+    expect(stored.payees.some((n) => n.includes('\u200b'))).toBe(false);
+  }, 60_000);
+
   it('stores the name without the padding a person leaves on it', async () => {
     // The engine trims a category's name and does not trim a payee's or a
     // group's: measured, four of the six stored "  Padded  " as it came.
@@ -181,6 +231,27 @@ describe.skipIf(skip)('a name that is nothing but spaces', () => {
     expect(stored.payees).not.toContain('  Corner Shop  ');
     expect(stored.groups).toContain('Set Aside');
     expect(stored.groups).not.toContain(' Set Aside ');
+    // And the reply says what was stored, not what was typed.
+    expect(payeeReply.content[0].text).toContain('Name: Corner Shop');
+    expect(payeeReply.content[0].text).not.toContain('  Corner Shop  ');
+    expect(groupReply.content[0].text).toContain('Name: Set Aside');
+  }, 60_000);
+
+  it('renames a group to the trimmed name, and says that', async () => {
+    // The group half was validated and then written as it came, so the
+    // padding went into the budget while the check had already seen it.
+    const renamed = await handlerFor(registerUpdateCategoryGroup)({
+      group: 'Everyday',
+      name: '  Day to Day  ',
+    });
+
+    expect(renamed.isError, renamed.content[0]?.text).toBeFalsy();
+    expect(renamed.content[0].text).toContain('Day to Day');
+    expect(renamed.content[0].text).not.toContain('  Day to Day  ');
+    const stored = await names();
+    expect(stored.groups).toContain('Day to Day');
+    expect(stored.groups.some((n) => n !== n.trim())).toBe(false);
+    await handlerFor(registerUpdateCategoryGroup)({ group: 'Day to Day', name: 'Everyday' });
   }, 60_000);
 
   it('still accepts a name with spaces around it', async () => {

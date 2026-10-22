@@ -30,7 +30,9 @@ export function registerCreateCategory(server: McpServer): void {
         return {
           content: [{
             type: 'text',
-            text: `Category created:\n  Name: ${name}\n  Group: ${grp?.name || group}\n  ID: ${id}`,
+            // The name as it was stored, which is not always the name that
+            // was typed: the padding comes off (#245).
+            text: `Category created:\n  Name: ${wanted}\n  Group: ${grp?.name || group}\n  ID: ${id}`,
           }],
         };
       } catch (error) {

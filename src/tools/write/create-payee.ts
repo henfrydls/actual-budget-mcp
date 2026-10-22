@@ -24,7 +24,7 @@ export function registerCreatePayee(server: McpServer): void {
         return {
           content: [{
             type: 'text',
-            text: `Payee created:\n  Name: ${name}\n  ID: ${id}`,
+            text: `Payee created:\n  Name: ${wanted}\n  ID: ${id}`,
           }],
         };
       } catch (error) {
