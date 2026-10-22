@@ -6,6 +6,7 @@ import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { describeSync, type SyncOutcome } from '../../utils/bank-sync-report.js';
 
 export function registerRunBankSync(server: McpServer): void {
   server.tool(
@@ -34,21 +35,29 @@ export function registerRunBankSync(server: McpServer): void {
           const accountId = await resolveAccountId(account);
           const acct = accounts.find((a) => a.id === accountId);
 
-          await api.runBankSync({ accountId });
+          // From 26.11 this answers what it brought in; before that it
+          // answers nothing, and `describeSync` says nothing in return
+          // rather than guessing (#221).
+          const outcome = (await api.runBankSync({ accountId })) as unknown as
+            | SyncOutcome
+            | undefined;
           await syncNow();
 
           return {
             content: [
               {
                 type: 'text',
-                text: `Bank sync completed for: ${acct?.name || accountId}`,
+                text: [
+                  `Bank sync completed for: ${acct?.name || accountId}`,
+                  ...(await describeSync(outcome, accounts)),
+                ].join('\n'),
               },
             ],
           };
         }
 
         // Sync all accounts (no arg = all)
-        await api.runBankSync();
+        const outcome = (await api.runBankSync()) as unknown as SyncOutcome | undefined;
         await syncNow();
 
         const openAccounts = accounts.filter((a) => !a.closed);
@@ -56,7 +65,10 @@ export function registerRunBankSync(server: McpServer): void {
           content: [
             {
               type: 'text',
-              text: `Bank sync completed for all linked accounts (${openAccounts.length} accounts).`,
+              text: [
+                `Bank sync completed for all linked accounts (${openAccounts.length} accounts).`,
+                ...(await describeSync(outcome, accounts)),
+              ].join('\n'),
             },
           ],
         };
