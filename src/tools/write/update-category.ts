@@ -91,11 +91,15 @@ export function registerUpdateCategory(server: McpServer): void {
           );
         }
 
-        const groups = await api.getCategoryGroups();
-        const groupName = groups.find((g) => g.id === after.group_id)?.name;
+        const groups = (await api.getCategoryGroups()) as unknown as Array<{
+          id: string;
+          name: string;
+          hidden?: boolean;
+        }>;
+        const group = groups.find((g) => g.id === after.group_id);
         // A category with no group left to name is not worth a second line of
         // explanation: what the caller needs is which category this was.
-        const where = groupName ? `${after.name} in ${groupName}` : after.name;
+        const where = group ? `${after.name} in ${group.name}` : after.name;
 
         const rows: string[] = [];
         let changed = false;
@@ -145,6 +149,20 @@ export function registerUpdateCategory(server: McpServer): void {
           };
         }
 
+        // Unhidden and still not visible, because the group is what is
+        // hiding it (#247). Measured in #238: hiding a group leaves every
+        // category in it with `hidden: false`, and the app shows none of
+        // them. "Hidden true -> false" on its own is true and reads as
+        // "it is back", which it is not.
+        const stillHidden =
+          hidden === false && Boolean(group?.hidden)
+            ? [
+                '',
+                `${group?.name} is hidden, so ${after.name} is still not in the budget table. ` +
+                  `Unhide the group with update_category_group to bring it back.`,
+              ]
+            : [];
+
         return {
           content: [
             {
@@ -155,6 +173,7 @@ export function registerUpdateCategory(server: McpServer): void {
                   : `${where} already had those values, so nothing changed.`,
                 '',
                 ...rows,
+                ...stillHidden,
               ].join('\n'),
             },
           ],
