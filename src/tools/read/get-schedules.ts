@@ -6,7 +6,7 @@ import { describeError } from '../../utils/errors.js';
 import { formatMoney } from '../../utils/money.js';
 import { resolveDate, formatDate } from '../../utils/dates.js';
 import { describeRecurrence } from '../../utils/schedule-recurrence.js';
-import { transactionsQuery, dateBetween } from '../../utils/transaction-query.js';
+import { transactionsQuery } from '../../utils/transaction-query.js';
 
 /**
  * The recurring payments a budget has, which nothing here could see (#150).
@@ -23,11 +23,13 @@ import { transactionsQuery, dateBetween } from '../../utils/transaction-query.js
  *   amount    a number, or `{num1, num2}` when the rule is `isbetween`
  *   payee     null when the schedule has none, and an id otherwise
  *
- * Whether the last one posted is not in the schedule: it is in the
- * transactions, which carry the id of the schedule that created them. So the
- * rows are read per account over a year, which covers a yearly schedule's
- * last occurrence, and a schedule with nothing in that window says so rather
- * than claiming it never posted.
+ * Whether it posted is not in the schedule either: it is in the
+ * transactions, which carry the id of the schedule that created them. One
+ * query asks for every transaction in the last year that carries one,
+ * whatever account it is in, because a schedule need not name an account and
+ * one that does can still be paid from another. A year covers a yearly
+ * schedule's last occurrence, and a schedule with nothing in that window
+ * says so rather than claiming it never posted.
  */
 interface ScheduleRow {
   id: string;
@@ -42,8 +44,53 @@ interface ScheduleRow {
   date?: string | Record<string, unknown> | null;
 }
 
-/** How far back to look for the last transaction a schedule posted. */
+/** How far back to look for the transactions a schedule posted. */
 const POSTED_WINDOW_DAYS = 365;
+
+/**
+ * How early a manual recurring schedule may be paid and still count.
+ *
+ * The engine's own number, from the query behind the app's status: a
+ * schedule whose date condition is approximate matches a transaction up to
+ * two days before the day it is due.
+ */
+const EARLY_DAYS = 2;
+
+/** A stored `YYYY-MM-DD`, some days earlier, in the same local calendar. */
+function daysBefore(date: string, days: number): string {
+  // `T00:00:00` and no zone, so this is the local day the string names
+  // rather than a UTC instant that can land on the day before.
+  const moment = new Date(`${date}T00:00:00`);
+  moment.setDate(moment.getDate() - days);
+  return formatDate(moment);
+}
+
+/**
+ * The earliest a transaction can be dated and still pay the day a schedule
+ * is waiting on, or nothing when there is no day to pay.
+ *
+ * The app's rule, read from the engine rather than described: a schedule
+ * with a transaction linked to it and dated at or after this counts as paid,
+ * and paid is answered before late. The window starts on the day itself when
+ * the date condition is exact or the schedule posts by itself, because both
+ * of those produce an exact day, and two days earlier otherwise, to catch a
+ * payment made early.
+ *
+ * One part of that is not in what the API returns. Whether the date
+ * condition is `is` or `isapprox` lives in the rule, not in the schedule. A
+ * date stored as a string is a single day, which is always `is`; a
+ * recurrence the app wrote is `isapprox`. So the two days are allowed for a
+ * recurrence that does not post by itself, which is where the app allows
+ * them, and the case left over is a recurrence with an exact condition,
+ * which the app's own form does not produce. Reading every rule in the
+ * budget to tell that one apart is a call for two days of difference.
+ */
+function paidFrom(row: ScheduleRow): string | undefined {
+  const next = row.next_date;
+  if (typeof next !== 'string') return undefined;
+  if (typeof row.date === 'string' || row.posts_transaction === true) return next;
+  return daysBefore(next, EARLY_DAYS);
+}
 
 function amountOf(row: ScheduleRow): string {
   const amount = row.amount;
@@ -111,7 +158,7 @@ export function registerGetSchedules(server: McpServer): void {
           payees.map((p) => [p.id, p.transfer_acct ? `transfer: ${p.name}` : p.name]),
         );
 
-        // When each schedule last posted: one query for every transaction in
+        // What each schedule has posted: one query for every transaction in
         // the window that carries a schedule id, whatever account it is in.
         //
         // Reading the accounts the schedules name was wrong twice over. A
@@ -120,17 +167,20 @@ export function registerGetSchedules(server: McpServer): void {
         // had posted. And a schedule that names one can still be paid from
         // another: the rule links the transaction, the account does not.
         //
-        // `today` is the local calendar day, the same one `resolveDate`
-        // hands out everywhere else. A row dated after it is a payment that
-        // has not happened yet, so the window ends there rather than
-        // reporting it as the last one.
+        // Splits count as `all`, which is what the engine's own version of
+        // this query uses: a scheduled payment split across categories is a
+        // parent row, and the default would leave parents out (#79, #82).
+        //
+        // No upper bound on the date. A schedule that posts by itself can
+        // have put the next payment in already, and the day it covers is
+        // what decides whether it is still waiting to be paid.
         const today = resolveDate('today');
         const from = new Date();
         from.setDate(from.getDate() - POSTED_WINDOW_DAYS);
         const start = formatDate(from);
         const posted = (await api.runQuery(
           transactionsQuery('all')
-            .filter({ $and: [{ schedule: { $ne: null } }, dateBetween(start, today)] })
+            .filter({ $and: [{ schedule: { $ne: null } }, { date: { $gte: start } }] })
             .select(['schedule', 'date']) as never,
         )) as unknown as { data?: Array<{ schedule?: string | null; date?: string | null }> };
 
@@ -173,25 +223,40 @@ export function registerGetSchedules(server: McpServer): void {
           const notes: string[] = [];
           const every = everyOf(row);
           if (every !== undefined) notes.push(every);
-          if (
-            row.completed !== true &&
-            row.next_date !== null &&
-            row.next_date !== undefined &&
-            row.next_date < today
-          ) {
-            // Strictly before today: a payment due today is due, not late.
-            notes.push(`due since ${row.next_date}`);
-          }
-          // Who posts it is about what happens next, and nothing happens
-          // next for a finished schedule.
+          // Paid before late, which is the order the app answers in: a
+          // schedule whose day has passed and whose payment is already in is
+          // not late, and saying it is sends someone to pay it twice. The
+          // engine only moves a schedule on when its daily service runs, so
+          // between the payment and that run the next date still points at
+          // the day that was paid.
+          const latest = lastPosted.get(row.id);
+          const from = paidFrom(row);
+          const paid = latest !== undefined && from !== undefined && latest >= from;
+
           if (row.completed !== true) {
+            if (paid) {
+              notes.push('paid');
+            } else if (
+              row.next_date !== null &&
+              row.next_date !== undefined &&
+              row.next_date < today
+            ) {
+              // Strictly before today: a payment due today is due, not late.
+              notes.push(`due since ${row.next_date}`);
+            }
+            // Who posts it is about what happens next, and nothing happens
+            // next for a finished schedule either.
             notes.push(row.posts_transaction === true ? 'posts by itself' : 'waits to be approved');
           }
-          const posted = lastPosted.get(row.id);
           notes.push(
-            posted === undefined
+            latest === undefined
               ? `nothing posted in the last ${POSTED_WINDOW_DAYS} days`
-              : `last posted ${posted}`,
+              : latest <= today
+                ? `last posted ${latest}`
+                : // A schedule that posts by itself can be ahead of the day
+                  // it covers, and "last posted" about a day that has not
+                  // happened yet reads as a payment that has.
+                  `already posted for ${latest}`,
           );
           lines.push(`  ${notes.join('; ')}`);
         }

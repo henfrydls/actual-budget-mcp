@@ -63,18 +63,19 @@ const AHEAD = day(30);
  * Two things the engine does decide how this file is written, both measured
  * by bisecting until one thing was left.
  *
- * A schedule that posts by itself, and whose day has arrived, is posted by
- * the engine in the background: `advanceSchedulesService` calls
- * `postTransactionForSchedule`, which runs a query, and in a test that query
- * lands after the budget is closed ("Cannot read properties of null"). It
- * fails the run without failing a test. Waiting before the close does not
- * drain it. Measured by varying one field at a time:
+ * A schedule that posts by itself, with an account to post into and a day
+ * that has arrived, is posted by the engine in the background:
+ * `advanceSchedulesService` calls `postTransactionForSchedule`, which runs a
+ * query, and in a test that query lands after the budget is closed ("Cannot
+ * read properties of null"). It fails the run without failing a test.
+ * Waiting before the close does not drain it. Twelve combinations measured,
+ * one field at a time:
  *
- *   posts_transaction  day        run
- *   false              ahead      clean
- *   false              passed     clean
- *   true               ahead      clean
- *   true               passed     the stray rejection
+ *   account  posts_transaction  day               run
+ *   no       either             any               clean
+ *   yes      false              any               clean
+ *   yes      true               ahead             clean
+ *   yes      true               today or passed   the stray rejection
  *
  * In a server the database is open and the write goes through, so this is
  * the harness and not the server. It is still kept out of here: the schedule
@@ -98,6 +99,7 @@ const AHEAD = day(30);
 describe.skipIf(skip)('listing real schedules (#150)', () => {
   let accountId = '';
   let savingsId = '';
+  let cashId = '';
   let payeeId = '';
 
   beforeAll(async () => {
@@ -111,6 +113,9 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
         { name: 'Savings', offbudget: false } as never,
         0,
       )) as string;
+      // Named by no schedule, which is the point: the payment below is
+      // invisible to anything that reads the accounts its schedules name.
+      cashId = (await api.createAccount({ name: 'Cash', offbudget: false } as never, 0)) as string;
       payeeId = (await api.createPayee({
         name: 'Landlord',
       } as never)) as string;
@@ -199,6 +204,40 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
       ],
     } as never);
 
+    // A day that has passed and nothing paid: late in every timezone.
+    await testInternal().send('schedule/create' as never, {
+      schedule: { name: 'Membership', posts_transaction: false },
+      conditions: [
+        { op: 'is', field: 'account', value: accountId },
+        { op: 'is', field: 'date', value: PAST },
+        { op: 'is', field: 'amount', value: -60000 },
+      ],
+    } as never);
+
+    // Monthly, and paid below on whatever day the engine says it is next
+    // due, so it is a schedule whose day is covered in any timezone.
+    await testInternal().send('schedule/create' as never, {
+      schedule: { name: 'Power', posts_transaction: false },
+      conditions: [
+        { op: 'is', field: 'account', value: accountId },
+        {
+          op: 'isapprox',
+          field: 'date',
+          value: {
+            start: '2026-01-05',
+            frequency: 'monthly',
+            patterns: [],
+            skipWeekend: false,
+            weekendSolveMode: 'after',
+            endMode: 'never',
+            endOccurrences: 1,
+            endDate: '2026-01-05',
+          },
+        },
+        { op: 'is', field: 'amount', value: -90000 },
+      ],
+    } as never);
+
     // One day only, still to come.
     await testInternal().send(
       'schedule/create' as never,
@@ -218,9 +257,26 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
     const all = await api.getSchedules();
     const rent = all.find((s) => s.name === 'Rent');
     const gym = all.find((s) => s.name === 'Gym');
+    const power = all.find((s) => s.name === 'Power');
+
+    // The rent went out as a split across two categories, which is an
+    // ordinary way to pay one. A query that leaves split parents out, which
+    // is what AQL does unless it is told otherwise, cannot see it (#79, #82).
     await api.addTransactions(accountId, [
-      { date: PAST, amount: -450000, schedule: rent?.id },
-      { date: PAST, amount: -3000, schedule: gym?.id },
+      {
+        date: PAST,
+        amount: -450000,
+        schedule: rent?.id,
+        subtransactions: [{ amount: -300000 }, { amount: -150000 }],
+      },
+    ] as never);
+
+    // Paid from an account no schedule names.
+    await api.addTransactions(cashId, [{ date: PAST, amount: -3000, schedule: gym?.id }] as never);
+
+    // Paid on the day it is next due, whatever day the engine worked out.
+    await api.addTransactions(accountId, [
+      { date: power?.next_date as string, amount: -90000, schedule: power?.id },
     ] as never);
   }, 60_000);
 
@@ -233,9 +289,17 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
     return reply.content[0].text;
   }
 
+  /** The second line of a named schedule, which is where its state is. */
+  async function under(name: string): Promise<string> {
+    const lines = (await listing()).split('\n');
+    const at = lines.findIndex((line) => line.startsWith(name));
+    expect(at, `${name} should be listed`).toBeGreaterThan(-1);
+    return lines[at + 1];
+  }
+
   it('lists every schedule in the budget', async () => {
     const text = await listing();
-    expect(text).toContain('=== Schedules (4) ===');
+    expect(text).toContain('=== Schedules (6) ===');
     expect(text).toContain('Rent');
     expect(text).toContain('Insurance');
   });
@@ -258,8 +322,11 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
   });
 
   it('calls a schedule that happens once "once"', async () => {
+    // The two single days: the one still to come and the one that passed.
     const text = await listing();
-    expect(text.match(/\bonce\b/g)).toHaveLength(1);
+    expect(text.match(/\bonce\b/g)).toHaveLength(2);
+    expect(await under('Insurance')).toContain('once');
+    expect(await under('Membership')).toContain('once');
   });
 
   it('names the account and the payee behind the ids', async () => {
@@ -270,17 +337,20 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
     expect(text, 'no uuid should reach the reply').not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
   });
 
-  it('says a schedule is late when the engine says its day has passed', async () => {
-    const text = await listing();
-    const today = day(0);
-    const late = (await api.getSchedules()).filter(
-      (s) => typeof s.next_date === 'string' && s.next_date < today,
-    );
+  it('says a schedule whose day has passed and is unpaid is late', async () => {
+    expect(await under('Membership')).toContain(`due since ${PAST}`);
+  });
 
-    expect(text.match(/due since/g) ?? []).toHaveLength(late.length);
-    for (const schedule of late) {
-      expect(text).toContain(`due since ${schedule.next_date}`);
-    }
+  it('does not call a schedule late when its day is already paid', async () => {
+    // The app answers paid before missed, and the engine only moves a
+    // schedule on when its daily service runs. Until then the next date
+    // still points at the day that was paid, so this is every budget
+    // between a payment and the next run, and every budget in a timezone
+    // west of Greenwich from the moment the schedule is made.
+    const paid = await under('Power');
+
+    expect(paid).toContain('paid');
+    expect(paid).not.toContain('due since');
   });
 
   it('sorts by the day each one is next due', async () => {
@@ -299,14 +369,16 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
 
   it('finds what a schedule with no account of its own posted', async () => {
     // One query over every transaction that carries a schedule id, rather
-    // than one per account named by a schedule: a schedule need not name an
-    // account, and one that does can still be paid from another.
-    const text = await listing();
-    const gym = text.split('\n').find((line) => line.startsWith('Gym'));
-    const under = text.split('\n')[text.split('\n').indexOf(gym as string) + 1];
+    // than one per account named by a schedule: this one names none, and it
+    // was paid from an account no schedule names, so a per-account read
+    // cannot see it however many accounts it reads.
+    expect(await under('Gym')).toContain(`last posted ${PAST}`);
+  });
 
-    expect(gym).toBeDefined();
-    expect(under).toContain(`last posted ${PAST}`);
+  it('finds a payment that was split across categories', async () => {
+    // A split is a parent row, and an AQL query leaves parents out unless it
+    // says otherwise. Paying the rent across two categories is ordinary.
+    expect(await under('Rent')).toContain(`last posted ${PAST}`);
   });
 
   it('says who posts each one', async () => {

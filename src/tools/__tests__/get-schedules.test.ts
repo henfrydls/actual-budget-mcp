@@ -299,8 +299,14 @@ describe('listing schedules (#150)', () => {
     const out = await text();
     expect(runQuery).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(asked)).toContain('"$gte":"2025-06-15"');
-    expect(JSON.stringify(asked)).toContain('"$lte":"2026-06-15"');
     expect(JSON.stringify(asked)).toContain('"schedule":{"$ne":null}');
+    // No account anywhere in it. Narrowing the query to the accounts the
+    // schedules name is the bug this replaced, and it would pass every
+    // other test here.
+    expect(JSON.stringify(asked)).not.toContain('account');
+    // And no upper bound: a schedule that posts by itself can have put the
+    // next payment in already, and that row is what says it is not waiting.
+    expect(JSON.stringify(asked)).not.toContain('$lte');
     // The schedule with no account of its own is the one that posted.
     expect(out).toContain('last posted 2026-06-10');
   });
@@ -350,6 +356,117 @@ describe('listing schedules (#150)', () => {
     const out = await text();
     expect(out).toContain('-50.00 to -30.00');
     expect(out).toContain('10.00 to 50.00');
+  });
+
+  it('does not call a schedule late when its day is already paid', async () => {
+    // The app answers paid before missed, and the engine only moves a
+    // schedule on when its daily service runs. Between the payment and that
+    // run the next date still points at the day that was paid, and calling
+    // it late sends someone to pay it twice.
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Rent',
+        next_date: '2026-06-01',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+    runQuery.mockResolvedValue({ data: [{ date: '2026-06-01', schedule: 'sch-1' }] });
+
+    const out = await text();
+    expect(out).toContain('paid');
+    expect(out).not.toContain('due since');
+  });
+
+  it('allows a manual recurrence to be paid two days early, and not three', async () => {
+    // The engine's own window for a date condition that is approximate.
+    const schedule = {
+      id: 'sch-1',
+      name: 'Rent',
+      next_date: '2026-06-10',
+      account: 'acc-1',
+      amount: -1000,
+      date: { start: '2026-01-10', frequency: 'monthly' },
+    };
+    getSchedules.mockResolvedValue([schedule]);
+
+    runQuery.mockResolvedValue({ data: [{ date: '2026-06-08', schedule: 'sch-1' }] });
+    expect(await text()).toContain('paid');
+
+    runQuery.mockResolvedValue({ data: [{ date: '2026-06-07', schedule: 'sch-1' }] });
+    expect(await text()).not.toContain('paid');
+  });
+
+  it('gives no early days to a single day or to one that posts by itself', async () => {
+    // Both produce an exact day, so the engine matches the day itself.
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'One Off',
+        next_date: '2026-06-10',
+        account: 'acc-1',
+        amount: -1000,
+        date: '2026-06-10',
+      },
+      {
+        id: 'sch-2',
+        name: 'Auto',
+        next_date: '2026-06-10',
+        posts_transaction: true,
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-10', frequency: 'monthly' },
+      },
+    ]);
+    runQuery.mockResolvedValue({
+      data: [
+        { date: '2026-06-09', schedule: 'sch-1' },
+        { date: '2026-06-09', schedule: 'sch-2' },
+      ],
+    });
+
+    expect(await text()).not.toContain('paid');
+  });
+
+  it('says a payment dated ahead is ahead, not the last one made', async () => {
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Auto',
+        next_date: '2026-07-01',
+        posts_transaction: true,
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+    runQuery.mockResolvedValue({ data: [{ date: '2026-07-01', schedule: 'sch-1' }] });
+
+    const out = await text();
+    expect(out).toContain('already posted for 2026-07-01');
+    expect(out).not.toContain('last posted');
+    expect(out).toContain('paid');
+  });
+
+  it('says nothing about paying a schedule that is finished', async () => {
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Done',
+        next_date: '2026-06-01',
+        completed: true,
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+    runQuery.mockResolvedValue({ data: [{ date: '2026-06-01', schedule: 'sch-1' }] });
+
+    const out = await text();
+    expect(out).toContain('finished');
+    expect(out).not.toContain('paid');
   });
 
   it('calls a schedule due today due, not late', async () => {
