@@ -1,6 +1,6 @@
 {
   "name": "actual-budget-mcp",
-  "version": "0.10.9",
+  "version": "0.11.0",
   "description": "MCP server for Actual Budget: ask where the money went and write back safely, with previews before deletes and duplicate checks",
   "mcpName": "io.github.henfrydls/actual-budget-mcp",
   "type": "module",

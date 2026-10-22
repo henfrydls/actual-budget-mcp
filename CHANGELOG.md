@@ -1,5 +1,138 @@
 # Changelog
 
+## 0.11.0
+
+Money that can be moved to and from what is not budgeted yet, two things an
+envelope budget does that this server could not, and a smaller set of tools
+for the conversations most people have with it.
+
+### Moving money to and from "To Budget" (#114)
+
+`transfer_between_categories` moved money between two categories and nowhere
+else. Returning 500.00 you had overfunded meant working out the new budgeted
+figure by hand and setting it; taking money out of what is still unassigned
+meant the same in reverse.
+
+`"To Budget"` is accepted now where a category goes, at either end. If you
+also have a category called that, the call is refused and the refusal says
+which id means which, rather than guessing.
+
+Asking for more than there is to assign is allowed and reported: the month
+can be over-assigned and Actual lets it, so refusing would be inventing a
+rule it does not have.
+
+The line Actual writes in the month's note for a move is written for these
+too, in the same words.
+
+### Holding money for next month, and carrying overspending (#138)
+
+Two gestures an envelope budget has and this server did not.
+
+`hold_for_next_month` keeps part of a month's unassigned money for the next
+one. It adds to whatever is already held, which is what the app does, so the
+reply gives the total rather than the amount you just asked for. When the
+month has less than you asked to hold, it holds what there is and says both
+figures. Pass 0 to release the whole hold.
+
+`set_category_carryover` turns a category's overspending into something it
+carries itself, instead of coming off next month's money to assign. It is not
+one month: Actual writes the flag into every month from the one you give to
+the last it has created, so the reply says which of them changed and how far
+it reaches.
+
+Both refuse a tracking budget, which has no envelopes for either to mean
+anything in.
+
+### A smaller set of tools, and a word about how they fit together (#222)
+
+Every connection is sent the whole tool list before anything is asked: 43
+tools, 39.2 KiB. Two things come out of that, and the second one matters
+more: the context is spent whatever the conversation turns out to be about,
+and a model choosing between 43 descriptions picks the wrong tool more often
+than one choosing between 17.
+
+`ACTUAL_TOOLSET=chat` offers the everyday set instead: reading the budget,
+recording and categorising transactions, and moving budgeted money. 17 tools,
+17.0 KiB, and 5.3 KiB with `ACTUAL_READ_ONLY=1` as well. `full` stays the
+default, so nothing changes unless you ask for it.
+
+The server also says, once at connection, the conventions that hold across
+the tools: amounts written the way you say them, months as `YYYY-MM` or "last
+month", names or ids, deletes that preview and wait, the duplicate check, and
+that moving budgeted money creates no transaction.
+
+One of those conventions was not true everywhere: a name that matched two
+accounts, groups or payees was refused with the names alone, which is the
+same name twice and nothing to choose between. Every one of those messages
+carries the ids now.
+
+### Categories and groups
+
+- `update_category` says which category it changed, with its group, and the
+  old and new value of each field. It used to answer with the fields alone.
+  (#237)
+- When you unhide a category whose group is hidden, the reply says the group
+  is what is still hiding it, and which tool brings it back. (#247)
+- A category group can be hidden or unhidden without renaming it. It could
+  not before: Actual needs a name on every group update and the tool only
+  sent one when you gave it, so hiding answered with an error about
+  `toUpperCase` and changed nothing. (#260)
+- `get_categories` leaves hidden categories out, as before, and now says how
+  many it left out and how to ask for them: `include_hidden: true` lists them,
+  each marked. Hiding a group leaves its categories' own flag alone, so those
+  are counted apart: what brings them back is unhiding the group. (#238)
+- The `actual://categories` resource answers the same question the tool does.
+  It had its own rule and listed categories the app does not show. (#248)
+
+### A name has to have something in it (#245)
+
+Creating or renaming a category, a group or a payee with a name of spaces was
+accepted, and Actual stored something invisible: findable afterwards only by
+an id nobody wrote down. The same went for a zero-width space, a Hangul
+filler, a lone combining accent and the other characters that render as
+nothing.
+
+All six refuse it now, before anything is written, and a name with padding
+around it is stored without the padding.
+
+### The desktop app being closed is not a server problem (#240)
+
+The Actual desktop app runs its own server on 127.0.0.1:5007, and only while
+the app is open. Closing it mid-session makes every call fail exactly like a
+server that is down, and the reply said "check that it is running and
+reachable", which sends you to look at a self-hosted server you do not have.
+
+On that address the reply now says what it probably is, and how to tell it
+apart from a sync problem: `repair_sync` answering that nothing is listening
+is the difference.
+
+### An icon (#223)
+
+The project had none, so every directory showed a generic square. The listing
+descriptions say what is different about this server rather than what it
+connects to.
+
+### Also
+
+- The test runner moved two majors, to vitest 5. The full dependency tree had
+  ten advisories, three of them critical, and every one of them was the
+  runner; it has none now. The audit step on the development tree stops being
+  informational: an advisory can be carried deliberately, by id and with the
+  reason written beside it, and everything else at high or above fails the
+  build. (#212)
+- Dependabot's one group for GitHub Actions is two: the actions whose bumps
+  CI exercises on the pull request that proposes them, and the Docker ones
+  whose publishing half only runs while a release is being published. (#235)
+- The actions themselves are at their current majors.
+- The examples in the README and the fixtures in the tests use invented
+  names and figures throughout. (#262)
+- This release is published to npm with the workflow's own identity rather
+  than a token that bypasses two-factor authentication: npm is taking those
+  away, and a release would have stopped working on a date nobody was
+  watching for. Provenance is asked for rather than hoped for, because npm
+  swallows a provenance failure and publishes unsigned without the flag.
+  (#241)
+
 ## 0.10.9
 
 A server that would not go away, and two things `update_category` and
