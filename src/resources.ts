@@ -1,6 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
 import { ensureConnection } from './connection.js';
+import {
+  countHidden,
+  inHiddenGroup,
+  notListedLine,
+  type CategoryRow,
+  type GroupRow,
+} from './utils/hidden-categories.js';
 import { formatMoney } from './utils/money.js';
 import { withReadSync } from './utils/read-sync.js';
 import { withInFlight } from './utils/in-flight.js';
@@ -56,13 +63,23 @@ export function registerAllResources(rawServer: McpServer): void {
     },
     async () => {
       await ensureConnection();
-      const groups = await api.getCategoryGroups();
-      const categories = await api.getCategories();
+      const groups = (await api.getCategoryGroups()) as unknown as GroupRow[];
+      const categories = (await api.getCategories()) as unknown as CategoryRow[];
+
+      // The same rule `get_categories` applies, from the same place (#248).
+      // This listed a category whose group is hidden, which the app does not
+      // show and the tool had just said it was leaving out: two ways of
+      // asking the same question, answering differently.
+      //
+      // A resource takes no arguments, so there is nothing here to pass to
+      // see them. The line says which way of asking has one.
+      const groupById = new Map(groups.map((g) => [g.id, g]));
+      const { own, byGroup } = countHidden(categories, groupById);
 
       const lines: string[] = ['Categories:'];
       for (const group of groups) {
         const groupCats = categories.filter(
-          (c) => 'group_id' in c && (c as any).group_id === group.id && !c.hidden,
+          (c) => c.group_id === group.id && !c.hidden && !inHiddenGroup(c, groupById),
         );
         if (groupCats.length === 0) continue;
 
@@ -71,6 +88,13 @@ export function registerAllResources(rawServer: McpServer): void {
           lines.push(`    ${cat.name} (${cat.id})`);
         }
       }
+
+      const left = notListedLine(
+        own,
+        byGroup,
+        'Ask get_categories with include_hidden: true to see them.',
+      );
+      if (left !== undefined) lines.push(left);
 
       return {
         contents: [
