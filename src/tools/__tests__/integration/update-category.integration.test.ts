@@ -167,6 +167,61 @@ describe.skipIf(skip)('update_category against the real engine', () => {
   });
 
   /**
+   * Unhidden, and still invisible (#247).
+   *
+   * Measured in #238: hiding a group leaves every category in it with
+   * `hidden: false`, and the app shows none of them. So a category can be
+   * unhidden and stay out of the budget table, and "Hidden true -> false" on
+   * its own reads as "it is back".
+   */
+  describe('a category inside a hidden group', () => {
+    let archived = '';
+    let archive = '';
+    let everyday = '';
+    let ordinary = '';
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        everyday = await api.createCategoryGroup({ name: 'Everyday' } as never);
+        archive = await api.createCategoryGroup({ name: 'Archive' } as never);
+        ordinary = await api.createCategory({ name: 'Groceries', group_id: everyday } as never);
+        archived = await api.createCategory({ name: 'Old Thing', group_id: archive } as never);
+      }, 'update-cat-hidden-group');
+      await api.updateCategory(archived, { name: 'Old Thing', hidden: true } as never);
+      await api.updateCategoryGroup(archive, { name: 'Archive', hidden: true } as never);
+    }, 60_000);
+
+    it('says the group is still hiding it', async () => {
+      const reply = await handlerFor()({ category: archived, hidden: false });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      const text = reply.content[0].text;
+      expect(text).toContain('Hidden true -> false');
+      expect(text).toContain('Archive is hidden, so Old Thing is still not in the budget table');
+      expect(text).toContain('update_category_group');
+      expect(await readBack(archived)).toEqual({ name: 'Old Thing', hidden: false });
+    }, 60_000);
+
+    it('says nothing of the sort when the group is visible', async () => {
+      await handlerFor()({ category: ordinary, hidden: true });
+
+      const reply = await handlerFor()({ category: ordinary, hidden: false });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      expect(reply.content[0].text).not.toContain('still not in the budget table');
+    }, 60_000);
+
+    it('says nothing of the sort when it was hiding rather than unhiding', async () => {
+      // Hiding a category inside a hidden group changes nothing about what
+      // anyone can see, and the sentence is about coming back.
+      const reply = await handlerFor()({ category: archived, hidden: true });
+
+      expect(reply.isError, reply.content[0]?.text).toBeUndefined();
+      expect(reply.content[0].text).not.toContain('still not in the budget table');
+    }, 60_000);
+  });
+
+  /**
    * What the reply says (#237).
    *
    * It used to answer with the fields alone, so hiding one came back as
