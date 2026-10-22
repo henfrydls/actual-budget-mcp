@@ -8,11 +8,6 @@ import { requireConfirmation } from '../../utils/confirm.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
-/** Throw from inside an expression, where a statement will not fit. */
-function raise(message: string): never {
-  throw new Error(message);
-}
-
 export interface DeleteCategoryGroupInput {
   group: string;
   /** Where the transactions go. Not needed by a group with no categories. */
@@ -45,18 +40,20 @@ export async function deleteCategoryGroupGuarded(
   // them to (#266). Asking for one anyway made the caller name a category
   // that had nothing to do with the deletion, and the reply then said their
   // transactions had been transferred there, which was not true of anything.
+  if (inGroup.length > 0 && input.transfer_to === undefined) {
+    throw new Error(
+      `"${groupName}" has ${inGroup.length} ${
+        inGroup.length === 1 ? 'category' : 'categories'
+      } in it, so deleting it needs transfer_to: the category their transactions move to. ` +
+        `Nothing was deleted.`,
+    );
+  }
+  // Resolved whenever it is given, even for an empty group. Skipping it there
+  // meant a name that is not a category was accepted in silence, and the
+  // caller who misspelled it had no way to know the argument had been
+  // ignored rather than used.
   const transferId =
-    inGroup.length === 0
-      ? undefined
-      : await resolveCategoryId(
-          input.transfer_to ??
-            raise(
-              `"${groupName}" has ${inGroup.length} ${
-                inGroup.length === 1 ? 'category' : 'categories'
-              } in it, so deleting it needs transfer_to: the category their transactions move ` +
-                `to. Nothing was deleted.`,
-            ),
-        );
+    input.transfer_to === undefined ? undefined : await resolveCategoryId(input.transfer_to);
   const transferCat = categories.find((c) => c.id === transferId);
 
   const confirmation = requireConfirmation({
