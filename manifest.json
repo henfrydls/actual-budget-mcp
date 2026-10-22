@@ -39,6 +39,7 @@
         "ACTUAL_BUDGET_ID": "${user_config.sync_id}",
         "ACTUAL_ENCRYPTION_PASSWORD": "${user_config.encryption_password}",
         "ACTUAL_READ_ONLY": "${user_config.read_only}",
+        "ACTUAL_TOOLSET": "${user_config.toolset}",
         "ACTUAL_HTTP_TIMEOUT_MS": "${user_config.http_timeout_ms}"
       }
     }
@@ -83,6 +84,13 @@
       "title": "Read-only mode",
       "description": "Expose only the reading and analysis tools. The write tools are not registered at all, so Claude never sees them.",
       "default": false,
+      "required": false
+    },
+    "toolset": {
+      "type": "string",
+      "title": "Toolset",
+      "description": "chat offers the 17 everyday tools: reading the budget, recording and categorising transactions, and moving budgeted money. It leaves out setting up and repairing a budget, and sends 17.0 KiB of tool descriptions on each connection instead of 39.2 KiB. full offers all 43.",
+      "default": "full",
       "required": false
     },
     "http_timeout_ms": {

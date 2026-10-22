@@ -586,7 +586,12 @@ describe.skipIf(skip)('a payee that nearly names an account', () => {
     });
 
     expect(await count(bank)).toBe(before);
-    expect(lines.join('\n')).toContain('Ambiguous account name');
+    const said = lines.join('\n');
+    expect(said).toContain('Ambiguous account name');
+    // With the ids, like every other ambiguity this server answers (#222):
+    // two accounts called the same thing are told apart by nothing else.
+    expect(said).toMatch(/Matches: [^\n]*\([0-9a-f-]{36}\)[^\n]*\([0-9a-f-]{36}\)/);
+    expect(said).toContain('Pass the id of the one you mean');
   }, 60_000);
 
   it('recognises an account whose own name has spaces in it', async () => {

@@ -39,6 +39,8 @@
  * Counterparts never carry it, in any combination. The category lives on the
  * row it was asked for.
  */
+import { ambiguous } from './resolvers.js';
+
 
 /** The parts of an account this needs. `getAccounts()` returns more. */
 export interface AccountLike {
@@ -100,10 +102,9 @@ export function findTransferTarget(options: {
     // account already refuses to guess between them (#155). Picking the first
     // silently would move money to whichever one came back first from the
     // database, which nobody can see from the reply.
-    throw new Error(
-      `Ambiguous account name "${payee}". Matches: ${matches.map((a) => a.name).join(', ')}. ` +
-        'Give the account id instead, or rename one of them.',
-    );
+    // The same sentence the resolvers use, with the ids: two accounts called
+    // the same thing are told apart by nothing else (#222).
+    throw ambiguous('account', payee, matches);
   }
   const target = matches[0];
 

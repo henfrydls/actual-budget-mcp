@@ -55,8 +55,35 @@ import { registerDeleteRule } from './write/delete-rule.js';
 import { withReadSync } from '../utils/read-sync.js';
 import { withWriteNotice } from '../utils/write-notice.js';
 import { withCurrentCurrency } from '../utils/currency.js';
+import { withToolset } from '../utils/toolset.js';
+
+/**
+ * The tools this server actually offered, for whoever needs to know (#222).
+ *
+ * The prompts do: each one tells the model to call three or four tools by
+ * name, and in the chat set two of those three prompts name nothing that is
+ * there. Rather than keeping a second copy of the rule, they ask what was
+ * registered, which is this.
+ */
+const offered = new Set<string>();
+
+export function offeredTools(): ReadonlySet<string> {
+  return offered;
+}
+
+/** Record what passes the toolset filter, without changing it. */
+function withRecord<T extends { tool: (...args: never[]) => unknown }>(server: T): T {
+  const wrapped = Object.create(server) as T;
+  const originalTool = server.tool.bind(server) as (...args: unknown[]) => unknown;
+  (wrapped as { tool: unknown }).tool = (...args: unknown[]) => {
+    if (typeof args[0] === 'string') offered.add(args[0]);
+    return originalTool(...args);
+  };
+  return wrapped;
+}
 
 export function registerAllTools(rawServer: McpServer): void {
+  offered.clear();
   // Every read tool pulls the server's changes first (#126). Here rather than
   // in fifteen files: this is the one place they all go through.
   // Two wrappers, one per direction. Reads pull the server's changes first
@@ -64,7 +91,13 @@ export function registerAllTools(rawServer: McpServer): void {
   // are about to convert (#141).
   // And `withInFlight` outside both, so leaving can wait for a call that is
   // half way through instead of closing the budget underneath it (#219).
-  const server = withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(rawServer))));
+  // `withToolset` outermost (#222). Inside the others it would behave the
+  // same, since nothing is registered either way, but a tool the set does
+  // not offer would be wrapped four times on its way to being dropped. The
+  // decision is made once, at the top.
+  const server = withToolset(
+    withRecord(withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(rawServer))))),
+  );
   // Read
   registerListAccounts(server);
   registerGetBudgetMonth(server);

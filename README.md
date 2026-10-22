@@ -351,6 +351,7 @@ accident, because it is there all day for a second client to point at.
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
+| `ACTUAL_TOOLSET` | No | `chat` offers the 17 everyday tools instead of all 43. Defaults to `full`. See [Choosing a toolset](#choosing-a-toolset) |
 
 ### Using a session token (OIDC servers)
 
@@ -676,7 +677,7 @@ consecutive pulls, so a remote server pays a redundant round trip.
 
 ### Read-only mode
 
-Set `ACTUAL_READ_ONLY=1` and the server exposes only the 15 read, analysis and
+Set `ACTUAL_READ_ONLY=1` and the server exposes only the 16 read, analysis and
 repair tools. The write tools are **not registered at all**, so they never
 appear in tool discovery, and an agent cannot be talked into calling something it
 cannot see.
@@ -686,7 +687,40 @@ budget data, and hiding it would leave a desynced budget with no way to recover.
 
 Writes are enabled by default. Read-only is opt-in.
 
-## Tools (41)
+### Choosing a toolset
+
+Every connection is sent the whole tool list before anything is asked. Measured
+with `scripts/measure-toolset.mjs`, which registers the real tools and asks a
+real client for `tools/list`:
+
+| `ACTUAL_TOOLSET` | Tools | `tools/list` |
+|---|---|---|
+| `full` (default) | 43 | 39.2 KiB |
+| `chat` | 17 | 17.0 KiB |
+| `chat` with `ACTUAL_READ_ONLY=1` | 7 | 5.3 KiB |
+| `full` with `ACTUAL_READ_ONLY=1` | 16 | 12.0 KiB |
+
+`chat` is the everyday set: reading the budget, recording and categorising
+transactions, and moving budgeted money between categories. What it leaves out
+is setting up and repairing a budget, which is creating and deleting accounts,
+categories, groups, payees and rules, along with `reconcile_currency_residual`
+and `repair_sync`.
+
+It is worth setting for two reasons, and the second is the bigger one: the
+context is spent whatever the conversation turns out to be about, and a model
+choosing between 43 descriptions picks the wrong tool more often than one
+choosing between 17.
+
+The prompts go with the tools they call. Each one is a short script naming
+three or four tools, so a prompt whose tools are not offered is not offered
+either. With `chat` that leaves none of them, and a server with no prompts
+does not advertise prompts at all: `prompts/list` answers that the method is
+not supported, rather than with an empty list.
+
+The two settings narrow together rather than fighting: read-only decides which
+tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
+
+## Tools (43)
 
 ### Read (10)
 

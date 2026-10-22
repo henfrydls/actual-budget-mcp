@@ -1,8 +1,39 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { offeredTools } from './tools/index.js';
 
-export function registerAllPrompts(server: McpServer): void {
-  server.prompt(
+/**
+ * The tools each prompt tells the model to call (#222).
+ *
+ * A prompt here is a short script: "use spending_projection, then
+ * budget_vs_actual, then tell me". With the chat toolset none of those three
+ * is offered, so `prompts/list` returned three prompts that name five tools
+ * `tools/list` does not have, and following one of them means calling
+ * something that is not there.
+ *
+ * So a prompt is offered only when everything it names is. The lists are
+ * here rather than inferred from the text because a prompt's text is prose,
+ * and a test crosses the two so neither can drift from the other.
+ */
+const NEEDS: Record<string, string[]> = {
+  'monthly-review': ['get_budget_summary', 'budget_vs_actual', 'spending_by_category'],
+  'spending-check': ['spending_projection', 'budget_vs_actual'],
+  'spending-patterns': ['monthly_summary', 'category_trends', 'get_budget_summary'],
+};
+
+/**
+ * Register the prompts whose tools are all there.
+ *
+ * `offered` defaults to what `registerAllTools` just registered, which is why
+ * the entry point registers the tools first. A test pins that order.
+ */
+export function registerAllPrompts(
+  server: McpServer,
+  offered: ReadonlySet<string> = offeredTools(),
+): void {
+  const has = (prompt: string) => (NEEDS[prompt] ?? []).every((tool) => offered.has(tool));
+
+  if (has('monthly-review')) server.prompt(
     'monthly-review',
     'Review your budget for a specific month: checks spending vs budget, highlights overspending, and suggests adjustments.',
     { month: z.string().optional().describe('Month to review (YYYY-MM or natural language). Defaults to current month.') },
@@ -34,7 +65,7 @@ Keep the analysis concise and actionable.`,
     },
   );
 
-  server.prompt(
+  if (has('spending-check')) server.prompt(
     'spending-check',
     'Quick check on current month spending. Are you on track, or overspending?',
     {},
@@ -62,7 +93,7 @@ Keep it short: just the key numbers and warnings.`,
     },
   );
 
-  server.prompt(
+  if (has('spending-patterns')) server.prompt(
     'spending-patterns',
     'Deep analysis of spending patterns and trends over the last few months.',
     { months: z.string().optional().describe('Number of months to analyze (default 6)') },

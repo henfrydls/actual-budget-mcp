@@ -15,6 +15,27 @@ function matchByName<T>(items: T[], nameOrId: string, getName: (item: T) => stri
 }
 
 /**
+ * The message for a name that matches more than one thing (#222).
+ *
+ * With the names alone it read `Matches: Ahorro, Ahorro`, which is a list of
+ * one name twice and nothing to act on. The ids are what make the choice
+ * possible, and they are what every other part of this server asks for when
+ * a name is not enough. `resolveCategoryId` has said it this way since #218;
+ * this is the same sentence for the rest.
+ */
+export function ambiguous(
+  label: string,
+  nameOrId: string,
+  matches: Array<{ id: string; name: string }>,
+): Error {
+  const described = matches.map((item) => `${item.name} (${item.id})`).join('; ');
+  return new Error(
+    `Ambiguous ${label} name "${nameOrId}". Matches: ${described}. Pass the id of the one ` +
+      `you mean.`,
+  );
+}
+
+/**
  * The same resolution, against a list already in hand.
  *
  * A batch resolves many names at once (#83), and calling the loading versions
@@ -38,8 +59,7 @@ export function resolveAccountIn(
     throw new Error(`No account found matching "${nameOrId}". Available: ${names}`);
   }
   if (matches.length > 1) {
-    const names = matches.map((a) => a.name).join(', ');
-    throw new Error(`Ambiguous account name "${nameOrId}". Matches: ${names}`);
+    throw ambiguous('account', nameOrId, matches);
   }
   return matches[0].id;
 }
@@ -47,6 +67,7 @@ export function resolveAccountIn(
 export function resolveCategoryIn(
   categories: Array<{ id: string; name: string; hidden?: boolean; group_id?: string }>,
   nameOrId: string,
+  groups: Array<{ id: string; name: string }> = [],
 ): string {
   const byId = categories.find((c) => c.id === nameOrId);
   if (byId) return byId.id;
@@ -59,8 +80,18 @@ export function resolveCategoryIn(
     throw new Error(`No category found matching "${nameOrId}". Available: ${names}`);
   }
   if (cats.length > 1) {
-    const names = cats.map((c) => c.name).join(', ');
-    throw new Error(`Ambiguous category name "${nameOrId}". Matches: ${names}`);
+    // With the groups in hand, say which group each one is in: two
+    // categories called the same thing in one budget are usually in
+    // different groups, and that is what tells them apart to a person
+    // reading the reply (#222).
+    throw ambiguous(
+      'category',
+      nameOrId,
+      cats.map((c) => {
+        const group = groups.find((g) => g.id === c.group_id)?.name;
+        return { id: c.id, name: group === undefined ? c.name : `${c.name} in ${group}` };
+      }),
+    );
   }
   return cats[0].id;
 }
@@ -185,10 +216,7 @@ export async function resolveAccountId(nameOrId: string): Promise<string> {
     );
   }
   if (matches.length > 1) {
-    const names = matches.map((a) => a.name).join(', ');
-    throw new Error(
-      `Ambiguous account name "${nameOrId}". Matches: ${names}`,
-    );
+    throw ambiguous('account', nameOrId, matches);
   }
 
   return matches[0].id;
@@ -329,10 +357,7 @@ export async function resolveCategoryGroupId(nameOrId: string): Promise<string> 
     );
   }
   if (matches.length > 1) {
-    const names = matches.map((g) => g.name).join(', ');
-    throw new Error(
-      `Ambiguous category group name "${nameOrId}". Matches: ${names}`,
-    );
+    throw ambiguous('category group', nameOrId, matches);
   }
 
   return matches[0].id;
@@ -362,10 +387,7 @@ export async function resolvePayeeId(nameOrId: string): Promise<string> {
     );
   }
   if (matches.length > 1) {
-    const names = matches.map((p) => p.name).join(', ');
-    throw new Error(
-      `Ambiguous payee name "${nameOrId}". Matches: ${names}`,
-    );
+    throw ambiguous('payee', nameOrId, matches);
   }
 
   return matches[0].id;

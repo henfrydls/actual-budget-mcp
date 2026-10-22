@@ -29,6 +29,11 @@
       "name": "Read-only mode",
       "description": "Set to 1 to expose only the read and analysis tools. The write tools are not registered at all, so they never reach tool discovery.",
       "envVar": "ACTUAL_READ_ONLY"
+    },
+    {
+      "name": "Toolset",
+      "description": "Set to chat to offer the 17 everyday tools instead of all 43: reading, recording and categorising transactions, and moving budgeted money. Setting up and repairing a budget is left out. Defaults to full.",
+      "envVar": "ACTUAL_TOOLSET"
     }
   ],
   "mcpServers": {

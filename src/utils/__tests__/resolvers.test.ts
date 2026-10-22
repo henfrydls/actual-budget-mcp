@@ -243,3 +243,99 @@ describe('resolvePayeeName', () => {
     expect(await resolvePayeeName('Savings')).toBeUndefined();
   });
 });
+
+/**
+ * An ambiguous name, answered with something to choose between (#222).
+ *
+ * `Matches: Ahorro, Ahorro` is one name printed twice and nothing to act on,
+ * and the server's own instructions say an ambiguous name is refused with
+ * the ids to choose from. `resolveCategoryId` has said it that way since
+ * #218; the rest said only the names.
+ */
+describe('what an ambiguous name answers with', () => {
+  it('names the accounts and their ids', async () => {
+    vi.mocked(api.getAccounts).mockResolvedValue([
+      { id: 'acc-1', name: 'Savings', closed: false, offbudget: false },
+      { id: 'acc-2', name: 'Savings', closed: false, offbudget: false },
+    ] as never);
+
+    await expect(resolveAccountId('Savings')).rejects.toThrow(
+      /Ambiguous account name "Savings"\. Matches: Savings \(acc-1\); Savings \(acc-2\)\. Pass the id/,
+    );
+  });
+
+  it('names the category groups and their ids', async () => {
+    vi.mocked(api.getCategoryGroups).mockResolvedValue([
+      { id: 'g-1', name: 'Everyday' },
+      { id: 'g-2', name: 'Everyday' },
+    ] as never);
+
+    await expect(resolveCategoryGroupId('Everyday')).rejects.toThrow(
+      /Matches: Everyday \(g-1\); Everyday \(g-2\)\. Pass the id/,
+    );
+  });
+
+  it('names the payees and their ids', async () => {
+    vi.mocked(api.getPayees).mockResolvedValue([
+      { id: 'p-1', name: 'Corner Shop' },
+      { id: 'p-2', name: 'Corner Shop' },
+    ] as never);
+
+    await expect(resolvePayeeId('Corner Shop')).rejects.toThrow(
+      /Matches: Corner Shop \(p-1\); Corner Shop \(p-2\)\. Pass the id/,
+    );
+  });
+
+  it('names the group in a batch, where the categories come as a list', async () => {
+    // `create_transactions` resolves against a list it already has rather
+    // than asking per row, so it takes a different path to the same
+    // sentence. It now passes the groups too, which is what tells two
+    // categories of the same name apart to whoever reads the reply.
+    const { resolveCategoryIn } = await import('../resolvers.js');
+
+    expect(() =>
+      resolveCategoryIn(
+        [
+          { id: 'c-1', name: 'Groceries', group_id: 'g-1', hidden: false },
+          { id: 'c-2', name: 'Groceries', group_id: 'g-2', hidden: false },
+        ],
+        'Groceries',
+        [
+          { id: 'g-1', name: 'Everyday' },
+          { id: 'g-2', name: 'Archive' },
+        ],
+      ),
+    ).toThrow(/Groceries in Everyday \(c-1\); Groceries in Archive \(c-2\)\. Pass the id/);
+  });
+
+  it('still names the ids without the groups, which is what it had before', async () => {
+    const { resolveCategoryIn } = await import('../resolvers.js');
+
+    expect(() =>
+      resolveCategoryIn(
+        [
+          { id: 'c-1', name: 'Groceries', group_id: 'g-1', hidden: false },
+          { id: 'c-2', name: 'Groceries', group_id: 'g-2', hidden: false },
+        ],
+        'Groceries',
+      ),
+    ).toThrow(/Matches: Groceries \(c-1\); Groceries \(c-2\)\. Pass the id/);
+  });
+
+  it('names the categories and their ids, with the group they are in', async () => {
+    // This one says more, and has since #218: which group each is in, and
+    // whether it is hidden. What it shares with the others is the ids.
+    vi.mocked(api.getCategories).mockResolvedValue([
+      { id: 'c-1', name: 'Groceries', group_id: 'g-1', hidden: false },
+      { id: 'c-2', name: 'Groceries', group_id: 'g-2', hidden: false },
+    ] as never);
+    vi.mocked(api.getCategoryGroups).mockResolvedValue([
+      { id: 'g-1', name: 'Everyday' },
+      { id: 'g-2', name: 'Archive' },
+    ] as never);
+
+    await expect(resolveCategoryId('Groceries')).rejects.toThrow(
+      /Groceries in Everyday \(c-1\); Groceries in Archive \(c-2\)\. Pass the id/,
+    );
+  });
+});

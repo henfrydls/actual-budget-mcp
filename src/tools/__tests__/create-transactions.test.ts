@@ -5,6 +5,8 @@ vi.mock('@actual-app/api', () => ({
   default: {},
   getAccounts: vi.fn(),
   getCategories: vi.fn(),
+  // Read for the ambiguity message, which names the group each match is in.
+  getCategoryGroups: vi.fn().mockResolvedValue([]),
   getTransactions: vi.fn(),
   addTransactions: vi.fn(),
   getPayees: vi.fn(),
