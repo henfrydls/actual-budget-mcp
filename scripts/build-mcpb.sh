@@ -153,6 +153,14 @@ node --input-type=module -e "
 cp "$ROOT/README.md" "$STAGE/README.md"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 
+# The icon, at the path the manifest names. The packer refuses anything that
+# is not a PNG, which is why the repository keeps both: the SVG is the mark
+# itself, and this is the raster the bundle needs.
+ICON=$(node -p "require('$ROOT/manifest.json').icon || ''")
+if [ -n "$ICON" ]; then
+  cp "$ROOT/assets/icon.png" "$STAGE/$ICON"
+fi
+
 npx --yes @anthropic-ai/mcpb@2.1.2 pack "$STAGE" "$OUT"
 
 # Read back out of the archive, which is the only thing that ships.

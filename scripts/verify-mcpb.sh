@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Check a packed .mcpb carries a SQLite binary for every platform the manifest
-# declares, in both architectures.
+# declares, in both architectures, and the icon the manifest points at.
 #
 # Its own script so CI can run it against a deliberately broken bundle. A check
 # that only ever runs on a good one cannot be shown to work, and this one
@@ -24,12 +24,22 @@ node --input-type=module -e '
   // wrong made it unzip the manifest.
   const [bundle, manifestPath] = process.argv.slice(1);
 
-  const listed = execFileSync("unzip", ["-Z1", bundle], { encoding: "utf8" })
-    .split("\n")
-    .filter((name) => name.endsWith(".node"));
+  const inside = execFileSync("unzip", ["-Z1", bundle], { encoding: "utf8" }).split("\n");
+  const listed = inside.filter((name) => name.endsWith(".node"));
 
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const declared = manifest.compatibility.platforms;
+
+  // The icon is the first thing anyone sees of this, and it is a path into
+  // the bundle rather than something the manifest carries. The packer checks
+  // it against the staging directory; what ships is the zip.
+  if (manifest.icon && !inside.includes(manifest.icon)) {
+    console.error(
+      "manifest.json points at the icon " + manifest.icon +
+      " and the packed bundle does not contain it"
+    );
+    process.exit(1);
+  }
 
   // Both architectures, not just the platform prefix. A review packed a bundle
   // carrying only the arm64 builds and an earlier version said `verified 3`
@@ -55,5 +65,8 @@ node --input-type=module -e '
     );
     process.exit(1);
   }
-  console.error("verified " + listed.length + " SQLite binaries inside the bundle");
+  console.error(
+    "verified " + listed.length + " SQLite binaries inside the bundle" +
+    (manifest.icon ? " and its icon" : "")
+  );
 ' "$BUNDLE" "$MANIFEST"
