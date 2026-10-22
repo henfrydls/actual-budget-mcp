@@ -72,7 +72,7 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
         0,
       );
       const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
-      category = await api.createCategory({ name: 'Reembolsos', group_id: group } as never);
+      category = await api.createCategory({ name: 'Refunds', group_id: group } as never);
       await api.addTransactions(account, [
         { date: '2026-07-10', amount: -40000, category },
         { date: '2026-08-10', amount: 243000, category },
@@ -80,7 +80,7 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
     }, 'trend-sign');
 
     const result = await handlerFor(registerCategoryTrends)({
-      category: 'Reembolsos',
+      category: 'Refunds',
       months: 2,
       month: '2026-08',
     });
@@ -103,7 +103,7 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
         0,
       );
       const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
-      category = await api.createCategory({ name: 'Reembolsos', group_id: group } as never);
+      category = await api.createCategory({ name: 'Refunds', group_id: group } as never);
       await api.addTransactions(account, [
         { date: '2026-07-10', amount: 243000, category },
         { date: '2026-08-10', amount: -40000, category },
@@ -111,7 +111,7 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
     }, 'trend-sign-other-way');
 
     const result = await handlerFor(registerCategoryTrends)({
-      category: 'Reembolsos',
+      category: 'Refunds',
       months: 2,
       month: '2026-08',
     });
@@ -161,7 +161,7 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
       );
       const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
       category = await api.createCategory({ name: 'Comida', group_id: group } as never);
-      const other = await api.createCategory({ name: 'Reembolsos', group_id: group } as never);
+      const other = await api.createCategory({ name: 'Refunds', group_id: group } as never);
       await api.addTransactions(account, [
         { date: '2026-07-10', amount: -40000, category: other },
         { date: '2026-08-10', amount: 243000, category: other },
@@ -178,7 +178,7 @@ describe.skipIf(skip)('a change of direction, and the budget currency', () => {
     expect(text).toMatch(/Comida[^\n]*Change: \+5\.6%/);
     // A category that received money is not ranked among the top spenders at
     // all (#131), so the one that crossed signs must not appear here.
-    expect(text).not.toContain('Reembolsos');
+    expect(text).not.toContain('Refunds');
     expect(text).not.toContain('+507.5%');
   }, 60_000);
 

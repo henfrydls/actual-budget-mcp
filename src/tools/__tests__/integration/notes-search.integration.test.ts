@@ -35,14 +35,14 @@ describe.skipIf(skip)('searching notes (#82)', () => {
       cat = await api.createCategory({ name: 'Comida', group_id: g } as any);
     });
     await api.addTransactions(checking, [
-      { date: '2026-06-05', amount: -100, notes: 'Reembolso #Soventix RP-1234' },
+      { date: '2026-06-05', amount: -100, notes: 'Gasto #Reimbursable REF-1234' },
       { date: '2026-06-06', amount: -200, notes: 'nada que ver' },
       { date: '2026-06-07', amount: -300 },
-      { date: '2026-06-08', amount: -400, notes: 'otro #soventix en minúscula' },
+      { date: '2026-06-08', amount: -400, notes: 'otro #reimbursable en minúscula' },
       {
         date: '2026-06-09',
         amount: -500,
-        notes: 'Cena #Soventix con el equipo',
+        notes: 'Cena #Reimbursable con el equipo',
         subtransactions: [
           { amount: -300, category: cat, notes: 'mi parte' },
           { amount: -200, category: cat },
@@ -62,9 +62,9 @@ describe.skipIf(skip)('searching notes (#82)', () => {
   it('finds a tag in an ordinary note', async () => {
     await budget();
 
-    const report = await search('#Soventix');
+    const report = await search('#Reimbursable');
 
-    expect(report).toMatch(/RP-1234/);
+    expect(report).toMatch(/REF-1234/);
     expect(report).not.toMatch(/nada que ver/);
   });
 
@@ -73,7 +73,7 @@ describe.skipIf(skip)('searching notes (#82)', () => {
 
     // Spanish notes are the case this exists for, and folding only one side
     // would match text the reader cannot see.
-    expect(await search('#SOVENTIX')).toMatch(/minúscula/);
+    expect(await search('#REIMBURSABLE')).toMatch(/minúscula/);
     expect(await search('MINÚSCULA')).toMatch(/minúscula/);
   });
 
@@ -83,10 +83,10 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     // exactly where it lands.
     await budget();
 
-    const report = await search('Cena #Soventix');
+    const report = await search('Cena #Reimbursable');
 
     expect(report).toMatch(/mi parte/);
-    expect(report).toMatch(/Cena #Soventix con el equipo/);
+    expect(report).toMatch(/Cena #Reimbursable con el equipo/);
   });
 
   it('shows the parent note on every part, in its own column', async () => {
@@ -99,7 +99,7 @@ describe.skipIf(skip)('searching notes (#82)', () => {
 
     expect(report).toMatch(/Split of/);
     // Both parts carry it, including the one with no note of its own.
-    expect(report.match(/Cena #Soventix con el equipo/g)?.length).toBe(2);
+    expect(report.match(/Cena #Reimbursable con el equipo/g)?.length).toBe(2);
   });
 
   it('leaves the column empty for transactions that are not splits', async () => {
@@ -114,12 +114,12 @@ describe.skipIf(skip)('searching notes (#82)', () => {
       end_date: '2026-06-30',
     });
 
-    const ordinary = report.split('\n').find((l) => l.includes('RP-1234'))!;
+    const ordinary = report.split('\n').find((l) => l.includes('REF-1234'))!;
     const part = report.split('\n').find((l) => l.includes('mi parte'))!;
 
     expect(ordinary).toBeTruthy();
     expect(ordinary.trimEnd()).toMatch(/[✓✗]$/);
-    expect(part).toMatch(/Cena #Soventix con el equipo/);
+    expect(part).toMatch(/Cena #Reimbursable con el equipo/);
   });
 
   it('marks a split part even when the parent has no note', async () => {
@@ -200,14 +200,14 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     // The cell, not only the heading: moving the value without the heading
     // leaves the order assertion true and the table misaligned.
     const header = report.split('\n').find((l) => l.includes('Split of'))!;
-    const part = report.split('\n').find((l) => l.includes('Cena #Soventix con el equipo'))!;
-    expect(part.indexOf('Cena #Soventix con el equipo')).toBeGreaterThan(
+    const part = report.split('\n').find((l) => l.includes('Cena #Reimbursable con el equipo'))!;
+    expect(part.indexOf('Cena #Reimbursable con el equipo')).toBeGreaterThan(
       header.indexOf('Cleared'),
     );
   });
 
   it('searches every date when none is given, as the tag carries no date', async () => {
-    // Looking for #Soventix to chase a reimbursement is not a question about
+    // Looking for #Reimbursable to chase a reimbursement is not a question about
     // this month, and answering with the month's rows reads as "no
     // reimbursements pending".
     let checking = '';
@@ -215,11 +215,11 @@ describe.skipIf(skip)('searching notes (#82)', () => {
       checking = await api.createAccount({ name: 'Checking', type: 'checking' } as any, 0);
     });
     await api.addTransactions(checking, [
-      { date: '2019-03-02', amount: -100, notes: 'viejo #Soventix' },
-      { date: '2027-11-30', amount: -200, notes: 'futuro #Soventix' },
+      { date: '2019-03-02', amount: -100, notes: 'viejo #Reimbursable' },
+      { date: '2027-11-30', amount: -200, notes: 'futuro #Reimbursable' },
     ] as any);
 
-    const report = await getTransactionsReport({ notes_contains: '#Soventix' });
+    const report = await getTransactionsReport({ notes_contains: '#Reimbursable' });
 
     expect(report).toMatch(/viejo/);
     expect(report).toMatch(/futuro/);
@@ -232,7 +232,7 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     // term surrounded by spaces inside the note would match either way, which
     // is how the first version of this test passed without the trimming.
     expect(await search('minúscula ')).toMatch(/minúscula/);
-    expect(await search(' Reembolso')).toMatch(/RP-1234/);
+    expect(await search(' Gasto')).toMatch(/REF-1234/);
   });
 
   it('treats a blank search as no search at all, window included', async () => {
@@ -299,18 +299,18 @@ describe.skipIf(skip)('searching notes (#82)', () => {
     // its far end was ever tested.
     const other = await api.createAccount({ name: 'Savings', type: 'savings' } as any, 0);
     await api.addTransactions(other, [
-      { date: '2026-06-06', amount: -50, notes: 'otra cuenta #Soventix' },
+      { date: '2026-06-06', amount: -50, notes: 'otra cuenta #Reimbursable' },
     ] as any);
 
     const report = await getTransactionsReport({
-      notes_contains: '#Soventix',
+      notes_contains: '#Reimbursable',
       account: 'Checking',
       start_date: '2026-06-06',
       end_date: '2026-06-08',
     });
 
     expect(report).toMatch(/minúscula/);
-    expect(report).not.toMatch(/RP-1234/);
+    expect(report).not.toMatch(/REF-1234/);
     expect(report).not.toMatch(/otra cuenta/);
     expect(report).not.toMatch(/Cena/);
     // Inside the window and inside the account, and without the tag. Removing

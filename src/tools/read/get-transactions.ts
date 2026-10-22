@@ -50,7 +50,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // past the statement date — stayed invisible. Worse than before the change,
   // because the header now reads `1900-01-01 to ...` and looks exhaustive.
   // Searching for a tag carries no date, exactly as "what still needs a
-  // category?" does not: looking for #Soventix to chase a reimbursement is not
+  // category?" does not: looking for #Reimbursable to chase a reimbursement is not
   // a question about this month. Answering it with the month's rows returns
   // "nothing" and reads as "no reimbursements pending", which is the most
   // likely way to be misled by this tool.
@@ -234,7 +234,7 @@ export async function getTransactionsReport(input: GetTransactionsInput): Promis
   // names collide, so it steered people onto the path that failed.
   //
   // Names keep matching on a substring, which is what they have always done
-  // and what makes `category: "Super"` find "Supermercado". An id is matched
+  // and what makes `category: "Mark"` find "Market". An id is matched
   // whole: a partial id is not a search, it is a typo.
   let categoryNotFound: string | undefined;
   // Trimmed once, and the same value decides whether there is a filter and

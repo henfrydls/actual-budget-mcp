@@ -101,7 +101,7 @@ export function registerReconcileAccount(server: McpServer): void {
       account: z.string().describe('Account name or ID'),
       expected_balance: z
         .number()
-        .describe('Balance the bank reports for this account (human amount, e.g., 45230.18)'),
+        .describe('Balance the bank reports for this account (human amount, e.g., 12345.67)'),
       as_of: z
         .string()
         .optional()

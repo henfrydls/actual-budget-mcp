@@ -110,14 +110,14 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
     const before = await figures(thisMonth, [groceries, dining]);
     const txnsBefore = await api.getTransactions(acctId, '1900-01-01', '2999-12-31');
 
-    const result = await handlerFor()({ from: 'Groceries', to: 'Dining', amount: 114.06 });
+    const result = await handlerFor()({ from: 'Groceries', to: 'Dining', amount: 125.50 });
 
     expect(result.isError).toBeFalsy();
     const after = await figures(thisMonth, [groceries, dining]);
 
     // Both figures move by exactly the amount asked for.
-    expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted - 11406);
-    expect(after.cats[1].budgeted).toBe(before.cats[1].budgeted + 11406);
+    expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted - 12550);
+    expect(after.cats[1].budgeted).toBe(before.cats[1].budgeted + 12550);
 
     // The month's total is untouched: this moves money, it does not add any.
     expect(after.total).toBe(before.total);
@@ -128,7 +128,7 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
     expect(txnsAfter.length).toBe(txnsBefore.length);
 
     const text = result.content[0].text;
-    expect(text).toContain('114.06');
+    expect(text).toContain('125.50');
     expect(text).toContain('No transaction was created');
   }, 60_000);
 

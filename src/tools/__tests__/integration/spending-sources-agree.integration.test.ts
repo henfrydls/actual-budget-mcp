@@ -47,7 +47,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
   let offBudget = '';
   let comida = '';
   let transporte = '';
-  let reembolsos = '';
+  let refunds = '';
   let sinPresupuesto = '';
 
   beforeAll(async () => {
@@ -58,7 +58,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
       const g = await api.createCategoryGroup({ name: 'Gastos' } as never);
       comida = await api.createCategory({ name: 'Comida', group_id: g } as never);
       transporte = await api.createCategory({ name: 'Transporte', group_id: g } as never);
-      reembolsos = await api.createCategory({ name: 'Reembolsos', group_id: g } as never);
+      refunds = await api.createCategory({ name: 'Refunds', group_id: g } as never);
       sinPresupuesto = await api.createCategory({ name: 'Sin Presupuesto', group_id: g } as never);
 
       await api.addTransactions(onBudget, [
@@ -72,7 +72,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
           ],
         },
         { date: '2026-08-11', amount: -20000, category: comida },
-        { date: '2026-08-12', amount: 2011300, category: reembolsos },
+        { date: '2026-08-12', amount: 2011300, category: refunds },
         { date: '2026-08-13', amount: -33000, category: sinPresupuesto },
       ] as never);
       // Categorised, and on an account outside the budget.
@@ -142,7 +142,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
     const result = await handlerFor(registerBudgetVsActual)({ month: '2026-08' });
     const text = result.content[0].text;
 
-    const line = text.split('\n').find((l) => l.includes('Reembolsos')) ?? '';
+    const line = text.split('\n').find((l) => l.includes('Refunds')) ?? '';
     expect(line).toContain('money came in');
     expect(line).not.toContain('Under Budget');
 
@@ -157,7 +157,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
     const result = await handlerFor(registerSpendingProjection)({ month: '2026-08' });
     const text = result.content[0].text;
 
-    const line = text.split('\n').find((l) => l.includes('Reembolsos')) ?? '';
+    const line = text.split('\n').find((l) => l.includes('Refunds')) ?? '';
     expect(line).toContain('money came in');
     expect(line).not.toContain('-20,113.00');
     expect(line).not.toContain('OVER');
@@ -177,7 +177,7 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
 
   it('reports a month that only received money as received, not spent', async () => {
     const result = await handlerFor(registerCategoryTrends)({
-      category: 'Reembolsos',
+      category: 'Refunds',
       months: 1,
       month: '2026-08',
     });
@@ -209,6 +209,6 @@ describe.skipIf(skip)('spending figures agree with the budget module', () => {
     const text = result.content[0].text;
 
     expect(text).toContain('Comida');
-    expect(text).not.toContain('Reembolsos');
+    expect(text).not.toContain('Refunds');
   }, 60_000);
 });

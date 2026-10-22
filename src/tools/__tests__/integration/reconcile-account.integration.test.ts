@@ -64,7 +64,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
   }
 
   const ordinary = [
-    { date: '2026-09-01', amount: -125050, payee_name: 'Supermercado', cleared: true },
+    { date: '2026-09-01', amount: -125050, payee_name: 'Market', cleared: true },
     { date: '2026-09-03', amount: -48725, payee_name: 'Gasolina', cleared: true },
     { date: '2026-09-05', amount: 4500000, payee_name: 'Salario', cleared: true },
     { date: '2026-09-08', amount: -230075, payee_name: 'Restaurante', cleared: true },
@@ -283,7 +283,7 @@ describe.skipIf(skip)('reconcile_account against the real engine', () => {
     // account you are already looking at.
     await budgetWithRows('rec-self', [
       ...ordinary,
-      { date: '2026-09-12', amount: 77700, payee_name: 'Reembolso', cleared: true },
+      { date: '2026-09-12', amount: 77700, payee_name: 'Gasto', cleared: true },
     ]);
 
     const result = await handlerFor()({

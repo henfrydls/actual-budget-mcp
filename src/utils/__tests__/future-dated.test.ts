@@ -11,7 +11,7 @@ vi.mock('@actual-app/api', () => ({
     return { data: [] };
   }),
   getPayees: vi.fn().mockResolvedValue([
-    { id: 'p-1', name: 'Supermercado Nacional' },
+    { id: 'p-1', name: 'Market East' },
   ]),
   utils: {
     amountToInteger: (a: number) => Math.round(a * 100),
@@ -81,7 +81,7 @@ describe('rowsDatedAfterToday: the question it asks', () => {
     const { rows, total } = await rowsDatedAfterToday('acc-1', '2026-09-26');
 
     expect(total).toBe(-12000);
-    expect(rows[0].payeeName).toBe('Supermercado Nacional');
+    expect(rows[0].payeeName).toBe('Market East');
     expect(rows[1].payeeName).toBeUndefined();
   });
 

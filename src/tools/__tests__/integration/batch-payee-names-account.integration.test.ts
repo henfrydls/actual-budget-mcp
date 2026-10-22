@@ -100,7 +100,7 @@ describe.skipIf(skip)('a batch with payees that name accounts', () => {
           category: c.category,
           date: c.date,
         })),
-        { account: 'Checking', amount: -90, payee: 'Supermercado', category: 'Comida', date: '2026-09-09', imported_id: 'bank-90' },
+        { account: 'Checking', amount: -90, payee: 'Market', category: 'Comida', date: '2026-09-09', imported_id: 'bank-90' },
         { account: 'Savings', amount: -100, payee: 'Cafe', date: '2026-09-10' },
       ],
     });
@@ -253,14 +253,14 @@ describe.skipIf(skip)('a month of records in one batch', () => {
       // money is still his and should not read as spending.
       id.Fund = await api.createAccount({ name: 'Family Fund', offbudget: true } as never, 0);
       const group = await api.createCategoryGroup({ name: 'Gastos' } as never);
-      await api.createCategory({ name: 'Supermercado', group_id: group } as never);
+      await api.createCategory({ name: 'Market', group_id: group } as never);
       inversion = await api.createCategory({ name: 'Family Fund', group_id: group } as never);
     }, 'batch-real-month');
 
     const lines = await createTransactions({
       transactions: [
-        { account: 'Card', amount: -4280.5, payee: 'Supermercado Nacional', category: 'Supermercado', date: '2026-09-03' },
-        { account: 'Card', amount: -1950, payee: 'Supermercado Bravo', category: 'Supermercado', date: '2026-09-11' },
+        { account: 'Card', amount: -4280.5, payee: 'Market East', category: 'Market', date: '2026-09-03' },
+        { account: 'Card', amount: -1950, payee: 'Market West', category: 'Market', date: '2026-09-11' },
         // Paying the card off: money moving between two budgeted accounts, so
         // it is not spending and must not be counted twice.
         { account: 'Bank', amount: -6230.5, payee: 'Card', date: '2026-09-25' },
