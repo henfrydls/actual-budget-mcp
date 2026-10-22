@@ -757,7 +757,7 @@ Writes are enabled by default. Read-only is opt-in.
 | `update_budget_amount` | Set a budget amount, or add to it | "Put 10,000 more into Salud this month" |
 | `transfer_between_categories` | Move budgeted money between categories, creating no transaction | "Move 114.06 from Reembolsos pendientes to Familia" |
 | `hold_for_next_month` | Keep part of a month's unassigned money for the next month | "Hold 5,000 of what is left for next month" |
-| `set_category_carryover` | Carry a category's overspending forward instead of taking it off the top | "Let Restaurantes carry its own overspending from now on" |
+| `set_category_carryover` | Carry a category's overspending forward instead of taking it off the top | "Let Groceries carry its own overspending from now on" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
 | `reconcile_currency_residual` | Clear accumulated FX-rate residual | "Reconcile my USD card to 213.82 USD" |
