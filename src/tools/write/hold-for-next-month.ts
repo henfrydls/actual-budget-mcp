@@ -46,7 +46,7 @@ export function registerHoldForNextMonth(server: McpServer): void {
       'instead of assigning it now. Adds to whatever is already held; pass 0 to ' +
       'release it all. To give money to a category, or to take it back, use ' +
       'transfer_between_categories; this one assigns nothing, it only keeps what ' +
-      'is left over from being spent this month.',
+      'is left over from being assigned this month.',
     {
       amount: z
         .number()

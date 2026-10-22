@@ -780,7 +780,7 @@ Writes are enabled by default. Read-only is opt-in.
 
 **hold_for_next_month** - `amount` (required): added to whatever is already held, `0` releases the whole hold | `month` (optional, defaults to the current month). Actual's own call adds rather than sets and holds what the month has without saying so, so the reply gives the total held and says when it held less than was asked for, or nothing at all. An amount that rounds to zero is refused rather than treated as a release. Envelope budgets only: a tracking budget has no money to assign and nothing to hold.
 
-**set_category_carryover** - `category` (required) | `enabled` (required) | `month` (optional, defaults to the current month). Not one month: Actual writes the flag into every month from the one given to the last the budget has, so the reply says which of them changed, where it reaches, and that months created later start without it. Refuses an income category, which has no overspending to carry.
+**set_category_carryover** - `category` (required) | `enabled` (required) | `month` (optional, defaults to the current month). Not one month: Actual writes the flag into every month from the one given to the last month it has created, so the reply says which of them changed, where it reaches, and that months created later start without it. That last month is one past what Actual's API will list or read, so it is written and the reply says it could not be checked. Refuses an income category, which has no overspending to carry, and a tracking budget, which has no envelopes to carry it into.
 
 **recategorize_transaction** - `transaction_id` (required) | `category` (required)
 

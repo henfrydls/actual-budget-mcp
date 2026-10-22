@@ -19,8 +19,12 @@ vi.mock('@actual-app/api', () => ({
     integerToAmount: (c: number) => c / 100,
   },
 }));
+const send = vi.fn().mockResolvedValue({ start: '2026-10', end: '2026-10' });
 vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
+  // The bounds handler, answering a one-month budget so these stay about the
+  // read-back rather than about the reach.
+  getInternal: () => ({ send: (...a: unknown[]) => send(...a) }),
 }));
 
 import { registerSetCategoryCarryover } from '../write/set-category-carryover.js';

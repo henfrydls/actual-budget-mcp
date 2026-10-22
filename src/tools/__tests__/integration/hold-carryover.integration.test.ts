@@ -4,11 +4,24 @@ vi.mock('@actual-app/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@actual-app/api')>();
   return { ...actual, sync: vi.fn().mockResolvedValue(undefined) };
 });
-vi.mock('../../../connection.js', () => ({
-  ensureConnection: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../../../connection.js', async () => {
+  // `getInternal` too, and the real one: `set_category_carryover` asks the
+  // engine for the budget's bounds, because the public month list is one
+  // month short of what the write reaches (#138, round three).
+  const real = await vi.importActual<typeof import('@actual-app/api')>('@actual-app/api');
+  return {
+    ensureConnection: vi.fn().mockResolvedValue(undefined),
+    getInternal: () => (real as unknown as { internal: unknown }).internal,
+  };
+});
 
-import { initTestEngine, shutdownTestEngine, createFreshBudget, api } from './actual-engine.js';
+import {
+  initTestEngine,
+  shutdownTestEngine,
+  createFreshBudget,
+  api,
+  testInternal,
+} from './actual-engine.js';
 import { registerHoldForNextMonth } from '../../write/hold-for-next-month.js';
 import { registerSetCategoryCarryover } from '../../write/set-category-carryover.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../../types.js';
@@ -37,6 +50,14 @@ const thisMonth = `${now.getFullYear()}-${pad(now.getMonth())}`;
 const monthAt = (offset: number) => {
   const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
   return `${d.getFullYear()}-${pad(d.getMonth())}`;
+};
+
+/** The last month Actual has created, which `getBudgetMonths` does not list. */
+const lastCreated = async () => {
+  const bounds = (await testInternal().send('get-budget-bounds' as never, undefined as never)) as {
+    end: string;
+  };
+  return bounds.end;
 };
 
 const month = async () => (await api.getBudgetMonth(thisMonth)) as unknown as BudgetMonth;
@@ -209,7 +230,7 @@ describe.skipIf(skip)('hold_for_next_month and set_category_carryover', () => {
       expect(result.content[0].text).toContain('tracking budget');
       expect(result.content[0].text).toContain('Nothing was changed');
     } finally {
-      await api.setPreference('budgetType', 'rollover');
+      await api.setPreference('budgetType', 'envelope');
     }
   }, 60_000);
 
@@ -259,8 +280,18 @@ describe.skipIf(skip)('hold_for_next_month and set_category_carryover', () => {
     expect(text).toContain(`Changed in ${from} and ${reach[reach.length - 1]}.`);
     expect(text).toContain(`Already on in ${reach.length - 2} of the other months.`);
     expect(text).not.toContain('already had carryover');
-    expect(text).toContain(`from ${thisMonth} to ${reach[reach.length - 1]}`);
+    // The reach is the last month Actual has created, not the last one its
+    // API will list: measured, those differ by one, and the reply used to
+    // name the wrong month and then say the next would start without the
+    // flag, which had just been given it.
+    const written = await lastCreated();
+    expect(written > reach[reach.length - 1]).toBe(true);
+    expect(text).toContain(`from ${thisMonth} to ${written}`);
     expect(text).toContain('Months created after that start without it');
+    expect(text).toContain(
+      `The figures above stop at ${reach[reach.length - 1]}: Actual's API refuses to read its ` +
+        `last month, so ${written} is written and not checked here.`,
+    );
   }, 120_000);
 
   it('counts them instead of naming them when there are many', async () => {
@@ -286,6 +317,23 @@ describe.skipIf(skip)('hold_for_next_month and set_category_carryover', () => {
     expect(text).toContain('in every month to');
     expect(text).not.toContain('Changed in');
   }, 120_000);
+
+  it('refuses a tracking budget, where there is nothing to carry', async () => {
+    // Measured: there the month comes back with `toBudget` and
+    // `forNextMonth` null, and the flag goes into rows nothing reads. The
+    // reply described twelve months of a mechanism that budget does not
+    // have.
+    await api.setPreference('budgetType', 'tracking');
+    try {
+      const result = await carryover()({ category: 'Groceries', enabled: true });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('tracking budget');
+      expect(result.content[0].text).toContain('Nothing was changed');
+    } finally {
+      await api.setPreference('budgetType', 'envelope');
+    }
+  }, 60_000);
 
   it('refuses an income category by name, not by id', async () => {
     const income = (await api.getCategoryGroups()).find((g) => g.is_income);

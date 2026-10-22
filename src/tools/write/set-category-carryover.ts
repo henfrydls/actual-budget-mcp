@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import * as api from '@actual-app/api';
-import { ensureConnection } from '../../connection.js';
+import { ensureConnection, getInternal } from '../../connection.js';
 import { resolveMonth } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import { isIncome } from '../../utils/income.js';
@@ -29,20 +29,70 @@ function carryoverOf(
 }
 
 /**
- * The months this write lands in, which is never only the one asked for.
+ * The months this write lands in, which is never only the one asked for, and
+ * the ones that can be read back afterwards, which is not all of them.
  *
  * `setCategoryCarryover` writes the flag into every month from the one given
  * through the last month the budget has: `rangeInclusive(startMonth, latest
  * createdMonth)` inside a single batch. Measured: turning it on in October
- * left it on in every month to the following September, including ones where
- * it had been turned off by hand.
+ * left a row in `zero_budgets` for every month to the following October, the
+ * thirteenth included.
  *
- * `getBudgetMonths()` is that same list as the public API reports it, and a
- * month outside it cannot be read at all, so it is both the reach of the
- * write and the limit of what can be read back.
+ * `getBudgetMonths()` is one month short of that, and not by accident:
+ * `api/budget-months` asks the same handler for the bounds and then calls
+ * `monthUtils.range(start, end)`, which excludes the end. So the public list
+ * ended at 2027-09 while the write reached 2027-10, and the reply named the
+ * wrong last month and said the next one would start without the flag, when
+ * that month had just been given it.
+ *
+ * `get-budget-bounds` is where the real end comes from. It is an internal
+ * handler, reached the way `repair_sync` and `transfer_between_categories`
+ * reach theirs, and it is the same call `getBudgetMonths()` makes one step
+ * further down, so it costs nothing extra and creates nothing that was not
+ * created already. If it ever goes away, the listed months are still an
+ * answer, one month short, rather than an error.
+ *
+ * The last month cannot be read back: `api/budget-month` validates against
+ * that same exclusive list and answers "No budget exists" for it. So it is
+ * written and not checked, and the reply says so rather than counting it.
  */
-async function monthsTouched(from: string): Promise<string[]> {
-  return (await api.getBudgetMonths()).filter((month) => month >= from);
+async function monthsTouched(
+  from: string,
+): Promise<{ written: string[]; readable: string[]; end: string }> {
+  const readable = (await api.getBudgetMonths()).filter((month) => month >= from);
+  const end = await lastCreatedMonth(readable, from);
+  return { written: monthsBetween(from, end), readable, end };
+}
+
+/** The last month Actual has created, which is one past what it will list. */
+async function lastCreatedMonth(readable: string[], from: string): Promise<string> {
+  const listed = readable[readable.length - 1] ?? from;
+  try {
+    const bounds = (await getInternal().send('get-budget-bounds' as never, undefined as never)) as {
+      end?: string;
+    };
+    if (typeof bounds?.end === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(bounds.end)) {
+      return bounds.end > listed ? bounds.end : listed;
+    }
+  } catch {
+    // Behind a caret range like every other internal handler this server
+    // reaches for. Being one month short is better than failing a write
+    // that has already happened.
+  }
+  return listed;
+}
+
+/** Every month from one to another, both ends included. */
+function monthsBetween(from: string, to: string): string[] {
+  const months: string[] = [];
+  const [year, month] = from.split('-').map(Number);
+  for (let i = 0; i < 600; i += 1) {
+    const at = new Date(year, month - 1 + i, 1);
+    const name = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, '0')}`;
+    months.push(name);
+    if (name >= to) break;
+  }
+  return months;
 }
 
 /** `2026-10, 2026-11 and 2027-01`, or a count and the two ends when there are many. */
@@ -116,6 +166,18 @@ export function registerSetCategoryCarryover(server: McpServer): void {
         // others are in it.
         const run = async (): Promise<ToolReply> => {
           const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+          // A tracking budget has no envelopes, so there is no overspending
+          // to carry into one: measured, the month comes back with
+          // `toBudget` and `forNextMonth` null there, and the flag is
+          // written into rows nothing reads. The reply used to describe
+          // twelve months of a mechanism that budget does not have.
+          if (before?.toBudget === null || before?.forNextMonth === null) {
+            throw new Error(
+              `Carrying overspending forward is part of an envelope budget, and this is a ` +
+                `tracking budget: a category's overspending is not carried anywhere. Nothing ` +
+                `was changed.`,
+            );
+          }
           const was = carryoverOf(before, categoryId);
           if (!was) throw new Error(`Category "${category}" has no budget row in ${month}.`);
           // The engine refuses an income category, in a message that names it
@@ -133,9 +195,9 @@ export function registerSetCategoryCarryover(server: McpServer): void {
           // about: saying "already had carryover on" while turning it on in
           // nine other months is a true sentence about a small part of what
           // just happened.
-          const months = await monthsTouched(month);
+          const { written, readable, end: lastWritten } = await monthsTouched(month);
           const flagBefore = new Map<string, boolean>();
-          for (const touched of months) {
+          for (const touched of readable) {
             const read =
               touched === month
                 ? was
@@ -167,7 +229,7 @@ export function registerSetCategoryCarryover(server: McpServer): void {
           // Read back rather than counted from what was asked for, the same
           // way the one month is.
           const changed: string[] = [];
-          for (const touched of months) {
+          for (const touched of readable) {
             const read =
               touched === month
                 ? now
@@ -176,13 +238,17 @@ export function registerSetCategoryCarryover(server: McpServer): void {
               changed.push(touched);
             }
           }
-          const already = months.length - changed.length;
-          const last = months[months.length - 1];
+          const already = readable.length - changed.length;
+          // The months the write reached that cannot be read back. Normally
+          // one, the last: Actual's API refuses to read it, so it is written
+          // and not checked rather than counted as unchanged.
+          const unchecked = written.filter((m) => !readable.includes(m));
+          const lastRead = readable[readable.length - 1] ?? month;
 
           const lines = [
             changed.length === 0
               ? `${was.name} already had carryover ${enabled ? 'on' : 'off'} in ${month} and in ` +
-                `every month to ${last}, so nothing changed.`
+                `every month to ${lastRead}, so nothing changed there.`
               : `Carryover for ${was.name} is ${enabled ? 'on' : 'off'} from ${month}.`,
             ...(changed.length === 0
               ? []
@@ -194,8 +260,17 @@ export function registerSetCategoryCarryover(server: McpServer): void {
                     : []),
                 ]),
             '',
-            `Actual writes this flag into every month from ${month} to ${last}, which is the ` +
-              `last month the budget has. Months created after that start without it.`,
+            `Actual writes this flag into every month from ${month} to ${lastWritten}, which is ` +
+              `the last month it has created. Months created after that start without it.`,
+            ...(unchecked.length === 0
+              ? []
+              : [
+                  '',
+                  `The figures above stop at ${lastRead}: Actual's API refuses to read its last ` +
+                    `month, so ${listMonths(unchecked)} ${
+                      unchecked.length === 1 ? 'is' : 'are'
+                    } written and not checked here.`,
+                ]),
             '',
             enabled
               ? 'Overspending in this category now rolls into the category next month, instead ' +
