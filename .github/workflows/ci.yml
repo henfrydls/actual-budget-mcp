@@ -153,7 +153,18 @@ jobs:
             echo "::error::verify-mcpb.sh accepted an arm64-only bundle"
             exit 1
           fi
-          echo "the check refused both, as it should"
+
+          # The icon the manifest points at, taken out of the archive. The
+          # packer checks that file against the staging directory, so a
+          # bundle that lost it on the way into the zip looks fine to
+          # everything except a check that reads the zip.
+          cp "$RUNNER_TEMP/actual-budget-mcp.mcpb" "$RUNNER_TEMP/no-icon.mcpb"
+          zip -q -d "$RUNNER_TEMP/no-icon.mcpb" "$(node -p "require('./manifest.json').icon")"
+          if bash ./scripts/verify-mcpb.sh "$RUNNER_TEMP/no-icon.mcpb"; then
+            echo "::error::verify-mcpb.sh accepted a bundle with no icon"
+            exit 1
+          fi
+          echo "the check refused all three, as it should"
 
       # Refusing is half of it: a packed file left on disk after an exit 1 is
       # one somebody picks up later believing it was built.

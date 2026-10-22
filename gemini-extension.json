@@ -34,10 +34,7 @@
   "mcpServers": {
     "actual": {
       "command": "npx",
-      "args": [
-        "-y",
-        "actual-budget-mcp"
-      ]
+      "args": ["-y", "actual-budget-mcp"]
     }
   }
 }
