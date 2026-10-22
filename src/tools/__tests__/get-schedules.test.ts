@@ -224,6 +224,8 @@ describe('listing schedules (#150)', () => {
     expect(out).toContain('Paid Off  finished  -10.00');
     expect(out).not.toContain('next 2026-06-01');
     expect(out).not.toContain('due since');
+    // Who posts it is about what happens next, and nothing does.
+    expect(out).not.toContain('waits to be approved');
   });
 
   it('files the finished ones last, however early their date', async () => {

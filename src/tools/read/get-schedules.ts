@@ -182,7 +182,11 @@ export function registerGetSchedules(server: McpServer): void {
             // Strictly before today: a payment due today is due, not late.
             notes.push(`due since ${row.next_date}`);
           }
-          notes.push(row.posts_transaction === true ? 'posts by itself' : 'waits to be approved');
+          // Who posts it is about what happens next, and nothing happens
+          // next for a finished schedule.
+          if (row.completed !== true) {
+            notes.push(row.posts_transaction === true ? 'posts by itself' : 'waits to be approved');
+          }
           const posted = lastPosted.get(row.id);
           notes.push(
             posted === undefined
