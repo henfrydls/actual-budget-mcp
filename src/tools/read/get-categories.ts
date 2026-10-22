@@ -5,22 +5,13 @@ import { ensureConnection } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import { isIncome } from '../../utils/income.js';
-
-/** A category row with the fields this reply is made of. */
-interface CategoryRow {
-  id: string;
-  name: string;
-  hidden?: boolean;
-  group_id?: string;
-}
-
-/** A group row, which carries a `hidden` flag of its own. */
-interface GroupRow {
-  id: string;
-  name: string;
-  is_income?: boolean;
-  hidden?: boolean;
-}
+import {
+  countHidden,
+  inHiddenGroup,
+  notListedLine,
+  type CategoryRow,
+  type GroupRow,
+} from '../../utils/hidden-categories.js';
 
 /**
  * Listing the categories, and saying what is not in the list (#238).
@@ -62,26 +53,20 @@ export function registerGetCategories(server: McpServer): void {
         const categories = (await api.getCategories()) as unknown as CategoryRow[];
 
         const groupById = new Map(groups.map((g) => [g.id, g]));
-        const groupIsHidden = (cat: CategoryRow) =>
-          Boolean(cat.group_id !== undefined && groupById.get(cat.group_id)?.hidden);
-
         // Counted while walking the categories rather than from the lines, so
         // a category left out by one of the filters below cannot go unsaid.
-        let hiddenOwn = 0;
-        let hiddenByGroup = 0;
-        for (const cat of categories) {
-          if (cat.hidden) hiddenOwn += 1;
-          else if (groupIsHidden(cat)) hiddenByGroup += 1;
-        }
+        // The rule itself is shared with the resource, which used to have its
+        // own and a different answer (#248).
+        const { own: hiddenOwn, byGroup: hiddenByGroup } = countHidden(categories, groupById);
 
         /** Shown, or kept for the closing line. */
         const listed = (cat: CategoryRow) =>
-          includeHidden === true || (!cat.hidden && !groupIsHidden(cat));
+          includeHidden === true || (!cat.hidden && !inHiddenGroup(cat, groupById));
 
         /** What a line says about a category that is not an ordinary one. */
         const mark = (cat: CategoryRow) => {
           if (cat.hidden) return '  [hidden]';
-          if (groupIsHidden(cat)) return '  [in a hidden group]';
+          if (inHiddenGroup(cat, groupById)) return '  [in a hidden group]';
           return '';
         };
 
@@ -129,7 +114,10 @@ export function registerGetCategories(server: McpServer): void {
           lines.push('');
         }
 
-        const left = notListed(includeHidden === true, hiddenOwn, hiddenByGroup);
+        const left =
+          includeHidden === true
+            ? undefined
+            : notListedLine(hiddenOwn, hiddenByGroup, 'Pass include_hidden: true to see them.');
         if (left !== undefined) lines.push(left);
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };
@@ -142,26 +130,4 @@ export function registerGetCategories(server: McpServer): void {
       }
     },
   );
-}
-
-/**
- * The closing line, when there is something the reply does not show.
- *
- * The two counts are kept apart because they are undone by different tools:
- * a hidden category comes back with `update_category`, and a category in a
- * hidden group comes back with `update_category_group`, which is not
- * something the reply can expect anyone to work out.
- */
-function notListed(includeHidden: boolean, own: number, byGroup: number): string | undefined {
-  if (includeHidden || own + byGroup === 0) return undefined;
-
-  const parts: string[] = [];
-  if (own > 0) parts.push(`${own} hidden ${own === 1 ? 'category' : 'categories'}`);
-  if (byGroup > 0) {
-    parts.push(
-      `${byGroup} ${byGroup === 1 ? 'category' : 'categories'} in a hidden group`,
-    );
-  }
-
-  return `Not listed: ${parts.join(', and ')}. Pass include_hidden: true to see them.`;
 }
