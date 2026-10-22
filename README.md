@@ -824,7 +824,7 @@ tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
 
 **reconcile_currency_residual** - compares against every row up to today, and says how much of that figure is not marked cleared and what the adjustment would have been without it. `account` (required) | `category` (required): where to book the adjustment | `target_balance` (optional, defaults to 0) | `payee`, `notes` (optional) | `date` (optional, today or earlier; a future date is refused) | `allow_duplicate` (optional): book it even though a transaction of that amount is already on that day | `future_rows` (optional): `exclude` or `include`, whether the balance you gave already counts transactions dated after today
 
-**run_bank_sync** - `account` (optional): sync specific account or all if omitted
+**run_bank_sync** - `account` (optional): sync specific account or all if omitted. From Actual 26.11 the reply says how many transactions came in and how many matched rows that were already there, and lists the new ones with their account; on an older library it says the sync ran, which is all that library reports.
 
 </details>
 
