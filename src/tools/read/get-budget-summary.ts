@@ -42,7 +42,9 @@ export function registerGetBudgetSummary(server: McpServer): void {
           `To Be Budgeted:    ${formatMoney(budget.toBudget).padStart(14)}`,
           // As in `get_budget_month`, and only when it is not zero (#265).
           ...(budget.forNextMonth
-            ? [`Held for next month:${formatMoney(budget.forNextMonth).padStart(14)}`]
+            // One character wider than the labels above it, so the figure is
+            // padded one narrower and the column stays where it was.
+            ? [`Held for next month:${formatMoney(budget.forNextMonth).padStart(13)}`]
             : []),
           '',
           'Group Breakdown:',

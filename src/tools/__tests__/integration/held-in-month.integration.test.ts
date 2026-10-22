@@ -96,6 +96,46 @@ describe.skipIf(skip)('a month that is holding money for the next one', () => {
     expect(held).toBe(left + 1);
   }, 60_000);
 
+  it('keeps the figures of the summary in one column', async () => {
+    // The label is one character wider than the ones above it, so without
+    // the narrower padding the figure sits one place to the right and the
+    // column bends around it.
+    const summary = (await handlerFor(registerGetBudgetSummary)({})).content[0].text;
+    const ends = summary
+      .split('\n')
+      .filter((line) => /^(Income|Total Budgeted|To Be Budgeted|Held for next month):/.test(line))
+      .map((line) => line.length);
+
+    expect(ends.length).toBe(4);
+    expect(new Set(ends).size, `lines of different lengths: ${ends.join(', ')}`).toBe(1);
+  }, 60_000);
+
+  it('puts it under what is left to assign in the summary too', async () => {
+    const summary = (await handlerFor(registerGetBudgetSummary)({})).content[0].text;
+    const lines = summary.split('\n');
+    const left = lines.findIndex((l) => l.startsWith('To Be Budgeted:'));
+    const held = lines.findIndex((l) => l.startsWith('Held for next month:'));
+
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(held).toBe(left + 1);
+  }, 60_000);
+
+  it('says nothing about it in a tracking budget, which has no such thing', async () => {
+    // There the month comes back with `forNextMonth` null, and a check for
+    // "not zero" rather than for a figure would print 0.00 in a budget that
+    // cannot hold anything.
+    await api.setPreference('budgetType', 'tracking');
+    try {
+      const month = (await handlerFor(registerGetBudgetMonth)({})).content[0].text;
+      const summary = (await handlerFor(registerGetBudgetSummary)({})).content[0].text;
+
+      expect(month).not.toContain('Held for next month');
+      expect(summary).not.toContain('Held for next month');
+    } finally {
+      await api.setPreference('budgetType', 'envelope');
+    }
+  }, 60_000);
+
   it('goes away again when the hold is released', async () => {
     await api.resetBudgetHold(thisMonth);
 
