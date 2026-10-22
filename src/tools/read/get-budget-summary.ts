@@ -40,6 +40,10 @@ export function registerGetBudgetSummary(server: McpServer): void {
           `Income:            ${formatMoney(income).padStart(14)}`,
           `Total Budgeted:    ${formatMoney(budget.totalBudgeted).padStart(14)}`,
           `To Be Budgeted:    ${formatMoney(budget.toBudget).padStart(14)}`,
+          // As in `get_budget_month`, and only when it is not zero (#265).
+          ...(budget.forNextMonth
+            ? [`Held for next month:${formatMoney(budget.forNextMonth).padStart(14)}`]
+            : []),
           '',
           'Group Breakdown:',
         ];

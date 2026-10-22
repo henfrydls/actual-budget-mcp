@@ -32,6 +32,11 @@ export function registerGetBudgetMonth(server: McpServer): void {
         const lines: string[] = [
           sectionHeader(`Budget: ${month}`),
           `To Be Budgeted: ${formatMoney(budget.toBudget)}`,
+          // Only when there is some (#265). `hold_for_next_month` can set it
+          // aside and nothing that reads a month showed it, so the figure
+          // existed in one reply and nowhere else. A zero line in every month
+          // would be noise in the one place people read first.
+          ...(budget.forNextMonth ? [`Held for next month: ${formatMoney(budget.forNextMonth)}`] : []),
           `Total Income: ${formatMoney(budget.totalIncome)}`,
           `Total Budgeted: ${formatMoney(budget.totalBudgeted)}`,
           `Total Spent: ${formatMoney(budget.totalSpent)}`,
