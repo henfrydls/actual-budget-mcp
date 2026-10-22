@@ -33,8 +33,11 @@ import { syncNow } from '../../utils/sync-clock.js';
 export function registerHoldForNextMonth(server: McpServer): void {
   server.tool(
     'hold_for_next_month',
-    "Hold some of a month's unassigned money so it carries into the next month. " +
-      'Adds to whatever is already held; pass 0 to release it all.',
+    "Hold some of a month's unassigned money so it carries into the next month, " +
+      'instead of assigning it now. Adds to whatever is already held; pass 0 to ' +
+      'release it all. To give money to a category, or to take it back, use ' +
+      'transfer_between_categories; this one assigns nothing, it only keeps what ' +
+      'is left over from being spent this month.',
     {
       amount: z
         .number()
@@ -67,7 +70,30 @@ export function registerHoldForNextMonth(server: McpServer): void {
         }
 
         const before = (await api.getBudgetMonth(month)) as unknown as BudgetMonth;
+        // A tracking budget has no money to assign and nothing to hold: both
+        // figures come back null, and `holdBudgetForNextMonth` writes nothing
+        // and says nothing. Measured. Without this the reply described an
+        // envelope month that does not exist here.
+        if (before?.forNextMonth === null || before?.toBudget === null) {
+          throw new Error(
+            `Holding money for next month is part of an envelope budget, and this is a ` +
+              `tracking budget: ${month} has no money to assign and nothing to hold. ` +
+              `Nothing was changed.`,
+          );
+        }
+
         const cents = amountToCents(amount);
+        // Releasing is asked for with zero, and only with zero. Reading the
+        // rounded figure instead let an amount below the smallest unit clear
+        // the whole hold: after holding 200.00, asking to add 0.004 answered
+        // "Released the 200.00" and left nothing. Someone adding a little got
+        // everything taken away.
+        if (amount > 0 && cents === 0) {
+          throw new Error(
+            `${amount} rounds to zero, so there is nothing to hold. Pass 0 if you mean to ` +
+              `release the whole hold.`,
+          );
+        }
 
         if (cents === 0) {
           await api.resetBudgetHold(month);

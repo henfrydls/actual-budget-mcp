@@ -2,9 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const getBudgetMonth = vi.fn();
 const setBudgetCarryover = vi.fn();
+// One month in the budget, so these stay about the read-back and not about
+// the reach of the write, which the engine tests cover.
+const getBudgetMonths = vi.fn().mockResolvedValue(['2026-10']);
 vi.mock('@actual-app/api', () => ({
   default: {},
   getBudgetMonth: (...a: unknown[]) => getBudgetMonth(...a),
+  getBudgetMonths: (...a: unknown[]) => getBudgetMonths(...a),
   setBudgetCarryover: (...a: unknown[]) => setBudgetCarryover(...a),
   getCategories: vi.fn().mockResolvedValue([
     { id: 'c-1', name: 'Groceries', group_id: 'g-1', hidden: false },

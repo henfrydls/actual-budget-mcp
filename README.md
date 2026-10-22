@@ -756,6 +756,8 @@ Writes are enabled by default. Read-only is opt-in.
 | `delete_transaction` | Remove a transaction (previews first, see [Safety](#safety)) | "Delete that test transaction" |
 | `update_budget_amount` | Set a budget amount, or add to it | "Put 10,000 more into Salud this month" |
 | `transfer_between_categories` | Move budgeted money between categories, creating no transaction | "Move 114.06 from Reembolsos pendientes to Familia" |
+| `hold_for_next_month` | Keep part of a month's unassigned money for the next month | "Hold 5,000 of what is left for next month" |
+| `set_category_carryover` | Carry a category's overspending forward instead of taking it off the top | "Let Restaurantes carry its own overspending from now on" |
 | `recategorize_transaction` | Move to another category | "Move that transaction to Entertainment" |
 | `create_transfer` | Transfer between accounts | "Transfer 10,000 from Checking to Savings" |
 | `reconcile_currency_residual` | Clear accumulated FX-rate residual | "Reconcile my USD card to 213.82 USD" |
@@ -775,6 +777,10 @@ Writes are enabled by default. Read-only is opt-in.
 **update_budget_amount** - `category` (required) | `amount` (required) | `month` (optional) | `mode` (optional): `absolute` (default) sets the budgeted figure, `delta` adds the amount to what is already there and may be negative. A delta is what an ordinary adjustment is: with rollover and spending in the way, setting an absolute figure means working out a number like 23,661.07 first, and nothing about that number shows it was computed wrongly.
 
 **transfer_between_categories** - `from` (required): category to take from | `to` (required): category to give to | `amount` (required): positive | `month` (optional, defaults to the current month). Refuses an income category at either end (Actual marks income per category, so one can sit in a spending group), a month that is not `YYYY-MM` with the month between 01 and 12, and moving a category to itself. Actual's own handler accepts all three and silently loses, destroys or invents money. Covering an overspent category is allowed and reported.
+
+**hold_for_next_month** - `amount` (required): added to whatever is already held, `0` releases the whole hold | `month` (optional, defaults to the current month). Actual's own call adds rather than sets and holds what the month has without saying so, so the reply gives the total held and says when it held less than was asked for, or nothing at all. An amount that rounds to zero is refused rather than treated as a release. Envelope budgets only: a tracking budget has no money to assign and nothing to hold.
+
+**set_category_carryover** - `category` (required) | `enabled` (required) | `month` (optional, defaults to the current month). Not one month: Actual writes the flag into every month from the one given to the last the budget has, so the reply says which of them changed, where it reaches, and that months created later start without it. Refuses an income category, which has no overspending to carry.
 
 **recategorize_transaction** - `transaction_id` (required) | `category` (required)
 
