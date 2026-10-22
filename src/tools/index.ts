@@ -29,6 +29,8 @@ import { registerCreateSplitTransaction } from './write/create-split-transaction
 import { registerReconcileCurrencyResidual } from './write/reconcile-currency-residual.js';
 import { registerUpdateBudgetAmount } from './write/update-budget-amount.js';
 import { registerTransferBetweenCategories } from './write/transfer-between-categories.js';
+import { registerHoldForNextMonth } from './write/hold-for-next-month.js';
+import { registerSetCategoryCarryover } from './write/set-category-carryover.js';
 import { registerRecategorizeTransaction } from './write/recategorize-transaction.js';
 import { registerCreateTransfer } from './write/create-transfer.js';
 import { registerUpdateTransaction } from './write/update-transaction.js';
@@ -105,6 +107,8 @@ export function registerAllTools(rawServer: McpServer): void {
   registerReconcileCurrencyResidual(server);
   registerUpdateBudgetAmount(server);
   registerTransferBetweenCategories(server);
+  registerHoldForNextMonth(server);
+  registerSetCategoryCarryover(server);
   registerRecategorizeTransaction(server);
   registerCreateTransfer(server);
   registerUpdateTransaction(server);

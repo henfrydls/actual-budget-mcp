@@ -6,7 +6,11 @@ vi.mock('@actual-app/api', () => ({
   default: {},
   getCategories: vi.fn(),
   getBudgetMonth: vi.fn(),
+  getBudgetMonths: vi.fn(),
   setBudgetAmount: vi.fn(),
+  holdBudgetForNextMonth: vi.fn(),
+  resetBudgetHold: vi.fn(),
+  setBudgetCarryover: vi.fn(),
   getNote: vi.fn().mockResolvedValue(null),
   updateNote: vi.fn().mockResolvedValue(undefined),
   sync: vi.fn().mockResolvedValue(undefined),
@@ -24,6 +28,8 @@ vi.mock('../../connection.js', () => ({
 import * as api from '@actual-app/api';
 import { registerTransferBetweenCategories } from '../write/transfer-between-categories.js';
 import { registerUpdateBudgetAmount } from '../write/update-budget-amount.js';
+import { registerHoldForNextMonth } from '../write/hold-for-next-month.js';
+import { registerSetCategoryCarryover } from '../write/set-category-carryover.js';
 
 type Handler = (args: Record<string, unknown>) => Promise<{
   content: Array<{ type: string; text: string }>;
@@ -41,18 +47,25 @@ function handlerFor(register: (s: never) => void): Handler {
 }
 
 /** A budget month with one spending category and money left to assign. */
-function month(groceries: number, toBudget: number) {
+function month(groceries: number, toBudget: number, forNextMonth = 0) {
   return {
     month: '2026-09',
     totalBudgeted: -groceries,
     toBudget,
+    forNextMonth,
     categoryGroups: [
       {
         id: 'g1',
         name: 'Spending',
         is_income: false,
         categories: [
-          { id: 'cat-1', name: 'Groceries', budgeted: groceries, balance: groceries },
+          {
+            id: 'cat-1',
+            name: 'Groceries',
+            budgeted: groceries,
+            balance: groceries,
+            carryover: false,
+          },
         ],
       },
     ],
@@ -95,6 +108,10 @@ describe('the two budget tools wait for each other', () => {
     vi.mocked(api.setBudgetAmount).mockReset().mockResolvedValue(undefined as never);
     vi.mocked(api.getNote).mockReset().mockResolvedValue(null as never);
     vi.mocked(api.updateNote).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.getBudgetMonths).mockReset().mockResolvedValue(['2026-09'] as never);
+    vi.mocked(api.holdBudgetForNextMonth).mockReset().mockResolvedValue(true as never);
+    vi.mocked(api.resetBudgetHold).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.setBudgetCarryover).mockReset().mockResolvedValue(undefined as never);
   });
 
   it.each([
@@ -143,5 +160,68 @@ describe('the two budget tools wait for each other', () => {
     expect(first.isError, first.content[0]?.text).toBeFalsy();
     expect(second.isError, second.content[0]?.text).toBeFalsy();
     expect(writes).toBe(2);
+  });
+
+  it.each([
+    [
+      'a hold for next month',
+      registerHoldForNextMonth,
+      { amount: 100, month: '2026-09' } as Record<string, unknown>,
+    ],
+    [
+      'a carryover flag',
+      registerSetCategoryCarryover,
+      { category: 'Groceries', enabled: true, month: '2026-09' } as Record<string, unknown>,
+    ],
+  ])('makes %s wait while a transfer is half way through', async (_label, register, args) => {
+    // The hold takes from the same pool the transfer writes, and the
+    // carryover reads every month before and after its write. Neither can
+    // lose money on its own, and both would describe a budget that changed
+    // underneath them.
+    const held = deferred();
+    let writes = 0;
+    let budgeted = 10000;
+    let toBudget = 50000;
+    let carryover = false;
+    vi.mocked(api.getBudgetMonth).mockImplementation(async () => {
+      const reading = month(budgeted, toBudget);
+      reading.categoryGroups[0].categories[0].carryover = carryover;
+      return reading as never;
+    });
+    vi.mocked(api.setBudgetAmount).mockImplementation(async (_month, _category, amount) => {
+      writes += 1;
+      if (writes === 1) await held.promise;
+      toBudget -= (amount as number) - budgeted;
+      budgeted = amount as number;
+    });
+    // The flag is kept as well, so the carryover tool reads back what it
+    // wrote and the reply is the real one rather than its failure branch.
+    vi.mocked(api.setBudgetCarryover).mockImplementation(async (_month, _category, flag) => {
+      carryover = flag as boolean;
+    });
+
+    const moving = handlerFor(registerTransferBetweenCategories)({
+      from: 'To Budget',
+      to: 'Groceries',
+      amount: 50,
+      month: '2026-09',
+    });
+    await tick();
+    expect(api.getBudgetMonth).toHaveBeenCalledTimes(1);
+
+    const second = handlerFor(register as never)(args);
+    await tick();
+
+    // Still one read: the second tool has not looked at the month the
+    // transfer is in the middle of changing.
+    expect(api.getBudgetMonth).toHaveBeenCalledTimes(1);
+    expect(api.holdBudgetForNextMonth).not.toHaveBeenCalled();
+    expect(api.setBudgetCarryover).not.toHaveBeenCalled();
+
+    held.release();
+    const [first, other] = await Promise.all([moving, second]);
+
+    expect(first.isError, first.content[0]?.text).toBeFalsy();
+    expect(other.isError, other.content[0]?.text).toBeFalsy();
   });
 });

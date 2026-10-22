@@ -43,7 +43,9 @@ describe('read-only mode hides write tools from discovery', () => {
     expect(names).toContain('reconcile_account');
     expect(names).toContain('update_account');
     expect(names).toContain('create_transactions');
-    expect(names.length).toBe(41);
+    expect(names).toContain('hold_for_next_month');
+    expect(names).toContain('set_category_carryover');
+    expect(names.length).toBe(43);
   });
 
   it('does not register write tools when read-only', () => {
