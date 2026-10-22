@@ -5,14 +5,12 @@ import 'dotenv/config';
 // `globalThis.fetch` when it loads, so a wrapper installed later is never
 // seen. Gives every SDK request a deadline it otherwise does not have (#99).
 import './utils/http-timeout.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { registerAllTools } from './tools/index.js';
+import { createMcpServer } from './mcp-server.js';
 import { isReadOnly } from './utils/mode.js';
-import { serverInstructions } from './utils/instructions.js';
 import { chosenToolset, unrecognisedToolset } from './utils/toolset.js';
-import { registerAllPrompts } from './prompts.js';
-import { registerAllResources } from './resources.js';
+import { httpRequested, readHttpConfig, READ_PATH, WRITE_PATH } from './utils/http-config.js';
+import { startHttpServer } from './http.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
 import { installExitPaths } from './utils/orderly-exit.js';
 import { startLeaving, whenIdle } from './utils/in-flight.js';
@@ -103,20 +101,19 @@ if (process.argv.includes('--verify')) {
   }
 }
 
-const server = new McpServer(
-  {
-    name: 'actual-budget-mcp',
-    version: packageVersion,
-  },
-  // What the protocol calls instructions: the conventions that hold across
-  // the tools, said once at connection rather than inferred from forty
-  // descriptions (#222).
-  { instructions: serverInstructions({ readOnly: isReadOnly() }) },
-);
-
-registerAllTools(server);
-registerAllPrompts(server);
-registerAllResources(server);
+// HTTP is opt-in and stdio is the default: setting a port is what asks for
+// it (#228). The configuration is checked before anything is registered or
+// opened, and every reason it cannot be served is printed at once, because a
+// deployment corrected one line at a time with a restart between each is how
+// an operator ends up guessing.
+const overHttp = httpRequested();
+const http = overHttp ? readHttpConfig() : undefined;
+if (http !== undefined && http.config === undefined) {
+  for (const problem of http.problems) {
+    console.error(`[actual-budget-mcp] ${problem}`);
+  }
+  process.exit(1);
+}
 
 if (isReadOnly()) {
   // stderr, never stdout: stdout carries JSON-RPC.
@@ -166,12 +163,26 @@ installExitPaths({
   // pipe is refused instead of reaching a budget that is being closed.
   stopAccepting: startLeaving,
   exit: (code) => process.exit(code),
-  stdin: process.stdin,
+  // Only stdio leaves that way. An HTTP server's clients arrive and go over
+  // the network, and a container started detached has no stdin at all.
+  stdin: overHttp ? undefined : process.stdin,
   signals: process,
 });
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+if (http?.config !== undefined) {
+  const config = http.config;
+  await startHttpServer(config);
+  console.error(
+    `[actual-budget-mcp] HTTP on http://${config.host}:${config.port}, ` +
+      `${READ_PATH} reads` +
+      (config.writeToken === undefined
+        ? ' and nothing writes: set ACTUAL_HTTP_WRITE_TOKEN for a write path'
+        : `, ${WRITE_PATH} writes`),
+  );
+} else {
+  const transport = new StdioServerTransport();
+  await createMcpServer().connect(transport);
+}
 
 // Validate connection eagerly on startup so config errors surface immediately
 // instead of silently failing on the first tool call

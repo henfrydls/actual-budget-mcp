@@ -83,7 +83,20 @@ function withRecord<T extends { tool: (...args: never[]) => unknown }>(server: T
   return wrapped;
 }
 
-export function registerAllTools(rawServer: McpServer): void {
+/**
+ * Register the tools this server offers.
+ *
+ * `readOnly` is read from the environment unless it is passed. HTTP mode
+ * passes it (#228): the read path and the write path are the same process,
+ * so which tools exist has to be decided per server rather than per process,
+ * and a server built for the read path must not register a write tool even
+ * when the process as a whole is allowed to write.
+ */
+export function registerAllTools(
+  rawServer: McpServer,
+  options: { readOnly?: boolean } = {},
+): void {
+  const readOnly = options.readOnly ?? isReadOnly();
   offered.clear();
   // Every read tool pulls the server's changes first (#126). Here rather than
   // in fifteen files: this is the one place they all go through.
@@ -133,7 +146,7 @@ export function registerAllTools(rawServer: McpServer): void {
 
   // Everything past this point writes. Read-only mode does not register these
   // at all, so they never reach tool discovery.
-  if (isReadOnly()) return;
+  if (readOnly) return;
 
   // Write
   registerCreateTransaction(server);
