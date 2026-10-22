@@ -19,14 +19,14 @@ export function registerUpdatePayee(server: McpServer): void {
     async ({ payee, name }) => {
       try {
         await ensureConnection();
-        requireName(name, 'payee', 'Nothing was changed.');
+        const wanted = requireName(name, 'payee', 'Nothing was changed.');
         const payeeId = await resolvePayeeId(payee);
 
         const payees = await api.getPayees();
         const p = payees.find((x) => x.id === payeeId);
         const oldName = p?.name || payee;
 
-        await api.updatePayee(payeeId, { name } as any);
+        await api.updatePayee(payeeId, { name: wanted } as any);
         await syncNow();
 
         return {

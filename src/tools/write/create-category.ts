@@ -19,12 +19,12 @@ export function registerCreateCategory(server: McpServer): void {
     async ({ name, group }) => {
       try {
         await ensureConnection();
-        requireName(name, 'category', 'Nothing was created.');
+        const wanted = requireName(name, 'category', 'Nothing was created.');
         const groupId = await resolveCategoryGroupId(group);
         const groups = await api.getCategoryGroups();
         const grp = groups.find((g) => g.id === groupId);
 
-        const id = await api.createCategory({ name, group_id: groupId } as any);
+        const id = await api.createCategory({ name: wanted, group_id: groupId } as any);
         await syncNow();
 
         return {

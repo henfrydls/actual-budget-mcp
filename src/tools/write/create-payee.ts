@@ -17,8 +17,8 @@ export function registerCreatePayee(server: McpServer): void {
     async ({ name }) => {
       try {
         await ensureConnection();
-        requireName(name, 'payee', 'Nothing was created.');
-        const id = await api.createPayee({ name } as any);
+        const wanted = requireName(name, 'payee', 'Nothing was created.');
+        const id = await api.createPayee({ name: wanted } as any);
         await syncNow();
 
         return {
