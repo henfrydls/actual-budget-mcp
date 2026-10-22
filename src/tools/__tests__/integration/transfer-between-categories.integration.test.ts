@@ -27,6 +27,10 @@ import {
 import { registerTransferBetweenCategories } from '../../write/transfer-between-categories.js';
 import { getInternal } from '../../../connection.js';
 import { formatMoney } from '../../../utils/money.js';
+import {
+  refreshBudgetDecimalPlaces,
+  resetBudgetDecimalPlaces,
+} from '../../../utils/currency.js';
 import type { BudgetMonth, BudgetMonthGroup } from '../../../types.js';
 
 const skip = process.env.SKIP_ACTUAL_INTEGRATION === '1';
@@ -605,6 +609,38 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
       expect(text).not.toContain('both categories');
     }, 60_000);
 
+    it('does not lose one of two moves fired together', async () => {
+      // An agent sending two calls without awaiting the first is not a
+      // hypothetical: it has happened against a real budget. Both read the
+      // category's budgeted figure, both wrote their own sum, and the second
+      // overwrote the first. Measured before the queue: 10.00 and 20.00 out
+      // of the pool left 20.00 rather than 30.00.
+      const before = await figures(thisMonth, [groceries]);
+      const handler = handlerFor();
+
+      const [first, second] = await Promise.all([
+        handler({ from: 'To Budget', to: 'Groceries', amount: 10 }),
+        handler({ from: 'To Budget', to: 'Groceries', amount: 20 }),
+      ]);
+
+      expect(first.isError, first.content[0]?.text).toBeFalsy();
+      expect(second.isError, second.content[0]?.text).toBeFalsy();
+      const after = await figures(thisMonth, [groceries]);
+      expect(after.cats[0].budgeted).toBe(before.cats[0].budgeted + 3000);
+    }, 60_000);
+
+    it('does not answer to a spelling nobody agreed to', async () => {
+      // `tobudget` was in the reserved word for a while and is not in the
+      // design. With no category of that name it has to fail as a name that
+      // is not there, not quietly become the pool.
+      const poolBefore = await pool(thisMonth);
+
+      const result = await handlerFor()({ from: 'tobudget', to: 'Groceries', amount: 5 });
+
+      expect(result.isError).toBe(true);
+      expect(await pool(thisMonth)).toBe(poolBefore);
+    }, 60_000);
+
     it('is what the engine would have written, which is why this does not ask it to', async () => {
       // The canary for the guard above. If Actual ever validates the source
       // the way it validates the destination, this fails, and the handler can
@@ -621,6 +657,147 @@ describe.skipIf(skip)('transfer_between_categories against the real engine', () 
       expect(await poolRows()).toEqual([
         { id: `${thisMonth.replace('-', '')}-to-budget`, amount: -1000 },
       ]);
+    }, 60_000);
+  });
+
+  /**
+   * The line in the month's note (#114, round three).
+   *
+   * The engine's handler writes one for every move it makes. The direction
+   * that no longer goes through it writes its own, and these pin that the
+   * two read as one list rather than as two different records.
+   */
+  describe('the trail in the month note', () => {
+    let groceries = '';
+    let rent = '';
+
+    const note = async () => (await api.getNote(`budget-${thisMonth}`))?.note ?? '';
+    const today = new Intl.DateTimeFormat('en-US', { month: 'long', day: '2-digit' }).format(
+      new Date(),
+    );
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+        groceries = await api.createCategory({ name: 'Groceries', group_id: g } as never);
+        rent = await api.createCategory({ name: 'Rent', group_id: g } as never);
+      }, 'xfer-pool-note');
+      await api.setBudgetAmount(thisMonth, groceries, 12500);
+      await api.setBudgetAmount(thisMonth, rent, 50000);
+    }, 60_000);
+
+    it('writes the handler\'s own sentence when the handler is not used', async () => {
+      const result = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: 30 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(await note()).toContain(
+        `- Reassigned 30.00 from To Budget \u2192 Groceries on ${today}`,
+      );
+      expect(result.content[0].text).not.toContain('note');
+    }, 60_000);
+
+    it('reads as one list with the line the engine writes', async () => {
+      await handlerFor()({ from: 'Rent', to: 'To Budget', amount: 40 });
+
+      const lines = (await note()).split('\n');
+      expect(lines).toContain(`- Reassigned 30.00 from To Budget \u2192 Groceries on ${today}`);
+      expect(lines).toContain(`- Reassigned 40.00 from Rent \u2192 To Budget on ${today}`);
+      // Appended, never replacing what was there.
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+    }, 60_000);
+
+    it('keeps what the note already said', async () => {
+      await api.updateNote(`budget-${thisMonth}`, 'Written by hand');
+
+      await handlerFor()({ from: 'To Budget', to: 'Rent', amount: 5 });
+
+      const lines = (await note()).split('\n');
+      expect(lines[0]).toBe('Written by hand');
+      expect(lines[1]).toBe(`- Reassigned 5.00 from To Budget \u2192 Rent on ${today}`);
+    }, 60_000);
+
+    it('says the figure by which the month is over, not its negative', async () => {
+      // Into the pool while the month is still over-assigned: the notice has
+      // to be there, and the figure has to be what is missing.
+      await api.setBudgetAmount(thisMonth, rent, 900000);
+      const poolBefore =
+        ((await api.getBudgetMonth(thisMonth)) as unknown as BudgetMonth).toBudget;
+      expect(poolBefore).toBeLessThan(-10000);
+
+      const result = await handlerFor()({ from: 'Rent', to: 'To Budget', amount: 100 });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      const short = -(poolBefore + 10000);
+      expect(result.content[0].text).toContain(
+        `To Budget is now ${formatMoney(short)} over: this month assigns more than it has.`,
+      );
+    }, 60_000);
+
+    it('leaves the sentence about a past month exactly as it was', async () => {
+      // Between two categories this reply is byte for byte what it was
+      // before the pool existed, down to where the line breaks.
+      const result = await handlerFor()({
+        from: 'Rent',
+        to: 'Groceries',
+        amount: 10,
+        month: lastMonth,
+      });
+
+      expect(result.isError, result.content[0]?.text).toBeFalsy();
+      expect(result.content[0].text).toContain(
+        `${lastMonth} is a past month, so this also moves what both categories carry into\n` +
+          'every month after it by the same amount.',
+      );
+    }, 60_000);
+  });
+
+  /**
+   * The figure in the note, in a currency with no decimal places (#114,
+   * round three).
+   *
+   * `integerToCurrency` takes the decimal count for the divisor only, so the
+   * engine writes ten thousand yen into the note as `10,000.00`. The line
+   * written here copies that rather than correcting it: both lines sit in the
+   * same note, and one of them formatting its figure differently would read
+   * as a different amount. The tail of #115.
+   */
+  describe('the note in a currency with no decimal places', () => {
+    let groceries = '';
+    const note = async () => (await api.getNote(`budget-${thisMonth}`))?.note ?? '';
+
+    beforeAll(async () => {
+      await createFreshBudget(async () => {
+        const g = await api.createCategoryGroup({ name: 'Spending' } as never);
+        groceries = await api.createCategory({ name: 'Groceries', group_id: g } as never);
+      }, 'xfer-pool-yen');
+      await api.setPreference('defaultCurrencyCode', 'JPY');
+      await refreshBudgetDecimalPlaces();
+      await api.setBudgetAmount(thisMonth, groceries, 20000);
+    }, 60_000);
+
+    afterAll(() => {
+      resetBudgetDecimalPlaces();
+    });
+
+    it('writes the figure the engine writes, for both directions', async () => {
+      const out = await handlerFor()({ from: 'To Budget', to: 'Groceries', amount: 10000 });
+      // The same amount both ways, so the two lines can be compared whole.
+      const back = await handlerFor()({ from: 'Groceries', to: 'To Budget', amount: 10000 });
+
+      expect(out.isError, out.content[0]?.text).toBeFalsy();
+      expect(back.isError, back.content[0]?.text).toBeFalsy();
+      const lines = (await note()).split('\n');
+      const ours = lines.find((l) => l.includes('from To Budget'));
+      const theirs = lines.find((l) => l.includes('from Groceries'));
+      expect(ours).toBeDefined();
+      expect(theirs).toBeDefined();
+      // The engine's line is the reference: whatever shape it gives the
+      // figure, ours gives the same one.
+      expect(ours).toBe(
+        (theirs as string).replace('Groceries \u2192 To Budget', 'To Budget \u2192 Groceries'),
+      );
+      // Ten thousand yen, written the way the engine writes it.
+      expect(theirs).toContain('10,000.00');
     }, 60_000);
   });
 

@@ -7,7 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
-import { makeQueue } from '../../utils/serialize.js';
+import { queueBudgetWrite } from '../../utils/budget-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
 /**
@@ -40,7 +40,8 @@ import { syncNow } from '../../utils/sync-clock.js';
  * either showed the other had been lost. Only re-reading the budget showed it.
  *
  * So the read-add-write goes through a queue and calls in this process apply
- * one after another. `budget/transfer-available` was measured as an
+ * one after another. That queue is shared with `transfer_between_categories`,
+ * which reads and writes the same figures: `budget-writes.ts` says why. `budget/transfer-available` was measured as an
  * alternative, because the engine serialises its own mutators and two of those
  * in parallel do add up. It is not usable: it clamps silently, with
  * `max(min(amount, leftover), 0)`, so -500.00 against 1,000.00 changed nothing
@@ -55,11 +56,6 @@ import { syncNow } from '../../utils/sync-clock.js';
  * what setting a figure outright means.
  */
 
-/**
- * This tool's own queue, so two deltas cannot race each other. The mechanism
- * and the reasoning live in `makeQueue` (#121).
- */
-export const serializeDelta = makeQueue();
 export function registerUpdateBudgetAmount(server: McpServer): void {
   server.tool(
     'update_budget_amount',
@@ -143,7 +139,7 @@ export function registerUpdateBudgetAmount(server: McpServer): void {
         };
 
         // Only the delta needs the queue; an absolute set reads nothing.
-        const text = isDelta ? await serializeDelta(run) : await run();
+        const text = isDelta ? await queueBudgetWrite(run) : await run();
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         const message = describeError(error);
