@@ -122,8 +122,12 @@ const MAY_ALREADY_BE_APPLIED =
  * share a sentence on purpose: that one is about a server that never answered
  * at startup and offers the other port as the likely mistake, this one is
  * about a session that was working a moment ago.
+ *
+ * `repair_sync` turns it off, through `omitDesktopAppNote`: it has already
+ * asked the server whether it is there.
  */
-function desktopAppClause(): string {
+function desktopAppClause(options: DescribeErrorOptions): string {
+  if (options.omitDesktopAppNote === true) return '';
   const configured = readEnv('ACTUAL_SERVER_URL');
   if (configured === undefined) return '';
   let url: URL;
@@ -136,8 +140,8 @@ function desktopAppClause(): string {
   if (!ownMachine || url.port !== '5007') return '';
   return (
     'On this address that usually means the Actual desktop app is closed: it runs its ' +
-    'own server on 5007, and only while the app is open. If repair_sync fails too, ' +
-    'that is the difference from a sync problem. '
+    'own server on 5007, and only while the app is open. If repair_sync answers that ' +
+    'nothing is listening, that is this rather than a sync problem. '
   );
 }
 
@@ -177,7 +181,7 @@ function desktopAppClause(): string {
  * is what Actual itself is naming, and saying "it arrived with no code of its
  * own" there was simply false.
  */
-function unknownOpenHelp(reason: string): string {
+function unknownOpenHelp(reason: string, options: DescribeErrorOptions): string {
   const sure =
     reason === ''
       ? 'That is what this almost always is. '
@@ -189,7 +193,7 @@ function unknownOpenHelp(reason: string): string {
   return (
     'The Actual server did not answer: check that it is running and reachable. ' +
     sure +
-    desktopAppClause() +
+    desktopAppClause(options) +
     'Actual reports it as a problem opening the budget, which is the message it falls ' +
     `back on for anything it has no specific case for${noCode}. If the budget was ` +
     'already open, nothing was being opened and this came from a sync.'
@@ -319,6 +323,16 @@ export interface DescribeErrorOptions {
    * ignore both halves.
    */
   omitUncertainWriteCaution?: boolean;
+  /**
+   * Leave out the clause about the desktop app being closed (#240).
+   *
+   * Set by `repair_sync`, which probes the server before it repairs
+   * anything and refuses when nothing is listening. By the time it is
+   * describing a failure of its own, the server has answered, so "the app
+   * is probably closed, and repair_sync saying nothing is listening is how
+   * you tell" contradicts the step the reader has just watched succeed.
+   */
+  omitDesktopAppNote?: boolean;
 }
 
 /**
@@ -392,7 +406,7 @@ export function describeError(error: unknown, options: DescribeErrorOptions = {}
     // text describes. With a named reason, say what that reason means and
     // leave Actual's sentence as the detail instead of contradicting it.
     if (reason === '' || NETWORK_CODES.has(reason)) {
-      return unknownOpenHelp(reason) + quoting(error) + caution + contention;
+      return unknownOpenHelp(reason, options) + quoting(error) + caution + contention;
     }
     const known = CODE_HELP[reason];
     // An expired session is the one code whose explanation contradicts the

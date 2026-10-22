@@ -95,7 +95,12 @@ export async function repairSyncState(): Promise<string[]> {
     // already and the handler describes whatever it catches: Actual's own
     // words inside it were enough to send the second pass down the branch
     // for a server that is not answering.
-    throw alreadyDescribed(`Sync repair failed: ${describeError(error)}`);
+    // No desktop-app clause (#240): the probe above has just had an answer
+    // from this server, so "the app is probably closed" would contradict the
+    // step the reader watched succeed.
+    throw alreadyDescribed(
+      `Sync repair failed: ${describeError(error, { omitDesktopAppNote: true })}`,
+    );
   }
 
   // Not a push after a write, which is what #162 turned into a notice. This
@@ -111,7 +116,11 @@ export async function repairSyncState(): Promise<string[]> {
         'did not work, so the repair is not finished. ' +
         // No write caution: a repair changes no budget data, so "check before
         // retrying, it may have been applied" is about nothing.
-        describeError(verified.error, { omitUncertainWriteCaution: true }),
+        describeError(verified.error, {
+          omitUncertainWriteCaution: true,
+          // As above: the server answered a moment ago.
+          omitDesktopAppNote: true,
+        }),
     );
   }
 
@@ -135,7 +144,10 @@ export function registerRepairSync(server: McpServer): void {
         const lines = await repairSyncState();
         return { content: [{ type: 'text', text: lines.join('\n') }] };
       } catch (error) {
-        const message = describeError(error);
+        // Whatever reaches here is printed by `repair_sync` itself, and a
+        // reply from this tool telling the reader to look at what
+        // `repair_sync` says is a circle (#240).
+        const message = describeError(error, { omitDesktopAppNote: true });
         return {
           content: [{ type: 'text', text: `Error: ${message}` }],
           isError: true,

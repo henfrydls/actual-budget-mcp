@@ -129,8 +129,12 @@ describe('the clause for a closed desktop app', () => {
 
         expect(described).toContain('the Actual desktop app is closed');
         expect(described).toContain('only while the app is open');
+        // The tell is what `repair_sync` says, not that it fails: it probes
+        // the server and refuses when nothing is listening, and that refusal
+        // is the one that means the app is closed.
         expect(described).toContain(
-          'If repair_sync fails too, that is the difference from a sync problem.',
+          'If repair_sync answers that nothing is listening, that is this rather than a ' +
+            'sync problem.',
         );
       });
     },
@@ -140,11 +144,43 @@ describe('the clause for a closed desktop app', () => {
     ['http://localhost:5006', 'a self-hosted server on its usual port'],
     ['https://budget.example.com:5007', 'that port on someone else'],
     ['https://budget.example.com', 'a server that is not on this machine'],
+    // A host that merely contains one of the local names. Compared as a
+    // substring, this is somebody else's machine wearing the clause.
+    ['http://localhost.example.com:5007', 'a host that only looks local'],
+    ['http://127.0.0.1.example.com:5007', 'the same trick with the address'],
+    // Local, and not that port: without the port in the comparison every
+    // local server would be called the desktop app.
+    ['http://localhost', 'a local server on the default port'],
+    ['http://127.0.0.1:5006', 'a local server on the self-hosted port'],
+    // Local addresses the app does not listen on.
+    ['http://0.0.0.0:5007', 'every interface rather than this machine'],
+    ['http://127.0.0.2:5007', 'another address in the loopback range'],
     [undefined, 'nothing configured'],
     ['not a url at all', 'an address that cannot be read'],
-  ])('leaves it out for %s', (url) => {
+  ])('leaves it out for %s', (url, _why) => {
     withServer(url, () => {
       expect(describeError(unknownOpen())).not.toContain('desktop app');
+    });
+  });
+
+  it.each(['timeout', 'network-failure', 'ECONNREFUSED', 'ETIMEDOUT'])(
+    'still says it when Actual named %s, which is about the connection',
+    (code) => {
+      withServer('http://127.0.0.1:5007', () => {
+        const described = describeError(Object.assign(unknownOpen(), { code }));
+
+        expect(described).toContain('the Actual desktop app is closed');
+      });
+    },
+  );
+
+  it('leaves it out of an ordinary error that says what it is', () => {
+    // The clause belongs to the one failure that says nothing about its
+    // cause. Appended to every message it would turn up under errors that
+    // have nothing to do with the server.
+    withServer('http://127.0.0.1:5007', () => {
+      expect(describeError(new Error('Budget not found'))).not.toContain('desktop app');
+      expect(describeError(new Error(''))).not.toContain('desktop app');
     });
   });
 
