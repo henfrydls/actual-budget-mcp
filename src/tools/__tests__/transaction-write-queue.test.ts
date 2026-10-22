@@ -52,8 +52,11 @@ const NOT_QUEUED = new Map([
   ['update-category.ts', 'category fields only'],
   ['update-category-group.ts', 'group fields only'],
   ['update-payee.ts', 'payee fields only'],
-  ['update-budget-amount.ts', 'budget figures; has its own queue for its own race (#121)'],
-  ['transfer-between-categories.ts', 'budget figures only, creates no transaction (#86)'],
+  ['update-budget-amount.ts', 'budget figures; on the budget queue for its own race (#121)'],
+  [
+    'transfer-between-categories.ts',
+    'budget figures only, creates no transaction (#86); on the budget queue (#114)',
+  ],
   ['repair-sync.ts', 'rebuilds sync bookkeeping, not budget data'],
 ]);
 

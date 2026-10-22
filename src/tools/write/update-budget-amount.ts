@@ -7,7 +7,7 @@ import { resolveMonth } from '../../utils/dates.js';
 import { resolveCategoryId } from '../../utils/resolvers.js';
 import type { BudgetMonth, BudgetMonthGroup, BudgetMonthCategory } from '../../types.js';
 import { describeError } from '../../utils/errors.js';
-import { makeQueue } from '../../utils/serialize.js';
+import { queueBudgetWrite } from '../../utils/budget-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
 
 /**
@@ -40,7 +40,8 @@ import { syncNow } from '../../utils/sync-clock.js';
  * either showed the other had been lost. Only re-reading the budget showed it.
  *
  * So the read-add-write goes through a queue and calls in this process apply
- * one after another. `budget/transfer-available` was measured as an
+ * one after another. That queue is shared with `transfer_between_categories`,
+ * which reads and writes the same figures: `budget-writes.ts` says why. `budget/transfer-available` was measured as an
  * alternative, because the engine serialises its own mutators and two of those
  * in parallel do add up. It is not usable: it clamps silently, with
  * `max(min(amount, leftover), 0)`, so -500.00 against 1,000.00 changed nothing
@@ -50,16 +51,12 @@ import { syncNow } from '../../utils/sync-clock.js';
  * Between processes this is still open, and it is the shape of #111. A queue
  * here cannot see another process and nothing in this server can.
  *
- * An absolute set does not queue: it reads nothing, so it has nothing to lose.
- * An absolute landing between a delta's read and its write still wins, which is
- * what setting a figure outright means.
+ * An absolute set has nothing of its own to lose, since it reads nothing, and
+ * it queues all the same: it writes the figure the others read, so outside the
+ * queue it lands in the middle of someone else's read and write. Which call
+ * wins is unchanged, it is the order they arrived in.
  */
 
-/**
- * This tool's own queue, so two deltas cannot race each other. The mechanism
- * and the reasoning live in `makeQueue` (#121).
- */
-export const serializeDelta = makeQueue();
 export function registerUpdateBudgetAmount(server: McpServer): void {
   server.tool(
     'update_budget_amount',
@@ -142,8 +139,16 @@ export function registerUpdateBudgetAmount(server: McpServer): void {
         ].join('\n');
         };
 
-        // Only the delta needs the queue; an absolute set reads nothing.
-        const text = isDelta ? await serializeDelta(run) : await run();
+        // Both modes queue. The delta needs it for itself: it reads, adds
+        // and writes. The absolute set has nothing of its own to lose, and
+        // it was left out for that reason until it was looked at from the
+        // other side: it writes the same figure a delta and a
+        // `transfer_between_categories` read, so outside the queue it can
+        // land in the middle of someone else's read and write, and be the
+        // one that disappears. An absolute arriving first still wins, which
+        // is what setting a figure outright means; what changes is that the
+        // calls take turns.
+        const text = await queueBudgetWrite(run);
         return { content: [{ type: 'text', text }] };
       } catch (error) {
         const message = describeError(error);

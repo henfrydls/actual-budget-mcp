@@ -9,6 +9,9 @@ vi.mock('@actual-app/api', () => ({
     { id: 'cat-2', name: 'Dining', group_id: 'g1', hidden: false },
   ]),
   getBudgetMonth: vi.fn(),
+  setBudgetAmount: vi.fn().mockResolvedValue(undefined),
+  getNote: vi.fn().mockResolvedValue(null),
+  updateNote: vi.fn().mockResolvedValue(undefined),
   sync: vi.fn().mockResolvedValue(undefined),
   utils: {
     amountToInteger: (amount: number) => Math.round(amount * 100),
@@ -69,8 +72,17 @@ function month(groceries: number, dining: number, balances?: [number, number]) {
   };
 }
 
+/** The same month, with money left to assign and one figure moved. */
+function poolMonth(groceries: number, toBudget: number) {
+  const base = month(groceries, 5000);
+  return { ...base, toBudget };
+}
+
 describe('transfer_between_categories (#86)', () => {
   beforeEach(() => {
+    vi.mocked(api.setBudgetAmount).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(api.getNote).mockReset().mockResolvedValue(null as never);
+    vi.mocked(api.updateNote).mockReset().mockResolvedValue(undefined as never);
     sendMock.mockReset().mockResolvedValue(undefined);
     vi.mocked(api.getBudgetMonth).mockReset();
     // Reset this too. The income test replaces it with a three-category list,
@@ -353,5 +365,64 @@ describe('transfer_between_categories (#86)', () => {
 
     expect(result.isError).toBeFalsy();
     expect(order).toEqual(['read', 'write', 'sync', 'read']);
+  });
+
+  /**
+   * The trail, when writing it is what fails (#114, round three).
+   *
+   * Money out of the pool is one `setBudgetAmount` and then the line the
+   * engine's handler would have left in the month's note. The money is
+   * already moved by then, so a note that cannot be written is reported and
+   * not thrown: saying the move failed would be the worse answer.
+   */
+  describe('when the month note cannot be written', () => {
+    beforeEach(() => {
+      vi.mocked(api.getBudgetMonth)
+        .mockResolvedValueOnce(poolMonth(20000, 50000) as never)
+        .mockResolvedValueOnce(poolMonth(23000, 47000) as never);
+    });
+
+    it('says the money moved and the line did not', async () => {
+      vi.mocked(api.updateNote).mockRejectedValue(new Error('the note is locked') as never);
+
+      const result = await handlerFor()({
+        from: 'To Budget',
+        to: 'Groceries',
+        amount: 30,
+        month: '2026-09',
+      });
+
+      expect(result.isError).toBeFalsy();
+      const text = result.content[0].text;
+      expect(text).toContain('Moved 30.00 from To Budget to Groceries in 2026-09');
+      expect(text).toContain("the line in 2026-09's note");
+      expect(text).toContain('the note is locked');
+      expect(api.setBudgetAmount).toHaveBeenCalledWith('2026-09', 'cat-1', 23000);
+    });
+
+    it('says nothing about the note when it was written', async () => {
+      // The clock is held at a single-digit day on purpose: the engine pads
+      // it, and on any day after the ninth a line that did not pad would
+      // pass. Only `Date` is faked, so nothing that waits on a timer stalls.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2026, 8, 5, 12, 0, 0));
+      try {
+        const result = await handlerFor()({
+          from: 'To Budget',
+          to: 'Groceries',
+          amount: 30,
+          month: '2026-09',
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(result.content[0].text).not.toContain('note');
+        expect(api.updateNote).toHaveBeenCalledWith(
+          'budget-2026-09',
+          '- Reassigned 30.00 from To Budget \u2192 Groceries on September 05',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
