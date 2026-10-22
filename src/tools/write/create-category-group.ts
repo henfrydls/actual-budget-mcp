@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 export function registerCreateCategoryGroup(server: McpServer): void {
   server.tool(
@@ -16,13 +17,14 @@ export function registerCreateCategoryGroup(server: McpServer): void {
     async ({ name }) => {
       try {
         await ensureConnection();
-        const id = await api.createCategoryGroup({ name } as any);
+        const wanted = requireName(name, 'category group', 'Nothing was created.');
+        const id = await api.createCategoryGroup({ name: wanted } as any);
         await syncNow();
 
         return {
           content: [{
             type: 'text',
-            text: `Category group created:\n  Name: ${name}\n  ID: ${id}`,
+            text: `Category group created:\n  Name: ${wanted}\n  ID: ${id}`,
           }],
         };
       } catch (error) {

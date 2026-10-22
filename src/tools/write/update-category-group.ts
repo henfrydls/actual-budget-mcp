@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolveCategoryGroupId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 export function registerUpdateCategoryGroup(server: McpServer): void {
   server.tool(
@@ -19,6 +20,10 @@ export function registerUpdateCategoryGroup(server: McpServer): void {
     async ({ group, name, hidden }) => {
       try {
         await ensureConnection();
+        const wanted =
+          name === undefined
+            ? undefined
+            : requireName(name, 'category group', 'Nothing was changed.');
         const groupId = await resolveCategoryGroupId(group);
 
         const groups = await api.getCategoryGroups();
@@ -28,9 +33,9 @@ export function registerUpdateCategoryGroup(server: McpServer): void {
         const updates: Record<string, unknown> = {};
         const changes: string[] = [];
 
-        if (name !== undefined) {
-          updates.name = name;
-          changes.push(`Name: ${oldName} → ${name}`);
+        if (wanted !== undefined) {
+          updates.name = wanted;
+          changes.push(`Name: ${oldName} → ${wanted}`);
         }
         if (hidden !== undefined) {
           updates.hidden = hidden;

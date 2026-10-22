@@ -4,6 +4,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 export function registerCreatePayee(server: McpServer): void {
   server.tool(
@@ -16,13 +17,14 @@ export function registerCreatePayee(server: McpServer): void {
     async ({ name }) => {
       try {
         await ensureConnection();
-        const id = await api.createPayee({ name } as any);
+        const wanted = requireName(name, 'payee', 'Nothing was created.');
+        const id = await api.createPayee({ name: wanted } as any);
         await syncNow();
 
         return {
           content: [{
             type: 'text',
-            text: `Payee created:\n  Name: ${name}\n  ID: ${id}`,
+            text: `Payee created:\n  Name: ${wanted}\n  ID: ${id}`,
           }],
         };
       } catch (error) {

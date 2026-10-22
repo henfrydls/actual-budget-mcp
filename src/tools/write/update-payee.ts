@@ -5,6 +5,7 @@ import { ensureConnection } from '../../connection.js';
 import { resolvePayeeId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { requireName } from '../../utils/names.js';
 
 export function registerUpdatePayee(server: McpServer): void {
   server.tool(
@@ -18,19 +19,20 @@ export function registerUpdatePayee(server: McpServer): void {
     async ({ payee, name }) => {
       try {
         await ensureConnection();
+        const wanted = requireName(name, 'payee', 'Nothing was changed.');
         const payeeId = await resolvePayeeId(payee);
 
         const payees = await api.getPayees();
         const p = payees.find((x) => x.id === payeeId);
         const oldName = p?.name || payee;
 
-        await api.updatePayee(payeeId, { name } as any);
+        await api.updatePayee(payeeId, { name: wanted } as any);
         await syncNow();
 
         return {
           content: [{
             type: 'text',
-            text: `Payee renamed: ${oldName} → ${name}`,
+            text: `Payee renamed: ${oldName} → ${wanted}`,
           }],
         };
       } catch (error) {
