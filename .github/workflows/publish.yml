@@ -71,6 +71,23 @@ jobs:
       # hence the hint.
       - name: Publish
         run: |
+          # Whatever `setup-node` left behind. With `registry-url` it writes an
+          # .npmrc with `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`,
+          # and up to and including v6 it also exports a placeholder token,
+          # `XXXXX-XXXXX-XXXXX-XXXXX`, when the variable is unset: read in
+          # `src/authutil.ts`, present in v4.4.0 and v6.0.0, removed in v7 by
+          # actions/setup-node#1558, whose own description says it "could
+          # corrupt the user's .npmrc by injecting a non-functional token
+          # value into the environment, potentially causing confusing
+          # behaviour during OIDC publish".
+          #
+          # An OIDC publish must reach npm with no credential configured, so
+          # the line goes before publishing rather than after a release has
+          # failed. Measured: this removes the key when it is there, exits 0
+          # when it is not, and leaves the registry line alone. It also means
+          # the release does not depend on which version of `setup-node` the
+          # pin happens to be at.
+          npm config delete //registry.npmjs.org/:_authToken
           npm publish --provenance --access public || {
             echo "::error::npm refused the publish. If this is the first release with trusted publishing, check the configuration on npmjs.com: organisation or user henfrydls, repository actual-budget-mcp, workflow filename publish.yml, and npm publish among the allowed actions. The fields are case-sensitive and npm does not check them when they are saved."
             exit 1

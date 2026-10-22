@@ -49,9 +49,15 @@ describe('the npm publish step', () => {
     // for the same package, of exactly the kind being taken away, and it
     // would be what publishes on any path where the exchange does not
     // happen.
-    const file = readFileSync('.github/workflows/publish.yml', 'utf8');
-    expect(file).not.toContain('NODE_AUTH_TOKEN');
-    expect(file).not.toContain('NPM_TOKEN');
+    // On the steps rather than on the text of the file: the publish step
+    // talks about NODE_AUTH_TOKEN in a comment, because clearing what
+    // setup-node leaves behind is the point of a line in it.
+    for (const step of steps) {
+      expect(Object.keys(step.env ?? {}), `${step.name ?? step.run} sets an environment`).not.toContain(
+        'NODE_AUTH_TOKEN',
+      );
+    }
+    expect(readFileSync('.github/workflows/publish.yml', 'utf8')).not.toContain('NPM_TOKEN');
     expect(publishStep, 'no step publishes to npm').toBeDefined();
     expect(publishStep?.env ?? {}).toEqual({});
   });
@@ -80,6 +86,20 @@ describe('the npm publish step', () => {
     // turns provenance on by itself when it was not asked for explicitly.
     // Without the flag a publish that cannot be signed goes out unsigned.
     expect(publishStep?.run).toContain('--provenance');
+  });
+
+  it('clears any credential setup-node left behind', () => {
+    // With `registry-url`, setup-node writes an .npmrc pointing at
+    // NODE_AUTH_TOKEN, and up to v6 it exports a placeholder value for that
+    // variable when nothing set it. An OIDC publish has to reach npm with no
+    // credential configured, and this must not depend on which version the
+    // pin happens to be at.
+    expect(publishStep?.run).toContain('npm config delete //registry.npmjs.org/:_authToken');
+    const run = publishStep?.run ?? '';
+    expect(
+      run.indexOf('npm config delete'),
+      'the clearing has to happen before the publish',
+    ).toBeLessThan(run.indexOf('npm publish'));
   });
 
   it('says what to check when npm refuses the publish', () => {
