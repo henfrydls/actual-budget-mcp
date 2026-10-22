@@ -49,6 +49,9 @@ const SOON = day(60);
  * due makes the engine post it in the background.
  */
 const AHEAD = day(30);
+/** A single day still to come, and the day a payment for it is made. */
+const BILL = day(10);
+const BILL_PAID = day(8);
 
 /**
  * Listing schedules against the real engine (#150).
@@ -63,24 +66,30 @@ const AHEAD = day(30);
  * Two things the engine does decide how this file is written, both measured
  * by bisecting until one thing was left.
  *
- * A schedule that posts by itself, with an account to post into and a day
- * that has arrived, is posted by the engine in the background:
- * `advanceSchedulesService` calls `postTransactionForSchedule`, which runs a
- * query, and in a test that query lands after the budget is closed ("Cannot
- * read properties of null"). It fails the run without failing a test.
- * Waiting before the close does not drain it. Twelve combinations measured,
- * one field at a time:
+ * The engine's daily service writes when a schedule gives it something to
+ * do, and in a test that write lands after the budget is closed ("Cannot
+ * read properties of null"). It fails the run without failing a test, and
+ * waiting before the close does not drain it, because closing is what runs
+ * it. Two ways to give it something to do, both measured here:
  *
- *   account  posts_transaction  day               run
- *   no       either             any               clean
- *   yes      false              any               clean
- *   yes      true               ahead             clean
- *   yes      true               today or passed   the stray rejection
+ *   posting one      `advanceSchedulesService` calls
+ *                    `postTransactionForSchedule` for a schedule that posts
+ *                    by itself, has an account to post into, and whose day
+ *                    is today or has passed. Twelve combinations, one field
+ *                    at a time: no account is clean whatever else is set,
+ *                    `posts_transaction: false` is clean whatever the day,
+ *                    and a day still ahead is clean.
+ *
+ *   finishing one    a single day that has passed and has a payment linked
+ *                    to it is completed, through `updateSchedule`. Measured
+ *                    four ways: a single day ahead is clean paid or not,
+ *                    and one that has passed is clean until it is paid.
  *
  * In a server the database is open and the write goes through, so this is
- * the harness and not the server. It is still kept out of here: the schedule
- * that posts by itself starts thirty days out, and a day that has already
- * passed belongs to the schedules that wait to be approved.
+ * the harness and not the server. Both are kept out of here all the same:
+ * the schedule that posts by itself starts thirty days out, the one whose
+ * day has passed is not paid, and the one that is paid early is for a day
+ * still to come.
  *
  * And one that decides how the assertions below are written: a recurrence's
  * next date is not the same everywhere. `getNextDate` reads a stored
@@ -238,6 +247,20 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
       ],
     } as never);
 
+    // A single day, made the way the API makes one. Measured on 26.10:
+    // `api.createSchedule` writes an `isapprox` date condition even for a
+    // single day, so this one has the two early days and the app calls it
+    // paid when it is paid early. Guessing the operator from the date being
+    // a string called it late instead.
+    await api.createSchedule({
+      name: 'Api Bill',
+      posts_transaction: false,
+      account: accountId,
+      amount: -45000,
+      amountOp: 'is',
+      date: BILL,
+    } as never);
+
     // One day only, still to come.
     await testInternal().send(
       'schedule/create' as never,
@@ -278,6 +301,12 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
     await api.addTransactions(accountId, [
       { date: power?.next_date as string, amount: -90000, schedule: power?.id },
     ] as never);
+
+    // Paid two days before the day it is for.
+    const bill = all.find((s) => s.name === 'Api Bill');
+    await api.addTransactions(accountId, [
+      { date: BILL_PAID, amount: -45000, schedule: bill?.id },
+    ] as never);
   }, 60_000);
 
   afterAll(async () => {
@@ -299,7 +328,7 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
 
   it('lists every schedule in the budget', async () => {
     const text = await listing();
-    expect(text).toContain('=== Schedules (6) ===');
+    expect(text).toContain('=== Schedules (7) ===');
     expect(text).toContain('Rent');
     expect(text).toContain('Insurance');
   });
@@ -322,11 +351,13 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
   });
 
   it('calls a schedule that happens once "once"', async () => {
-    // The two single days: the one still to come and the one that passed.
+    // The three single days: one still to come, one that passed, and the
+    // one the API made.
     const text = await listing();
-    expect(text.match(/\bonce\b/g)).toHaveLength(2);
+    expect(text.match(/\bonce\b/g)).toHaveLength(3);
     expect(await under('Insurance')).toContain('once');
     expect(await under('Membership')).toContain('once');
+    expect(await under('Api Bill')).toContain('once');
   });
 
   it('names the account and the payee behind the ids', async () => {
@@ -339,6 +370,17 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
 
   it('says a schedule whose day has passed and is unpaid is late', async () => {
     expect(await under('Membership')).toContain(`due since ${PAST}`);
+  });
+
+  it('allows the early days the engine allows, by reading the condition', async () => {
+    // Whether the date condition is `is` or `isapprox` is not in what
+    // `getSchedules` returns. It is read from the schedules table in the
+    // same breath as the payments, because guessing it is wrong in both
+    // directions.
+    const bill = await under('Api Bill');
+
+    expect(bill).toContain('paid');
+    expect(bill).toContain(`already posted for ${BILL_PAID}`);
   });
 
   it('does not call a schedule late when its day is already paid', async () => {

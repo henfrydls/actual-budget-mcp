@@ -76,19 +76,21 @@ function daysBefore(date: string, days: number): string {
  * of those produce an exact day, and two days earlier otherwise, to catch a
  * payment made early.
  *
- * One part of that is not in what the API returns. Whether the date
- * condition is `is` or `isapprox` lives in the rule, not in the schedule. A
- * date stored as a string is a single day, which is always `is`; a
- * recurrence the app wrote is `isapprox`. So the two days are allowed for a
- * recurrence that does not post by itself, which is where the app allows
- * them, and the case left over is a recurrence with an exact condition,
- * which the app's own form does not produce. Reading every rule in the
- * budget to tell that one apart is a call for two days of difference.
+ * `op` is the date condition's operator, which decides the first of those
+ * and is not in what `getSchedules` returns. It is read from the schedules
+ * table in one query, because guessing it from the shape of the date is
+ * wrong in both directions: `api.createSchedule` writes `isapprox` even for
+ * a single day, and the app's own "find schedules" writes `is` on a
+ * recurrence. Each wrong guess is a day called paid that is not, or late
+ * that is not, and the second of those sends someone to pay a bill twice.
+ *
+ * An operator that cannot be read falls to the two days, which is where the
+ * engine's own default falls.
  */
-function paidFrom(row: ScheduleRow): string | undefined {
+function paidFrom(row: ScheduleRow, op: string | undefined): string | undefined {
   const next = row.next_date;
   if (typeof next !== 'string') return undefined;
-  if (typeof row.date === 'string' || row.posts_transaction === true) return next;
+  if (op === 'is' || row.posts_transaction === true) return next;
   return daysBefore(next, EARLY_DAYS);
 }
 
@@ -184,11 +186,28 @@ export function registerGetSchedules(server: McpServer): void {
             .select(['schedule', 'date']) as never,
         )) as unknown as { data?: Array<{ schedule?: string | null; date?: string | null }> };
 
-        const lastPosted = new Map<string, string>();
+        const payments = new Map<string, string[]>();
         for (const row of posted.data ?? []) {
           if (typeof row.schedule !== 'string' || typeof row.date !== 'string') continue;
-          const seen = lastPosted.get(row.schedule);
-          if (seen === undefined || seen < row.date) lastPosted.set(row.schedule, row.date);
+          const mine = payments.get(row.schedule);
+          if (mine === undefined) payments.set(row.schedule, [row.date]);
+          else mine.push(row.date);
+        }
+
+        // The operator of each schedule's date condition, which decides how
+        // early a payment may be and still count. It is in the schedules
+        // table and not in what `getSchedules` returns, and one query brings
+        // all of them.
+        const conditions = (await api.runQuery(
+          api.q('schedules').select(['id', '_conditions']) as never,
+        )) as unknown as {
+          data?: Array<{ id?: string | null; _conditions?: Array<{ field?: string; op?: string }> }>;
+        };
+        const dateOp = new Map<string, string>();
+        for (const row of conditions.data ?? []) {
+          if (typeof row.id !== 'string') continue;
+          const when = row._conditions?.find((c) => c.field === 'date');
+          if (typeof when?.op === 'string') dateOp.set(row.id, when.op);
         }
 
         // Finished last, the rest by the day they are next due. The app
@@ -229,9 +248,18 @@ export function registerGetSchedules(server: McpServer): void {
           // engine only moves a schedule on when its daily service runs, so
           // between the payment and that run the next date still points at
           // the day that was paid.
-          const latest = lastPosted.get(row.id);
-          const from = paidFrom(row);
-          const paid = latest !== undefined && from !== undefined && latest >= from;
+          // Three things out of the same dates: what it last paid, what it
+          // has already put in for a day still to come, and whether the day
+          // it is waiting on is covered. Keeping only the newest hid the
+          // last real payment behind one dated in the future, which is a
+          // date somebody mistyped as easily as a payment made early.
+          const mine = payments.get(row.id) ?? [];
+          const paidOn = mine.filter((date) => date <= today);
+          const ahead = mine.filter((date) => date > today);
+          const latest = paidOn.length === 0 ? undefined : paidOn.reduce((a, b) => (a > b ? a : b));
+          const soonest = ahead.length === 0 ? undefined : ahead.reduce((a, b) => (a < b ? a : b));
+          const from = paidFrom(row, dateOp.get(row.id));
+          const paid = from !== undefined && mine.some((date) => date >= from);
 
           if (row.completed !== true) {
             if (paid) {
@@ -248,16 +276,14 @@ export function registerGetSchedules(server: McpServer): void {
             // next for a finished schedule either.
             notes.push(row.posts_transaction === true ? 'posts by itself' : 'waits to be approved');
           }
-          notes.push(
-            latest === undefined
-              ? `nothing posted in the last ${POSTED_WINDOW_DAYS} days`
-              : latest <= today
-                ? `last posted ${latest}`
-                : // A schedule that posts by itself can be ahead of the day
-                  // it covers, and "last posted" about a day that has not
-                  // happened yet reads as a payment that has.
-                  `already posted for ${latest}`,
-          );
+          // A payment dated after today has not happened yet, so it is said
+          // separately: "last posted" about a day still to come reads as
+          // money that has already gone out.
+          if (latest !== undefined) notes.push(`last posted ${latest}`);
+          if (soonest !== undefined) notes.push(`already posted for ${soonest}`);
+          if (latest === undefined && soonest === undefined) {
+            notes.push(`nothing posted in the last ${POSTED_WINDOW_DAYS} days`);
+          }
           lines.push(`  ${notes.join('; ')}`);
         }
 

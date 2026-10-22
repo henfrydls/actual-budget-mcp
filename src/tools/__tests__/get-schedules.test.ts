@@ -5,7 +5,7 @@ const getAccounts = vi.fn();
 const getPayees = vi.fn();
 const runQuery = vi.fn();
 
-/** The filter the tool asked for, so the window can be checked. */
+/** The transactions filter the tool asked for, so the window can be checked. */
 let asked: unknown;
 
 vi.mock('@actual-app/api', () => ({
@@ -13,16 +13,21 @@ vi.mock('@actual-app/api', () => ({
   getAccounts: (...a: unknown[]) => getAccounts(...a),
   getPayees: (...a: unknown[]) => getPayees(...a),
   runQuery: (...a: unknown[]) => runQuery(...a),
-  // Enough of the query builder to record what was asked for. That the shape
-  // is one the engine accepts is checked in the integration test.
-  q: () => ({
-    options: () => ({
+  // Enough of the query builder to say which table was asked for and what
+  // was asked of it. That the shapes are ones the engine accepts is checked
+  // in the integration test.
+  q: (table: string) => {
+    const builder = {
+      table,
+      options: () => builder,
       filter: (filter: unknown) => {
-        asked = filter;
-        return { select: () => 'the query' };
+        if (table === 'transactions') asked = filter;
+        return builder;
       },
-    }),
-  }),
+      select: () => ({ table }),
+    };
+    return builder;
+  },
   utils: {
     amountToInteger: (a: number, places = 2) => Math.round(a * Math.pow(10, places)),
     integerToAmount: (c: number, places = 2) => c / Math.pow(10, places),
@@ -56,6 +61,32 @@ async function text(): Promise<string> {
 }
 
 /**
+ * What the engine answers each query with.
+ *
+ * Two tables are read: the transactions that carry a schedule id, and the
+ * schedules themselves, for the operator of each date condition.
+ */
+function engineAnswers(answers: {
+  payments?: Array<{ schedule: string | null; date: string }>;
+  dateOps?: Record<string, string>;
+}): void {
+  runQuery.mockImplementation((query: { table?: string }) => {
+    if (query?.table === 'schedules') {
+      return Promise.resolve({
+        data: Object.entries(answers.dateOps ?? {}).map(([id, op]) => ({
+          id,
+          _conditions: [
+            { field: 'account', op: 'is' },
+            { field: 'date', op },
+          ],
+        })),
+      });
+    }
+    return Promise.resolve({ data: answers.payments ?? [] });
+  });
+}
+
+/**
  * The shapes here were measured against 26.10 rather than read from the
  * types: a recurring schedule's `date` is an object and a one-off's is a
  * string, and an `isbetween` rule puts the amount in `{num1, num2}` where
@@ -72,7 +103,8 @@ describe('listing schedules (#150)', () => {
       { id: 'acc-2', name: 'Savings' },
     ]);
     getPayees.mockReset().mockResolvedValue([{ id: 'pay-1', name: 'Landlord' }]);
-    runQuery.mockReset().mockResolvedValue({ data: [] });
+    runQuery.mockReset();
+    engineAnswers({});
     asked = undefined;
   });
 
@@ -272,14 +304,12 @@ describe('listing schedules (#150)', () => {
         date: { start: '2026-01-01', frequency: 'monthly' },
       },
     ]);
-    runQuery.mockResolvedValue({
-      data: [
+    engineAnswers({ payments: [
         { date: '2026-04-01', schedule: 'sch-1' },
         { date: '2026-06-01', schedule: 'sch-1' },
         { date: '2026-05-01', schedule: 'sch-1' },
         { date: '2026-05-02', schedule: null },
-      ],
-    });
+      ] });
 
     const out = await text();
     expect(out).toContain('last posted 2026-06-01');
@@ -294,10 +324,13 @@ describe('listing schedules (#150)', () => {
       { id: 'sch-1', name: 'A', next_date: '2026-07-01', account: null, amount: -1000 },
       { id: 'sch-2', name: 'B', next_date: '2026-07-02', account: 'acc-2', amount: -1000 },
     ]);
-    runQuery.mockResolvedValue({ data: [{ date: '2026-06-10', schedule: 'sch-1' }] });
+    engineAnswers({ payments: [{ date: '2026-06-10', schedule: 'sch-1' }] });
 
     const out = await text();
-    expect(runQuery).toHaveBeenCalledTimes(1);
+    // Two queries, whatever the budget holds: the transactions that carry a
+    // schedule id, and the schedules, for the operator of each date
+    // condition.
+    expect(runQuery).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(asked)).toContain('"$gte":"2025-06-15"');
     expect(JSON.stringify(asked)).toContain('"schedule":{"$ne":null}');
     // No account anywhere in it. Narrowing the query to the accounts the
@@ -373,7 +406,7 @@ describe('listing schedules (#150)', () => {
         date: { start: '2026-01-01', frequency: 'monthly' },
       },
     ]);
-    runQuery.mockResolvedValue({ data: [{ date: '2026-06-01', schedule: 'sch-1' }] });
+    engineAnswers({ payments: [{ date: '2026-06-01', schedule: 'sch-1' }] });
 
     const out = await text();
     expect(out).toContain('paid');
@@ -392,14 +425,14 @@ describe('listing schedules (#150)', () => {
     };
     getSchedules.mockResolvedValue([schedule]);
 
-    runQuery.mockResolvedValue({ data: [{ date: '2026-06-08', schedule: 'sch-1' }] });
+    engineAnswers({ payments: [{ date: '2026-06-08', schedule: 'sch-1' }] });
     expect(await text()).toContain('paid');
 
-    runQuery.mockResolvedValue({ data: [{ date: '2026-06-07', schedule: 'sch-1' }] });
+    engineAnswers({ payments: [{ date: '2026-06-07', schedule: 'sch-1' }] });
     expect(await text()).not.toContain('paid');
   });
 
-  it('gives no early days to a single day or to one that posts by itself', async () => {
+  it('gives no early days to an exact condition or to one that posts by itself', async () => {
     // Both produce an exact day, so the engine matches the day itself.
     getSchedules.mockResolvedValue([
       {
@@ -420,14 +453,123 @@ describe('listing schedules (#150)', () => {
         date: { start: '2026-01-10', frequency: 'monthly' },
       },
     ]);
-    runQuery.mockResolvedValue({
-      data: [
+    engineAnswers({
+      payments: [
         { date: '2026-06-09', schedule: 'sch-1' },
         { date: '2026-06-09', schedule: 'sch-2' },
       ],
+      // The operator is what decides the first of them, and it is read
+      // rather than guessed from the date being a single day.
+      dateOps: { 'sch-1': 'is', 'sch-2': 'isapprox' },
     });
 
     expect(await text()).not.toContain('paid');
+  });
+
+  it('reads the operator rather than guessing it from the shape of the date', async () => {
+    // Measured on 26.10: `api.createSchedule` writes `isapprox` even for a
+    // single day, so a one-off made through the API has the two early days.
+    // Guessing from the date being a string called this one late while the
+    // app called it paid, which is the way round that costs money.
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Api One Off',
+        next_date: '2026-06-10',
+        account: 'acc-1',
+        amount: -1000,
+        date: '2026-06-10',
+      },
+    ]);
+    engineAnswers({
+      payments: [{ date: '2026-06-08', schedule: 'sch-1' }],
+      dateOps: { 'sch-1': 'isapprox' },
+    });
+
+    expect(await text()).toContain('paid');
+  });
+
+  it('gives no early days to a recurrence whose condition is exact', async () => {
+    // The other direction, and the app writes these: "find schedules" fills
+    // in a recurrence with an exact date condition.
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Found',
+        next_date: '2026-06-10',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-10', frequency: 'monthly' },
+      },
+    ]);
+    engineAnswers({
+      payments: [{ date: '2026-06-09', schedule: 'sch-1' }],
+      dateOps: { 'sch-1': 'is' },
+    });
+
+    expect(await text()).not.toContain('paid');
+  });
+
+  it('falls to the two days when the operator cannot be read', async () => {
+    // Where the engine's own default falls.
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Unknown',
+        next_date: '2026-06-10',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-10', frequency: 'monthly' },
+      },
+    ]);
+    engineAnswers({ payments: [{ date: '2026-06-08', schedule: 'sch-1' }], dateOps: {} });
+
+    expect(await text()).toContain('paid');
+  });
+
+  it('counts a payment dated today as made, not as one still to come', async () => {
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Today',
+        next_date: '2026-07-01',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+    engineAnswers({ payments: [{ date: '2026-06-15', schedule: 'sch-1' }] });
+
+    const out = await text();
+    expect(out).toContain('last posted 2026-06-15');
+    expect(out).not.toContain('already posted for');
+  });
+
+  it('keeps the last payment visible behind one dated in the future', async () => {
+    // Only the newest was kept, so a date mistyped as 2036 hid every real
+    // payment behind it for as long as it stayed in the budget.
+    getSchedules.mockResolvedValue([
+      {
+        id: 'sch-1',
+        name: 'Rent',
+        next_date: '2026-07-01',
+        account: 'acc-1',
+        amount: -1000,
+        date: { start: '2026-01-01', frequency: 'monthly' },
+      },
+    ]);
+    engineAnswers({
+      payments: [
+        { date: '2026-05-26', schedule: 'sch-1' },
+        { date: '2036-07-01', schedule: 'sch-1' },
+        { date: '2026-08-01', schedule: 'sch-1' },
+      ],
+    });
+
+    const out = await text();
+    expect(out).toContain('last posted 2026-05-26');
+    // The nearest one still to come, not the furthest.
+    expect(out).toContain('already posted for 2026-08-01');
   });
 
   it('says a payment dated ahead is ahead, not the last one made', async () => {
@@ -442,7 +584,7 @@ describe('listing schedules (#150)', () => {
         date: { start: '2026-01-01', frequency: 'monthly' },
       },
     ]);
-    runQuery.mockResolvedValue({ data: [{ date: '2026-07-01', schedule: 'sch-1' }] });
+    engineAnswers({ payments: [{ date: '2026-07-01', schedule: 'sch-1' }] });
 
     const out = await text();
     expect(out).toContain('already posted for 2026-07-01');
@@ -462,7 +604,7 @@ describe('listing schedules (#150)', () => {
         date: { start: '2026-01-01', frequency: 'monthly' },
       },
     ]);
-    runQuery.mockResolvedValue({ data: [{ date: '2026-06-01', schedule: 'sch-1' }] });
+    engineAnswers({ payments: [{ date: '2026-06-01', schedule: 'sch-1' }] });
 
     const out = await text();
     expect(out).toContain('finished');
