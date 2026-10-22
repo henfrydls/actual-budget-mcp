@@ -153,6 +153,18 @@ node --input-type=module -e "
 cp "$ROOT/README.md" "$STAGE/README.md"
 cp "$ROOT/LICENSE" "$STAGE/LICENSE"
 
+# The icon, at the path the manifest names, which is the same path it has in
+# the repository: `mcpb validate manifest.json` resolves it relative to the
+# manifest, so a bundle-only path like `icon.png` would fail validation in
+# the one place anybody edits that file. The packer refuses anything that is
+# not a PNG, which is why the repository keeps both: the SVG is the mark and
+# this is the raster the bundle needs.
+ICON=$(node -p "require('$ROOT/manifest.json').icon || ''")
+if [ -n "$ICON" ]; then
+  mkdir -p "$STAGE/$(dirname "$ICON")"
+  cp "$ROOT/$ICON" "$STAGE/$ICON"
+fi
+
 npx --yes @anthropic-ai/mcpb@2.1.2 pack "$STAGE" "$OUT"
 
 # Read back out of the archive, which is the only thing that ships.

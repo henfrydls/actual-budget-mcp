@@ -1,7 +1,7 @@
 {
   "name": "actual-budget",
   "version": "0.10.9",
-  "description": "Ask your Actual Budget where the money went, and let it write back safely: every delete previews first and asks before it destroys anything.",
+  "description": "Ask your Actual Budget where the money went, and write back safely: every delete previews what it would destroy, and new transactions are checked against what is there.",
   "settings": [
     {
       "name": "Actual server URL",
@@ -16,7 +16,7 @@
     },
     {
       "name": "Budget Sync ID",
-      "description": "Actual shows this under Settings > Show advanced settings. It is the Sync ID, not the Budget ID shown above it — the two look alike and only the Sync ID works.",
+      "description": "Actual shows this under Settings > Show advanced settings. It is the Sync ID, not the Budget ID shown above it: the two look alike and only the Sync ID works.",
       "envVar": "ACTUAL_BUDGET_ID"
     },
     {
