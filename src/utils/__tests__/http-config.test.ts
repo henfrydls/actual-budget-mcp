@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { httpRequested, readHttpConfig } from '../http-config.js';
+import { httpRequested, httpHalfConfigured, readHttpConfig } from '../http-config.js';
 import { MIN_TOKEN_LENGTH } from '../http-auth.js';
 
 const VARS = [
@@ -12,8 +12,8 @@ const VARS = [
   'ACTUAL_READ_ONLY',
 ];
 
-const TOKEN = 'a'.repeat(MIN_TOKEN_LENGTH);
-const OTHER = 'b'.repeat(MIN_TOKEN_LENGTH);
+const TOKEN = '9f2c41ab7d0e38516c4af0b29d7e13a5';
+const OTHER = '0b7e4d1c92a6358f1e0c4ab7d539e62f';
 
 /**
  * What has to be true before a port is opened (#228).
@@ -81,9 +81,50 @@ describe('the HTTP configuration', () => {
     expect(readHttpConfig().problems.join('\n')).toContain('ACTUAL_HTTP_ALLOW_REMOTE');
 
     process.env.ACTUAL_HTTP_ALLOW_REMOTE = '1';
+    // Still not enough: off loopback the automatic host validation does not
+    // apply, and without a list every Host header is answered.
+    expect(readHttpConfig().problems.join('\n')).toContain('ACTUAL_HTTP_ALLOWED_HOSTS');
+
+    process.env.ACTUAL_HTTP_ALLOWED_HOSTS = 'budget.example.com';
     const { config, problems } = readHttpConfig();
     expect(problems).toEqual([]);
     expect(config?.host).toBe('0.0.0.0');
+  });
+
+  it('takes an IPv6 address written the way a URL writes it', () => {
+    process.env.ACTUAL_HTTP_PORT = '3000';
+    process.env.ACTUAL_HTTP_TOKEN = TOKEN;
+    process.env.ACTUAL_HTTP_HOST = '[::1]';
+
+    // The brackets belong to the URL. `listen` cannot resolve them, and the
+    // server came up bound to nothing.
+    const { config, problems } = readHttpConfig();
+    expect(problems).toEqual([]);
+    expect(config?.host).toBe('::1');
+  });
+
+  it('refuses a token that is one character repeated', () => {
+    process.env.ACTUAL_HTTP_PORT = '3000';
+    process.env.ACTUAL_HTTP_TOKEN = 'a'.repeat(MIN_TOKEN_LENGTH);
+
+    expect(readHttpConfig().problems.join('\n')).toContain('one character repeated');
+  });
+
+  it('says so when everything but the port is set', () => {
+    process.env.ACTUAL_HTTP_TOKEN = TOKEN;
+    process.env.ACTUAL_HTTP_HOST = '127.0.0.1';
+
+    // Starting quietly on stdio answers nothing and looks like the server
+    // is up.
+    expect(httpRequested()).toBe(false);
+    expect(httpHalfConfigured()).toEqual(['ACTUAL_HTTP_TOKEN', 'ACTUAL_HTTP_HOST']);
+  });
+
+  it('says nothing when nothing was set', () => {
+    expect(httpHalfConfigured()).toEqual([]);
+    process.env.ACTUAL_HTTP_PORT = '3000';
+    process.env.ACTUAL_HTTP_TOKEN = TOKEN;
+    expect(httpHalfConfigured()).toEqual([]);
   });
 
   it('takes the host headers to accept as a list', () => {
@@ -93,7 +134,9 @@ describe('the HTTP configuration', () => {
     process.env.ACTUAL_HTTP_ALLOW_REMOTE = 'yes';
     process.env.ACTUAL_HTTP_ALLOWED_HOSTS = 'budget.example.com, 10.0.0.4 ,';
 
-    expect(readHttpConfig().config?.allowedHosts).toEqual(['budget.example.com', '10.0.0.4']);
+    const { config, problems } = readHttpConfig();
+    expect(problems).toEqual([]);
+    expect(config?.allowedHosts).toEqual(['budget.example.com', '10.0.0.4']);
   });
 
   it('refuses a write path whose credential is the read one', () => {
@@ -117,8 +160,10 @@ describe('the HTTP configuration', () => {
     process.env.ACTUAL_HTTP_PORT = 'nope';
     process.env.ACTUAL_HTTP_HOST = '0.0.0.0';
 
+    // The port, the missing token, leaving loopback, and the host list that
+    // leaving loopback needs. One restart, not four.
     const { problems } = readHttpConfig();
-    expect(problems).toHaveLength(3);
+    expect(problems).toHaveLength(4);
   });
 
   it('takes a write token that is its own', () => {

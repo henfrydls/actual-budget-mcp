@@ -18,10 +18,19 @@ import { timingSafeEqual } from 'node:crypto';
  */
 export const MIN_TOKEN_LENGTH = 32;
 
-/** The token out of an `Authorization` header, or nothing if there is none. */
+/**
+ * The token out of an `Authorization` header, or nothing if there is none.
+ *
+ * One or more spaces after the scheme, which is what the standard writes
+ * (`auth-scheme 1*SP credentials`) and what a client that builds the header
+ * by joining strings sometimes produces. A tab is not a space and is not
+ * accepted, and neither is an array: Node hands a repeated header over as
+ * one, and two credentials in a request is a question nobody can answer
+ * correctly.
+ */
 export function bearerFrom(header: string | string[] | undefined): string | undefined {
   if (typeof header !== 'string') return undefined;
-  const match = /^Bearer (.+)$/i.exec(header.trim());
+  const match = /^Bearer +(.+)$/i.exec(header.trim());
   return match?.[1];
 }
 
