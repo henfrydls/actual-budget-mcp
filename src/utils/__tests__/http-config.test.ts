@@ -1,5 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { httpRequested, httpHalfConfigured, readHttpConfig } from '../http-config.js';
+import {
+  httpRequested,
+  httpHalfConfigured,
+  readHttpConfig,
+  displayHost,
+} from '../http-config.js';
 import { MIN_TOKEN_LENGTH } from '../http-auth.js';
 
 const VARS = [
@@ -101,6 +106,23 @@ describe('the HTTP configuration', () => {
     const { config, problems } = readHttpConfig();
     expect(problems).toEqual([]);
     expect(config?.host).toBe('::1');
+  });
+
+  it('writes an IPv6 address the way a URL writes it', () => {
+    // The line a server prints at startup is what gets pasted into a
+    // client, and `http://::1:3000` is not an address.
+    expect(displayHost('::1')).toBe('[::1]');
+    expect(displayHost('127.0.0.1')).toBe('127.0.0.1');
+    expect(displayHost('budget.example.com')).toBe('budget.example.com');
+  });
+
+  it('refuses a token nobody could send', () => {
+    process.env.ACTUAL_HTTP_PORT = '3000';
+    process.env.ACTUAL_HTTP_TOKEN = `${TOKEN} `;
+
+    // The header is trimmed before it is compared, so this one starts a
+    // server that refuses its own credential.
+    expect(readHttpConfig().problems.join('\n')).toContain('no client could send it');
   });
 
   it('refuses a token that is one character repeated', () => {

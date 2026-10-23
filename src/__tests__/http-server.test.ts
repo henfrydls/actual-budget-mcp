@@ -172,6 +172,20 @@ describe('the HTTP server (#228)', () => {
     expect(write.text).toContain('repair_sync');
   });
 
+  it('answers every method it does not take the same way', async () => {
+    // The transport answered a PUT itself, offering GET in `Allow`, which
+    // is a method this server does not serve either.
+    for (const method of ['GET', 'PUT', 'PATCH', 'HEAD']) {
+      const response = await fetch(`${base}/mcp`, {
+        method,
+        headers: { ...JSON_HEADERS, authorization: `Bearer ${READ_TOKEN}` },
+      });
+
+      expect(response.status, method).toBe(405);
+      expect(response.headers.get('allow'), method).toBe('POST, DELETE');
+    }
+  });
+
   it('opens no event stream, and says so', async () => {
     // Left to the transport a GET opens an SSE stream that nothing closes:
     // measured, two hundred of them took the heap from 50 to 100 MB. This
@@ -203,6 +217,30 @@ describe('the HTTP server (#228)', () => {
     expect(text).not.toMatch(/\n\s+at /);
     expect(text).not.toContain('.ts:');
     expect(text).not.toContain('/src/');
+  });
+
+  it('answers anything else the parser refuses in the protocol too', async () => {
+    // A charset it does not know, an encoding it does not know: each one
+    // had its own HTML page with a stack trace, and the body went to stderr
+    // on the way.
+    const cases: Array<Record<string, string>> = [
+      { 'content-type': 'application/json; charset=ebcdic' },
+      { 'content-encoding': 'xyz' },
+    ];
+
+    for (const headers of cases) {
+      const response = await fetch(`${base}/mcp`, {
+        method: 'POST',
+        headers: { ...JSON_HEADERS, authorization: `Bearer ${READ_TOKEN}`, ...headers },
+        body: JSON.stringify(INITIALIZE),
+      });
+      const text = await response.text();
+
+      expect(response.status, JSON.stringify(headers)).toBeGreaterThanOrEqual(400);
+      expect(text, JSON.stringify(headers)).toContain('"jsonrpc":"2.0"');
+      expect(text, JSON.stringify(headers)).not.toContain('<!DOCTYPE');
+      expect(text, JSON.stringify(headers)).not.toContain('.ts:');
+    }
   });
 
   it('refuses a body too large, in the protocol', async () => {
@@ -372,9 +410,9 @@ describe('an HTTP server with no write token', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     });
 
-    // A credential this server holds, so it can be told the path is not
-    // here. The answer is JSON, not Express's HTML page.
-    expect(response.status).toBe(404);
+    // The same answer a wrong credential gets, in JSON, so that nobody
+    // outside learns which paths exist here.
+    expect(response.status).toBe(401);
     expect(await response.text()).toContain('"jsonrpc":"2.0"');
   });
 
@@ -541,5 +579,95 @@ describe('an HTTP server with a host list', () => {
 
   it('refuses a name that is not on it, before anything else', async () => {
     expect(await withHost('evil.example')).toContain('403');
+  });
+});
+
+/**
+ * The write path, reached by a name that is not quite it.
+ *
+ * Express matches a route without regard to case or a trailing slash unless
+ * it is told to. With the credential decided by comparing the path to a
+ * string, `/MCP-WRITE` was a path this server did not serve, so any token it
+ * held was accepted, and then the router handed the request to the write
+ * route anyway. Measured: the read token listed every tool through
+ * `/MCP-WRITE` and created a transaction with one.
+ *
+ * So the route decides which credential it wants, because the route is the
+ * only thing that knows which one matched, and the router is told to take
+ * the path literally.
+ */
+describe('a path that is nearly the write path', () => {
+  let server: Server;
+  let base = '';
+
+  beforeAll(async () => {
+    server = await startHttpServer({
+      port: 0,
+      host: '127.0.0.1',
+      readToken: READ_TOKEN,
+      writeToken: WRITE_TOKEN,
+    });
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => server.close(() => resolve(undefined)));
+  });
+
+  async function list(path: string, token: string): Promise<{ status: number; text: string }> {
+    const response = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+    return { status: response.status, text: await response.text() };
+  }
+
+  it('refuses the read token on every spelling of the write path', async () => {
+    for (const path of [
+      '/MCP-WRITE',
+      '/Mcp-Write',
+      '/mcp-write/',
+      '/mcp-WRITE/',
+      '/mcp//write',
+      '/mcp-write//',
+    ]) {
+      const { status, text } = await list(path, READ_TOKEN);
+
+      expect(status, path).toBe(401);
+      expect(text, path).not.toContain('create_transaction');
+    }
+  });
+
+  it('refuses the write token on every spelling of the read path', async () => {
+    for (const path of ['/MCP', '/mcp/', '/Mcp']) {
+      const { status } = await list(path, WRITE_TOKEN);
+
+      expect(status, path).toBe(401);
+    }
+  });
+
+  it('refuses the write token too, on anything but the path itself', async () => {
+    // The credential is right here, so what refuses the request is the
+    // router taking the path literally. Without that it writes.
+    for (const path of ['/MCP-WRITE', '/mcp-write/', '/Mcp-Write']) {
+      const { status, text } = await list(path, WRITE_TOKEN);
+
+      expect(status, path).toBe(401);
+      expect(text, path).not.toContain('create_transaction');
+    }
+  });
+
+  it('refuses the read token on anything but the read path itself', async () => {
+    for (const path of ['/MCP', '/mcp/']) {
+      const { status } = await list(path, READ_TOKEN);
+
+      expect(status, path).toBe(401);
+    }
+  });
+
+  it('still serves the two paths spelled as they are', async () => {
+    expect((await list('/mcp', READ_TOKEN)).status).toBe(200);
+    expect((await list('/mcp-write', WRITE_TOKEN)).text).toContain('create_transaction');
   });
 });

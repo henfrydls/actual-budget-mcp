@@ -13,6 +13,7 @@ import {
   httpRequested,
   httpHalfConfigured,
   readHttpConfig,
+  displayHost,
   READ_PATH,
   WRITE_PATH,
 } from './utils/http-config.js';
@@ -191,7 +192,7 @@ if (http?.config !== undefined) {
   const config = http.config;
   await startHttpServer(config);
   console.error(
-    `[actual-budget-mcp] HTTP on http://${config.host}:${config.port}, ` +
+    `[actual-budget-mcp] HTTP on http://${displayHost(config.host)}:${config.port}, ` +
       `${READ_PATH} reads` +
       (config.writeToken === undefined
         ? ' and nothing writes: set ACTUAL_HTTP_WRITE_TOKEN for a write path'
