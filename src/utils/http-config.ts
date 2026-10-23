@@ -52,6 +52,17 @@ function bareHost(host: string): string {
 }
 
 /**
+ * The host as a URL writes it.
+ *
+ * An IPv6 address needs the brackets back: `http://::1:3000` is not an
+ * address anyone can paste, and the line a server prints at startup is
+ * exactly what gets pasted.
+ */
+export function displayHost(host: string): string {
+  return host.includes(':') ? `[${host}]` : host;
+}
+
+/**
  * The HTTP variables set while no port was.
  *
  * An empty `ACTUAL_HTTP_PORT`, or a host that left the placeholder in,
@@ -92,6 +103,11 @@ function tokenProblems(name: string, token: string): string[] {
   }
   if (new Set(token).size === 1) {
     problems.push(`${name} is one character repeated, which is not a secret`);
+  }
+  if (token !== token.trim()) {
+    // The header is trimmed before it is compared, as every client trims
+    // it, so a token with a space on the end is one nobody can ever send.
+    problems.push(`${name} starts or ends with a space, and no client could send it`);
   }
   return problems;
 }

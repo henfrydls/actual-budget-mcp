@@ -76,55 +76,45 @@ function headerCount(req: Request, name: string): number {
   return count;
 }
 
-/** The credential a path wants, or nothing when it is not a path we serve. */
-function tokenFor(path: string, config: HttpConfig, writes: boolean): string | undefined {
-  if (path === READ_PATH) return config.readToken;
-  if (path === WRITE_PATH && writes) return config.writeToken;
-  return undefined;
+/**
+ * What every request has to pass, whatever it is for.
+ *
+ * No credential is checked here. Which credential a request needs is the
+ * route's to say, because the route is the only thing that knows which one
+ * actually matched: deciding it here, by comparing the path to a string,
+ * is how the read token came to be accepted on the write path. Express
+ * matches `/MCP-WRITE` and `/mcp-write/` to `app.all('/mcp-write')` unless
+ * it is told not to, and a guard that compared text saw a path it did not
+ * serve and waved any credential through.
+ */
+function entryChecks(req: Request, res: Response, next: NextFunction): void {
+  // No browser is a legitimate client of this server, and a page trying to
+  // reach it is what sends an `Origin`. The host validation above covers
+  // DNS rebinding; this covers the page that knows the address.
+  if (req.headers.origin !== undefined) {
+    refuse(res, 403, 'This server does not serve browsers: a request with an Origin header is refused.');
+    return;
+  }
+
+  // Two credentials in one request is a question nobody can answer
+  // correctly: Node keeps the first and hides the rest, so a proxy adding
+  // one silently decides which is used.
+  if (headerCount(req, 'authorization') > 1) {
+    refuse(res, 400, 'More than one Authorization header was sent.');
+    return;
+  }
+
+  next();
 }
 
-/**
- * Who gets in, decided before a body is read and before a route is chosen.
- *
- * A path this server does not serve is answered 404 only once a valid
- * credential has been shown. Answering 404 first tells anyone who asks
- * whether a write path exists here, which is the one thing an unauthenticated
- * caller should not learn.
- */
-function guard(config: HttpConfig, writes: boolean) {
+/** The credential this route wants, and nothing else will do. */
+function requires(token: string | undefined) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    // No browser is a legitimate client of this server, and a page trying to
-    // reach it is what sends an `Origin`. The host validation above covers
-    // DNS rebinding; this covers the page that knows the address.
-    if (req.headers.origin !== undefined) {
-      refuse(res, 403, 'This server does not serve browsers: a request with an Origin header is refused.');
-      return;
-    }
-
-    // Two credentials in one request is a question nobody can answer
-    // correctly: Node keeps the first and hides the rest, so a proxy adding
-    // one silently decides which is used.
-    if (headerCount(req, 'authorization') > 1) {
-      refuse(res, 400, 'More than one Authorization header was sent.');
-      return;
-    }
-
-    const presented = bearerFrom(req.headers.authorization);
-    const wanted = tokenFor(req.path, config, writes);
-    const ok =
-      wanted !== undefined
-        ? tokenMatches(presented, wanted)
-        : // An unknown path: any credential this server holds will do, and
-          // what comes back is a 404 rather than a hint.
-          tokenMatches(presented, config.readToken) ||
-          (writes && tokenMatches(presented, config.writeToken));
-
-    if (!ok) {
+    if (!tokenMatches(bearerFrom(req.headers.authorization), token)) {
       res.setHeader('WWW-Authenticate', 'Bearer');
       refuse(res, 401, 'Missing or wrong bearer token.');
       return;
     }
-
     next();
   };
 }
@@ -141,13 +131,28 @@ function badBody(error: unknown, _req: Request, res: Response, next: NextFunctio
     next(error);
     return;
   }
-  const type = (error as { type?: string }).type;
+  const { type, status, statusCode } = error as {
+    type?: string;
+    status?: number;
+    statusCode?: number;
+  };
+  const code = status ?? statusCode;
+
   if (type === 'entity.too.large') {
     refuse(res, 413, `That request body is larger than this server accepts (${BODY_LIMIT}).`);
     return;
   }
   if (type === 'entity.parse.failed') {
     refuse(res, 400, 'That request body is not JSON.', -32700);
+    return;
+  }
+  // Everything else the parser refuses: a charset it does not know, an
+  // encoding it does not know, compressed bytes that do not decompress. Each
+  // one had its own HTML page with a stack trace in it, and Express wrote
+  // the body to stderr on the way. Nothing here is logged, and the answer
+  // is the protocol's.
+  if (type !== undefined || (typeof code === 'number' && code >= 400 && code < 500)) {
+    refuse(res, code ?? 400, 'That request body could not be read.');
     return;
   }
   next(error);
@@ -159,7 +164,11 @@ async function serve(req: Request, res: Response, writes: boolean): Promise<void
   // one offers none: it is stateless and sends nothing a client did not ask
   // for. Left to the transport, a GET opens an SSE stream that nothing ever
   // closes, and two hundred of them doubled the heap.
-  if (req.method === 'GET') {
+  if (req.method !== 'POST' && req.method !== 'DELETE') {
+    // One answer for every method this server does not take, rather than
+    // the transport's for some and ours for others: a GET left to it opens
+    // an event stream that nothing closes, and two hundred of those doubled
+    // the heap, while a PUT came back offering GET.
     res.setHeader('Allow', 'POST, DELETE');
     refuse(res, 405, 'This server opens no event stream: use POST, or DELETE to end a session.');
     return;
@@ -196,6 +205,13 @@ export function createHttpApp(config: HttpConfig) {
   const writes = config.writeToken !== undefined && !isReadOnly();
   const app = express();
 
+  // Two paths and two credentials mean nothing if `/MCP-WRITE` and
+  // `/mcp-write/` reach the write path as well, which is what Express does
+  // by default. Measured: the read token wrote a transaction through
+  // `/MCP-WRITE`.
+  app.set('case sensitive routing', true);
+  app.set('strict routing', true);
+
   // Says what the server is running to anyone who asks, and answers no
   // question worth asking.
   app.disable('x-powered-by');
@@ -207,24 +223,32 @@ export function createHttpApp(config: HttpConfig) {
       ? localhostHostValidation()
       : hostHeaderValidation(config.allowedHosts),
   );
-  app.use(guard(config, writes));
-  app.use(express.json({ limit: BODY_LIMIT }));
-  app.use(badBody);
+  app.use(entryChecks);
 
-  const route = (path: string, allowed: boolean) => {
-    app.all(path, (req, res) => {
-      void serve(req, res, allowed).catch(() => {
-        if (!res.headersSent) refuse(res, 500, 'The server could not handle that request.');
-      });
-    });
+  const route = (path: string, token: string | undefined, allowed: boolean) => {
+    app.all(
+      path,
+      requires(token),
+      express.json({ limit: BODY_LIMIT }),
+      badBody,
+      (req: Request, res: Response) => {
+        void serve(req, res, allowed).catch(() => {
+          if (!res.headersSent) refuse(res, 500, 'The server could not handle that request.');
+        });
+      },
+    );
   };
 
-  route(READ_PATH, false);
-  if (writes) route(WRITE_PATH, true);
+  route(READ_PATH, config.readToken, false);
+  if (writes) route(WRITE_PATH, config.writeToken, true);
 
-  // Past the guard, so this is a client that holds a credential.
+  // Anything else, including a path that differs from one of those by its
+  // case or a trailing slash. It is answered the same way a wrong
+  // credential is, so that nobody outside learns which paths exist here,
+  // and no body is read on the way.
   app.use((_req: Request, res: Response) => {
-    refuse(res, 404, 'This server serves no such path.');
+    res.setHeader('WWW-Authenticate', 'Bearer');
+    refuse(res, 401, 'Missing or wrong bearer token.');
   });
 
   return app;
