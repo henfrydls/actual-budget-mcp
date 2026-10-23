@@ -10,6 +10,7 @@ import { effectiveDataDir, ensureDataDirExists } from './utils/data-dir-lock.js'
 import * as api from '@actual-app/api';
 import { formatMoney } from './utils/money.js';
 import { describeError } from './utils/errors.js';
+import { withoutCredentials } from './utils/redact.js';
 
 async function testConnection() {
   const { ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_BUDGET_ID, ACTUAL_ENCRYPTION_PASSWORD, ACTUAL_DATA_DIR } = process.env;
@@ -30,7 +31,9 @@ async function testConnection() {
     process.exit(1);
   }
 
-  console.log(`Server URL: ${ACTUAL_SERVER_URL}`);
+  // Without the credentials it may carry: this output is what people paste
+  // into an issue when the connection does not work (#275).
+  console.log(`Server URL: ${withoutCredentials(ACTUAL_SERVER_URL)}`);
   console.log(`Budget ID:  ${ACTUAL_BUDGET_ID}`);
   console.log(`Password:   ${ACTUAL_PASSWORD ? 'Set' : 'None'}`);
   console.log(`Encryption: ${ACTUAL_ENCRYPTION_PASSWORD ? 'Yes' : 'No'}`);
@@ -113,7 +116,9 @@ async function testConnection() {
 
     if (message.includes('fetch') || message.includes('ECONNREFUSED')) {
       console.error('\nCould not connect to the server. Check that:');
-      console.error(`  1. Actual Budget server is running at ${ACTUAL_SERVER_URL}`);
+      console.error(
+        `  1. Actual Budget server is running at ${withoutCredentials(ACTUAL_SERVER_URL)}`,
+      );
       console.error('  2. The URL is correct');
     } else if (message.includes('password') || message.includes('auth')) {
       console.error('\nAuthentication failed. Check ACTUAL_PASSWORD where you configured it.');
