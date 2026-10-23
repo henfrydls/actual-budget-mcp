@@ -13,6 +13,7 @@
 
 import { readDataDirLock, activeDataDir, effectiveDataDir } from './data-dir-lock.js';
 import { readEnv } from './env.js';
+import { withoutCredentials } from './redact.js';
 
 /**
  * #47: two servers sharing an ACTUAL_DATA_DIR drive the budget out-of-sync, but
@@ -380,7 +381,19 @@ export function contentionExplains(error: unknown): boolean {
   return readable(error).trim() === '';
 }
 
+/**
+ * The text of a failure, with no credential left in it (#275).
+ *
+ * Here rather than in each branch below, and rather than on the error
+ * object: every description this server gives a client comes through this
+ * function, and rewriting the object would take away the string
+ * `mayHaveBeenApplied` recognises a mid-write failure by.
+ */
 export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
+  return withoutCredentials(describeFailure(error, options));
+}
+
+function describeFailure(error: unknown, options: DescribeErrorOptions): string {
   if (typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[DESCRIBED]) {
     return readable(error);
   }
