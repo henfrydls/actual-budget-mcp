@@ -41,10 +41,44 @@ describe('a server address with credentials in it', () => {
     expect(serverUrlProblem('   ')).toBeUndefined();
   });
 
-  it('leaves an address that does not parse to the error it causes later', () => {
-    // Two errors for one mistake is worse than one, and guessing at what
-    // was meant is not this check's business.
-    expect(serverUrlProblem('http://host:99999')).toBeUndefined();
-    expect(serverUrlProblem('not a url')).toBeUndefined();
+  it('refuses an address that does not parse, and repeats none of it', () => {
+    // Letting this one through was a leak, not a kindness: a password with
+    // a `/`, a `#` or a `?` in it is a URL that does not parse, and the
+    // engine logs the whole input with "Unable to parse server URL",
+    // twenty-one times. Measured, each of these throws in `new URL`.
+    for (const raw of [
+      'http://user:hunter2/two@203.0.113.9:5006',
+      'http://user:hunter2#two@203.0.113.9:5006',
+      'http://user:hunter2?two@203.0.113.9:5006',
+      'http://user:hunter2@203.0.113.9:99999',
+      'not a url',
+    ]) {
+      const problem = serverUrlProblem(raw);
+
+      expect(problem, raw).toContain('not a URL this can read');
+      // Nothing of the address comes back, not even redacted: the only
+      // thing that can be said about a string that does not parse is that
+      // it does not parse.
+      expect(problem, raw).not.toContain('hunter2');
+      expect(problem, raw).not.toContain('203.0.113.9');
+    }
+  });
+
+  it('refuses a password with a space in it without printing it', () => {
+    // It parses, so it reaches the other branch, and a pattern that ends at
+    // a space printed the password it was refusing. The address shown is
+    // built from the parsed URL instead.
+    const problem = serverUrlProblem('http://user:hunter2 two@127.0.0.1:5006');
+
+    expect(problem).toContain('http://127.0.0.1:5006');
+    expect(problem).not.toContain('hunter2');
+    expect(problem).not.toContain('two');
+  });
+
+  it('refuses a password with a tab in it the same way', () => {
+    const problem = serverUrlProblem('http://user:hunter2\ttwo@127.0.0.1:5006');
+
+    expect(problem).toContain('http://127.0.0.1:5006');
+    expect(problem).not.toContain('hunter2');
   });
 });

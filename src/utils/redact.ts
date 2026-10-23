@@ -40,11 +40,19 @@
  * does not start a word there; without one the match starts at `http://`
  * and the rest of the line is left where it was.
  *
- * What it does not cover, and the startup check is what makes that
- * acceptable: a password with a space or a `/` in it, a URL escaped inside
- * JSON as `http:\/\/`, one that is entirely percent-encoded, and a malformed
- * `http:/user:pass@host` with one slash. Each of those is a URL this server
- * refuses to start with.
+ * The authority also ends at a quote, an angle bracket, a backtick or a
+ * comma. None of those belong in one, and without them the pattern ran past
+ * the end of an address to reach an `@` further along the line:
+ * `{"url":"http://h:1","who":"a@b.com"}` came back with `b.com` as the host,
+ * which is a sentence that now says something untrue about where the server
+ * is.
+ *
+ * What it does not cover: a password with a space, a tab or a comma in it, a
+ * URL escaped inside JSON as `http:\/\/`, one that is entirely
+ * percent-encoded, and a malformed `http:/user:pass@host` with one slash.
+ * Each of those is an address this server refuses to start with, by one
+ * branch of `serverUrlProblem` or the other, which is what makes the list
+ * acceptable.
  *
  * The bound on the scheme is not decoration. Without it the pattern is
  * quadratic, and a 100 KB string of `a.` took 4,750 ms against 9 ms with it:
@@ -52,7 +60,7 @@
  * server. A name that long reaches this through any message that quotes what
  * it was given.
  */
-const USERINFO = /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/?#]*@/gi;
+const USERINFO = /([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/?#"'<>`,]*@/gi;
 
 export function withoutCredentials(text: string | undefined): string {
   return (text ?? '').replace(USERINFO, '$1');

@@ -88,6 +88,19 @@ describe('credentials in an address', () => {
     expect(took).toBeLessThan(500);
   });
 
+  it('stops at the end of the address, not at the next @ in the line', () => {
+    // The authority cannot hold a quote, an angle bracket, a backtick or a
+    // comma, and without that the pattern ran on to an `@` further along
+    // and rewrote the host: this came back saying the server was at
+    // `b.com`, which is untrue as well as unhelpful.
+    expect(withoutCredentials('{"url":"http://h:1","who":"a@b.com"}')).toBe(
+      '{"url":"http://h:1","who":"a@b.com"}',
+    );
+    expect(withoutCredentials('server http://h:5006,contact=ops@corp.com')).toBe(
+      'server http://h:5006,contact=ops@corp.com',
+    );
+  });
+
   it('takes nothing for text that is not there', () => {
     expect(withoutCredentials(undefined)).toBe('');
   });
