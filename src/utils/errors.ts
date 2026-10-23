@@ -384,10 +384,14 @@ export function contentionExplains(error: unknown): boolean {
 /**
  * The text of a failure, with no credential left in it (#275).
  *
- * Here rather than in each branch below, and rather than on the error
- * object: every description this server gives a client comes through this
- * function, and rewriting the object would take away the string
- * `mayHaveBeenApplied` recognises a mid-write failure by.
+ * Here rather than in each branch below: one place, whatever the branch
+ * decided to say.
+ *
+ * On the way out rather than on the error object, which is caution and not
+ * a demonstrated hazard: `mayHaveBeenApplied` recognises a mid-write
+ * failure by a string on that object, and nothing good comes of rewriting
+ * an object other code reads. The strings it matches hold no address, so
+ * redacting one would not break it today.
  */
 export function describeError(error: unknown, options: DescribeErrorOptions = {}): string {
   return withoutCredentials(describeFailure(error, options));

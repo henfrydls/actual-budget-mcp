@@ -11,6 +11,9 @@ vi.mock('@actual-app/api', () => ({
 
 const send = vi.fn();
 const answering = vi.hoisted(() => vi.fn());
+// What `getConfig` hands back, so one test can hand back an address with
+// credentials in it without going through the check that refuses them.
+let configuredURL = 'http://localhost:5007';
 
 vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
@@ -18,7 +21,7 @@ vi.mock('../../connection.js', () => ({
   // Without this the mock had no `getConfig`, so the probe added in #89 threw
   // on its way in and was skipped by the catch around it. Every test here
   // passed without the probe ever running.
-  getConfig: () => ({ serverURL: 'http://localhost:5007' }),
+  getConfig: () => ({ serverURL: configuredURL }),
   // `syncNow` signs in again on `token-expired`, and the test below sends
   // exactly that code through it.
   reauthenticate: vi.fn().mockResolvedValue({ outcome: 'no-password' }),
@@ -229,6 +232,26 @@ describe('repair_sync when the problem is that the server is not there (#89)', (
     expect(message).toContain('not an address this can reach');
     expect(message).toContain('Nothing was repaired');
     expect(message).not.toContain('only while the app is open');
+  });
+
+  it('says which server is not answering without saying its password', async () => {
+    // Defence in depth (#275): this configuration is refused at startup and
+    // by `getConfig`, so reaching here means something got past both. The
+    // address still has to come out of the message with the credentials
+    // left behind.
+    answering.mockResolvedValue('not-answering');
+    configuredURL = 'http://user:hunter2@actual.example:5006';
+    try {
+      const failure = await repairSyncState().then(
+        () => new Error('it should have refused'),
+        (error: unknown) => error as Error,
+      );
+
+      expect(failure.message).toContain('actual.example:5006');
+      expect(failure.message).not.toContain('hunter2');
+    } finally {
+      configuredURL = 'http://localhost:5007';
+    }
   });
 
   it('does not probe its way out of repairing when there is no server configured', async () => {

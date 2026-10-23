@@ -74,7 +74,7 @@ export async function repairSyncState(): Promise<string[]> {
   if (probe === 'not-answering') {
     throw new Error(
       [
-        `Nothing is listening at ${serverURL}, so the sync state was not touched.`,
+        `Nothing is listening at ${withoutCredentials(serverURL)}, so the sync state was not touched.`,
         '',
         'A sync repair rebuilds local bookkeeping against the server, so it cannot run',
         'with the server absent, and it is not what fixes this. Two different problems',
