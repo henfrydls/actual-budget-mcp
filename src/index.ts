@@ -23,6 +23,8 @@ import * as api from '@actual-app/api';
 import { packageVersion } from './utils/version.js';
 import { ensureNativeBinding } from './utils/native-binding.js';
 import { assertSupportedRuntime } from './utils/runtime-check.js';
+import { serverUrlProblem } from './utils/server-url.js';
+import { readEnv } from './utils/env.js';
 
 // Redirect console.log/warn/info to stderr so they don't contaminate
 // the MCP JSON-RPC protocol on stdout. Libraries like @actual-app/api
@@ -79,6 +81,17 @@ console.error(
     `exec=${process.execPath} abi-install=${binding.status}` +
     (binding.detail ? ` (${binding.detail})` : ''),
 );
+
+// An address with credentials in it cannot work: the HTTP client refuses a
+// URL that carries them before it sends anything, so a server configured
+// that way answers "nothing is listening" to every call and keeps the
+// password in its logs while it does. Refused here, before anything is
+// opened, and the message shows the address already redacted (#275).
+const urlProblem = serverUrlProblem(readEnv('ACTUAL_SERVER_URL'));
+if (urlProblem !== undefined) {
+  console.error(`[actual-budget-mcp] ${urlProblem}`);
+  process.exit(1);
+}
 
 // --verify flag: test connection and exit (restore stdout for user output)
 if (process.argv.includes('--verify')) {

@@ -2,6 +2,7 @@ import * as api from '@actual-app/api';
 import { transactionsQuery, dateBetween } from './transaction-query.js';
 import { formatMoney } from './money.js';
 import { syncNow } from './sync-clock.js';
+import { withoutCredentials } from './redact.js';
 
 /**
  * Look for a transaction that already says what this one is about to say.
@@ -91,7 +92,7 @@ export async function pullBeforeReading(what: string): Promise<void> {
     `[actual-budget-mcp] warning: could not sync before ${what}, so it saw only ` +
       "this machine's copy of the budget and may have missed what another client " +
       'wrote. Reason: ' +
-      String((outcome.error as Error)?.message ?? outcome.error),
+      withoutCredentials(String((outcome.error as Error)?.message ?? outcome.error)),
   );
 }
 

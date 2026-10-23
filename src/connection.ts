@@ -12,6 +12,8 @@ import {
 import { packageVersion, actualApiVersion } from './utils/version.js';
 import { readEnv } from './utils/env.js';
 import { refreshBudgetDecimalPlaces, resetBudgetDecimalPlaces } from './utils/currency.js';
+import { withoutCredentials } from './utils/redact.js';
+import { serverUrlProblem } from './utils/server-url.js';
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
@@ -60,6 +62,15 @@ export function getConfig(): ConnectionConfig {
     );
   }
 
+  // Here as well as at startup (#275). The entry point refuses to come up
+  // with credentials in the address, and this is the same refusal for
+  // anything that reaches a connection another way: a test, a library
+  // consumer, a future entry point. It is cheap and it is the difference
+  // between one clear error and every call answering that nothing is
+  // listening.
+  const problem = serverUrlProblem(serverURL);
+  if (problem !== undefined) throw new Error(problem);
+
   return {
     serverURL,
     password: password || '',
@@ -105,8 +116,14 @@ function isNetworkFailure(error: unknown, message: string): boolean {
  * only while the app is open, while a self-hosted sync server is usually 5006.
  * Pointing at the wrong one of the two is the most common way to land here, and
  * the raw failure says nothing about it.
+ *
+ * Exported for its test and for no other caller. The address it is given can
+ * no longer carry credentials, because `getConfig` refuses those before any
+ * of this runs, so the redaction in it is a second line that the first line
+ * keeps out of reach: a test of the path cannot get here, and a test of the
+ * function can.
  */
-function unreachableMessage(serverURL: string): string {
+export function unreachableMessage(serverURL: string): string {
   const portHint = serverURL.includes(':5006')
     ? ' If you use the Actual desktop app rather than a self-hosted server, try port 5007 instead: the app runs its own server there, and only while the app is open.'
     : serverURL.includes(':5007')
@@ -114,7 +131,7 @@ function unreachableMessage(serverURL: string): string {
       : '';
 
   return (
-    `Could not reach the Actual Budget server at ${serverURL}. ` +
+    `Could not reach the Actual Budget server at ${withoutCredentials(serverURL)}. ` +
     'Nothing answered on that address, so this is not a password or budget problem. ' +
     'Check that the server is running and that ACTUAL_SERVER_URL points at it.' +
     portHint

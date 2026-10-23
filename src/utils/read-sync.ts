@@ -1,6 +1,7 @@
 import { ensureConnection } from '../connection.js';
 import { describeError } from './errors.js';
 import { lastFailedSync, lastGoodSync, markFailedSync, resetSyncClock, syncNow } from './sync-clock.js';
+import { withoutCredentials } from './redact.js';
 
 /**
  * Pull the server's changes before a read, so a long-lived server stops
@@ -128,9 +129,9 @@ export async function refreshBeforeRead(now?: number): Promise<FreshnessReport> 
         if (outcome.ok) return true;
         // stdout carries JSON-RPC. `syncNow` has already recorded it.
         console.error(
-          `[actual-budget-mcp] could not sync before reading: ${
-            outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
-          }`,
+          `[actual-budget-mcp] could not sync before reading: ${withoutCredentials(
+            outcome.error instanceof Error ? outcome.error.message : String(outcome.error),
+          )}`,
         );
         return false;
       } catch (error) {
@@ -138,9 +139,9 @@ export async function refreshBeforeRead(now?: number): Promise<FreshnessReport> 
         // throws here would be a read that fails because the server is down,
         // which is the thing #126 exists to avoid.
         console.error(
-          `[actual-budget-mcp] could not sync before reading: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `[actual-budget-mcp] could not sync before reading: ${withoutCredentials(
+            error instanceof Error ? error.message : String(error),
+          )}`,
         );
         markFailedSync(error);
         return false;
