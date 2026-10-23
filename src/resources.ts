@@ -11,6 +11,25 @@ import {
 import { formatMoney } from './utils/money.js';
 import { withReadSync } from './utils/read-sync.js';
 import { withInFlight } from './utils/in-flight.js';
+import { describeError } from './utils/errors.js';
+
+/**
+ * A resource read whose failure is described before it leaves (#275).
+ *
+ * These had no catch at all, and the SDK serialises whatever is thrown, so
+ * the one text in this server that never went through `describeError` was
+ * the one a resource failed with. `ensureConnection` names the address it
+ * could not reach, and with credentials in that address the reply carried
+ * the password. The comment in `errors.ts` saying every description comes
+ * through there was simply not true of these three.
+ */
+async function described<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    throw new Error(describeError(error));
+  }
+}
 
 export function registerAllResources(rawServer: McpServer): void {
   // Resources are reads, so they pull the server's changes first and carry the
@@ -30,28 +49,29 @@ export function registerAllResources(rawServer: McpServer): void {
       description: 'List of all budget accounts with current balances',
       mimeType: 'text/plain',
     },
-    async () => {
-      await ensureConnection();
-      const accounts = await api.getAccounts();
+    async () =>
+      described(async () => {
+        await ensureConnection();
+        const accounts = await api.getAccounts();
 
-      const lines: string[] = ['Accounts:'];
-      for (const a of accounts) {
-        if (a.closed) continue;
-        const balance = await api.getAccountBalance(a.id);
-        const type = a.offbudget ? 'off-budget' : 'on-budget';
-        lines.push(`  ${a.name} (${a.id}) [${type}]: ${formatMoney(balance)}`);
-      }
+        const lines: string[] = ['Accounts:'];
+        for (const a of accounts) {
+          if (a.closed) continue;
+          const balance = await api.getAccountBalance(a.id);
+          const type = a.offbudget ? 'off-budget' : 'on-budget';
+          lines.push(`  ${a.name} (${a.id}) [${type}]: ${formatMoney(balance)}`);
+        }
 
-      return {
-        contents: [
-          {
-            uri: 'actual://accounts',
-            text: lines.join('\n'),
-            mimeType: 'text/plain',
-          },
-        ],
-      };
-    },
+        return {
+          contents: [
+            {
+              uri: 'actual://accounts',
+              text: lines.join('\n'),
+              mimeType: 'text/plain',
+            },
+          ],
+        };
+      }),
   );
 
   server.resource(
@@ -61,51 +81,52 @@ export function registerAllResources(rawServer: McpServer): void {
       description: 'All category groups and categories with IDs',
       mimeType: 'text/plain',
     },
-    async () => {
-      await ensureConnection();
-      const groups = (await api.getCategoryGroups()) as unknown as GroupRow[];
-      const categories = (await api.getCategories()) as unknown as CategoryRow[];
+    async () =>
+      described(async () => {
+        await ensureConnection();
+        const groups = (await api.getCategoryGroups()) as unknown as GroupRow[];
+        const categories = (await api.getCategories()) as unknown as CategoryRow[];
 
-      // The same rule `get_categories` applies, from the same place (#248).
-      // This listed a category whose group is hidden, which the app does not
-      // show and the tool had just said it was leaving out: two ways of
-      // asking the same question, answering differently.
-      //
-      // A resource takes no arguments, so there is nothing here to pass to
-      // see them. The line says which way of asking has one.
-      const groupById = new Map(groups.map((g) => [g.id, g]));
-      const { own, byGroup } = countHidden(categories, groupById);
+        // The same rule `get_categories` applies, from the same place (#248).
+        // This listed a category whose group is hidden, which the app does not
+        // show and the tool had just said it was leaving out: two ways of
+        // asking the same question, answering differently.
+        //
+        // A resource takes no arguments, so there is nothing here to pass to
+        // see them. The line says which way of asking has one.
+        const groupById = new Map(groups.map((g) => [g.id, g]));
+        const { own, byGroup } = countHidden(categories, groupById);
 
-      const lines: string[] = ['Categories:'];
-      for (const group of groups) {
-        const groupCats = categories.filter(
-          (c) => c.group_id === group.id && !c.hidden && !inHiddenGroup(c, groupById),
-        );
-        if (groupCats.length === 0) continue;
+        const lines: string[] = ['Categories:'];
+        for (const group of groups) {
+          const groupCats = categories.filter(
+            (c) => c.group_id === group.id && !c.hidden && !inHiddenGroup(c, groupById),
+          );
+          if (groupCats.length === 0) continue;
 
-        lines.push(`  ${group.name} (${group.id})${group.is_income ? ' [Income]' : ''}`);
-        for (const cat of groupCats) {
-          lines.push(`    ${cat.name} (${cat.id})`);
+          lines.push(`  ${group.name} (${group.id})${group.is_income ? ' [Income]' : ''}`);
+          for (const cat of groupCats) {
+            lines.push(`    ${cat.name} (${cat.id})`);
+          }
         }
-      }
 
-      const left = notListedLine(
-        own,
-        byGroup,
-        'Ask get_categories with include_hidden: true to see them.',
-      );
-      if (left !== undefined) lines.push(left);
+        const left = notListedLine(
+          own,
+          byGroup,
+          'Ask get_categories with include_hidden: true to see them.',
+        );
+        if (left !== undefined) lines.push(left);
 
-      return {
-        contents: [
-          {
-            uri: 'actual://categories',
-            text: lines.join('\n'),
-            mimeType: 'text/plain',
-          },
-        ],
-      };
-    },
+        return {
+          contents: [
+            {
+              uri: 'actual://categories',
+              text: lines.join('\n'),
+              mimeType: 'text/plain',
+            },
+          ],
+        };
+      }),
   );
 
   server.resource(
@@ -115,27 +136,28 @@ export function registerAllResources(rawServer: McpServer): void {
       description: 'All payees in the budget',
       mimeType: 'text/plain',
     },
-    async () => {
-      await ensureConnection();
-      const payees = await api.getPayees();
-      const regular = payees
-        .filter((p) => !p.name.startsWith('Transfer:') && p.name !== '')
-        .sort((a, b) => a.name.localeCompare(b.name));
+    async () =>
+      described(async () => {
+        await ensureConnection();
+        const payees = await api.getPayees();
+        const regular = payees
+          .filter((p) => !p.name.startsWith('Transfer:') && p.name !== '')
+          .sort((a, b) => a.name.localeCompare(b.name));
 
-      const lines: string[] = [`Payees (${regular.length}):`];
-      for (const p of regular) {
-        lines.push(`  ${p.name} (${p.id})`);
-      }
+        const lines: string[] = [`Payees (${regular.length}):`];
+        for (const p of regular) {
+          lines.push(`  ${p.name} (${p.id})`);
+        }
 
-      return {
-        contents: [
-          {
-            uri: 'actual://payees',
-            text: lines.join('\n'),
-            mimeType: 'text/plain',
-          },
-        ],
-      };
-    },
+        return {
+          contents: [
+            {
+              uri: 'actual://payees',
+              text: lines.join('\n'),
+              mimeType: 'text/plain',
+            },
+          ],
+        };
+      }),
   );
 }

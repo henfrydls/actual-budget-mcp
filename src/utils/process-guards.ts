@@ -1,3 +1,5 @@
+import { withoutCredentials } from './redact.js';
+
 /**
  * Keep a library-level promise rejection from taking the server down.
  *
@@ -25,6 +27,11 @@ export function installProcessGuards(
       reason instanceof Error
         ? reason.message || reason.stack || String(reason)
         : String(reason);
-    log(`Unhandled rejection (server staying alive): ${raw || '(no message)'}`);
+    // Through the redaction (#275): a rejection from inside the engine
+    // quotes the address it was given, and stderr is where that lands in a
+    // bug report.
+    log(
+      `Unhandled rejection (server staying alive): ${withoutCredentials(raw) || '(no message)'}`,
+    );
   });
 }

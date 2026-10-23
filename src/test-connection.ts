@@ -11,6 +11,7 @@ import * as api from '@actual-app/api';
 import { formatMoney } from './utils/money.js';
 import { describeError } from './utils/errors.js';
 import { withoutCredentials } from './utils/redact.js';
+import { serverUrlProblem } from './utils/server-url.js';
 
 async function testConnection() {
   const { ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_BUDGET_ID, ACTUAL_ENCRYPTION_PASSWORD, ACTUAL_DATA_DIR } = process.env;
@@ -33,6 +34,12 @@ async function testConnection() {
 
   // Without the credentials it may carry: this output is what people paste
   // into an issue when the connection does not work (#275).
+  const urlProblem = serverUrlProblem(ACTUAL_SERVER_URL);
+  if (urlProblem) {
+    console.error(urlProblem);
+    process.exit(1);
+  }
+
   console.log(`Server URL: ${withoutCredentials(ACTUAL_SERVER_URL)}`);
   console.log(`Budget ID:  ${ACTUAL_BUDGET_ID}`);
   console.log(`Password:   ${ACTUAL_PASSWORD ? 'Set' : 'None'}`);
