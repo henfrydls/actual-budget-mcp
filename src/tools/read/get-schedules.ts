@@ -80,12 +80,15 @@ function daysBefore(date: string, days: number): string {
  * and is not in what `getSchedules` returns. It is read from the schedules
  * table in one query, because guessing it from the shape of the date is
  * wrong in both directions: `api.createSchedule` writes `isapprox` even for
- * a single day, and the app's own "find schedules" writes `is` on a
- * recurrence. Each wrong guess is a day called paid that is not, or late
- * that is not, and the second of those sends someone to pay a bill twice.
+ * a single day, and the app's own "find schedules" writes `is` when every
+ * occurrence it matched fell exactly on the recurrence's days. Each wrong
+ * guess is a day called paid that is not, or late that is not, and the
+ * second of those sends someone to pay a bill twice.
  *
- * An operator that cannot be read falls to the two days, which is where the
- * engine's own default falls.
+ * A schedule with no date condition, or one whose operator is something
+ * else, falls to the two days, which is where the engine's own default
+ * falls. A query that fails is not that case: it fails the whole tool, the
+ * way every other read here does, rather than answering from a guess.
  */
 function paidFrom(row: ScheduleRow, op: string | undefined): string | undefined {
   const next = row.next_date;

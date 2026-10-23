@@ -251,7 +251,9 @@ describe.skipIf(skip)('listing real schedules (#150)', () => {
     // `api.createSchedule` writes an `isapprox` date condition even for a
     // single day, so this one has the two early days and the app calls it
     // paid when it is paid early. Guessing the operator from the date being
-    // a string called it late instead.
+    // a string took those two days away and left it unpaid, which is the
+    // same mistake that calls a bill that has been paid late when the day
+    // has passed.
     await api.createSchedule({
       name: 'Api Bill',
       posts_transaction: false,
