@@ -9,7 +9,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createMcpServer } from './mcp-server.js';
 import { isReadOnly } from './utils/mode.js';
 import { chosenToolset, unrecognisedToolset } from './utils/toolset.js';
-import { httpRequested, readHttpConfig, READ_PATH, WRITE_PATH } from './utils/http-config.js';
+import {
+  httpRequested,
+  httpHalfConfigured,
+  readHttpConfig,
+  READ_PATH,
+  WRITE_PATH,
+} from './utils/http-config.js';
 import { startHttpServer } from './http.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
 import { installExitPaths } from './utils/orderly-exit.js';
@@ -107,6 +113,18 @@ if (process.argv.includes('--verify')) {
 // deployment corrected one line at a time with a restart between each is how
 // an operator ends up guessing.
 const overHttp = httpRequested();
+// A token and a host set, and no port: that is an HTTP deployment with one
+// line missing, and starting quietly on stdio answers nothing and looks
+// like the server is up.
+const halfConfigured = httpHalfConfigured();
+if (halfConfigured.length > 0) {
+  console.error(
+    `[actual-budget-mcp] ${halfConfigured.join(', ')} ${halfConfigured.length === 1 ? 'is' : 'are'} ` +
+      'set and ACTUAL_HTTP_PORT is not, so there is nothing to serve them on. Set a port, ' +
+      'or unset these to run over stdio.',
+  );
+  process.exit(1);
+}
 const http = overHttp ? readHttpConfig() : undefined;
 if (http !== undefined && http.config === undefined) {
   for (const problem of http.problems) {

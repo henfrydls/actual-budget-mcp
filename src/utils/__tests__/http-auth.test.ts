@@ -23,6 +23,9 @@ describe('the bearer token', () => {
     expect(bearerFrom('')).toBeUndefined();
     expect(bearerFrom(token)).toBeUndefined();
     expect(bearerFrom(`Basic ${token}`)).toBeUndefined();
+    // The scheme is the start of the header, not something found in it: a
+    // pattern without that anchor let this through as a credential.
+    expect(bearerFrom(`Mac Bearer ${token}`)).toBeUndefined();
     expect(bearerFrom('Bearer ')).toBeUndefined();
     // Node hands a repeated header over as an array, and an array is not a
     // credential: a client sending two is a client to refuse, not one to

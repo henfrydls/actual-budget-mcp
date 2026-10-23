@@ -19,7 +19,9 @@ import { packageVersion } from './utils/version.js';
  * server this makes. It is the list of what can be called, not a second copy
  * of anything.
  */
-export function createMcpServer(options: { readOnly?: boolean } = {}): McpServer {
+export function createMcpServer(
+  options: { readOnly?: boolean; includeRepairSync?: boolean } = {},
+): McpServer {
   const readOnly = options.readOnly ?? isReadOnly();
 
   const server = new McpServer(
@@ -31,7 +33,7 @@ export function createMcpServer(options: { readOnly?: boolean } = {}): McpServer
     { instructions: serverInstructions({ readOnly }) },
   );
 
-  registerAllTools(server, { readOnly });
+  registerAllTools(server, { readOnly, includeRepairSync: options.includeRepairSync });
   // Prompts ask the tool registry what was offered, which is a module-level
   // record overwritten by the call above. That holds because building a
   // server is synchronous from end to end: nothing can register tools

@@ -91,12 +91,19 @@ function withRecord<T extends { tool: (...args: never[]) => unknown }>(server: T
  * so which tools exist has to be decided per server rather than per process,
  * and a server built for the read path must not register a write tool even
  * when the process as a whole is allowed to write.
+ *
+ * `includeRepairSync` is the one exception to that. `repair_sync` is kept in
+ * read-only mode on purpose, because a budget that cannot sync needs a way
+ * out and hiding it would leave none (#41). On an HTTP read path there is a
+ * way out: the write path. So the one tool that changes state is not offered
+ * where the whole point of the path is that nothing changes.
  */
 export function registerAllTools(
   rawServer: McpServer,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; includeRepairSync?: boolean } = {},
 ): void {
   const readOnly = options.readOnly ?? isReadOnly();
+  const includeRepairSync = options.includeRepairSync ?? true;
   offered.clear();
   // Every read tool pulls the server's changes first (#126). Here rather than
   // in fifteen files: this is the one place they all go through.
@@ -142,7 +149,7 @@ export function registerAllTools(
   // repair_sync stays available even read-only: it repairs sync state rather
   // than budget data, and hiding it would leave a desynced budget with no way
   // out — the situation that motivated #41.
-  registerRepairSync(server);
+  if (includeRepairSync) registerRepairSync(server);
 
   // Everything past this point writes. Read-only mode does not register these
   // at all, so they never reach tool discovery.
