@@ -99,6 +99,10 @@ describe('the HTTP server (#228)', () => {
 
     expect(status).toBe(200);
     expect(text).toContain('get_transactions');
+    // Whatever the read set holds at the time: `get_schedules` arrived with
+    // #150 and belongs on this path by being a read, without anything here
+    // being told about it.
+    expect(text).toContain('get_schedules');
     expect(text).not.toContain('create_transaction');
     expect(text).not.toContain('delete_account');
   });
