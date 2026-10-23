@@ -207,6 +207,20 @@ describe('findPossibleDuplicates: the question it asks', () => {
     stderr.mockRestore();
   });
 
+  it('names the server in that warning without its password (#275)', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.sync).mockRejectedValue(
+      new Error('request to http://user:hunter2@actual.example:5006/sync failed'),
+    );
+
+    await findPossibleDuplicates('acc-1', '2026-06-05', -5000);
+
+    const said = stderr.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(said).toContain('actual.example:5006');
+    expect(said).not.toContain('hunter2');
+    stderr.mockRestore();
+  });
+
   it('does not name one tool in a warning this module shares', async () => {
     // It said `[create_transaction]` from inside a shared module. #98 gives it
     // create_transfer and create_split_transaction as callers, at which point

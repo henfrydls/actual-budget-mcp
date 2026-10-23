@@ -12,8 +12,9 @@ import { formatMoney } from './utils/money.js';
 import { describeError } from './utils/errors.js';
 import { withoutCredentials } from './utils/redact.js';
 import { serverUrlProblem } from './utils/server-url.js';
+import { pathToFileURL } from 'node:url';
 
-async function testConnection() {
+export async function testConnection() {
   const { ACTUAL_SERVER_URL, ACTUAL_PASSWORD, ACTUAL_BUDGET_ID, ACTUAL_ENCRYPTION_PASSWORD, ACTUAL_DATA_DIR } = process.env;
 
   console.log('=== Actual Budget MCP - Connection Test ===\n');
@@ -139,4 +140,8 @@ async function testConnection() {
   }
 }
 
-testConnection();
+// Run when this file is the command, so a test can call the function
+// without the whole script running on import.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  testConnection();
+}

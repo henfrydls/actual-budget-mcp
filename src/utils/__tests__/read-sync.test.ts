@@ -144,6 +144,20 @@ describe('refreshing before a read', () => {
     expect(stderr.join('\n')).toMatch(/could not sync before reading/i);
   });
 
+  it('names the server in that line without its password (#275)', async () => {
+    // The engine quotes the address it was given, and this line is on
+    // stderr, which is where a bug report comes from.
+    sync.mockImplementation(async () => {
+      throw new Error('request to http://user:hunter2@actual.example:5006/sync failed');
+    });
+
+    await refreshBeforeRead();
+
+    const said = stderr.join('\n');
+    expect(said).toContain('actual.example:5006');
+    expect(said).not.toContain('hunter2');
+  });
+
   /**
    * The clock is shared with the rest of the server (#126, round 2). A write
    * pulls before the checks that decide whether to write, and that pull makes

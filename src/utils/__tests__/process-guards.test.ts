@@ -59,3 +59,22 @@ describe('installProcessGuards (#39 a library rejection must not kill the server
     expect(logged).toMatch(/unhandled/i);
   });
 });
+
+describe('what the rejection line says (#275)', () => {
+  it('logs a rejection without the credentials in the address it names', () => {
+    // A rejection from inside the engine quotes the address it was given,
+    // and stderr is where that lands in a bug report.
+    const proc = fakeProcess();
+    const log = vi.fn();
+
+    installProcessGuards(proc as never, log);
+    proc.emit(
+      'unhandledRejection',
+      new Error('request to http://user:hunter2@actual.example:5006/sync failed'),
+    );
+
+    const line = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(line).toContain('actual.example:5006');
+    expect(line).not.toContain('hunter2');
+  });
+});
