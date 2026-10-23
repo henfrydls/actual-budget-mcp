@@ -45,7 +45,7 @@ describe('read-only mode hides write tools from discovery', () => {
     expect(names).toContain('create_transactions');
     expect(names).toContain('hold_for_next_month');
     expect(names).toContain('set_category_carryover');
-    expect(names.length).toBe(43);
+    expect(names.length).toBe(44);
   });
 
   it('does not register write tools when read-only', () => {
@@ -68,11 +68,13 @@ describe('read-only mode hides write tools from discovery', () => {
     expect(names).toContain('list_accounts');
     expect(names).toContain('get_transactions');
     expect(names).toContain('monthly_summary');
+    // Schedules are read and nothing else, so read-only keeps them (#150).
+    expect(names).toContain('get_schedules');
     // It reads and books nothing, so read-only keeps it. The tool that books an
     // adjustment, `reconcile_currency_residual`, is a write and is hidden.
     expect(names).toContain('reconcile_account');
     expect(names).not.toContain('reconcile_currency_residual');
-    expect(names.length).toBe(16);
+    expect(names.length).toBe(17);
   });
 
   it('keeps repair_sync available, since a desynced budget needs a way out', () => {

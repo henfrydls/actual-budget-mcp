@@ -89,7 +89,7 @@
     "toolset": {
       "type": "string",
       "title": "Toolset",
-      "description": "chat offers the 17 everyday tools: reading the budget, recording and categorising transactions, and moving budgeted money. It leaves out setting up and repairing a budget, and sends 17.0 KiB of tool descriptions on each connection instead of 39.2 KiB. full offers all 43.",
+      "description": "chat offers the 18 everyday tools: reading the budget, recording and categorising transactions, and moving budgeted money. It leaves out setting up and repairing a budget, and sends 17.4 KiB of tool descriptions on each connection instead of 39.7 KiB. full offers all 44.",
       "default": "full",
       "required": false
     },

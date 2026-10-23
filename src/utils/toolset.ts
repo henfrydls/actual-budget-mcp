@@ -5,10 +5,10 @@ import type { McpServerLike } from './read-sync.js';
  * Which tools a client is offered (#222).
  *
  * `tools/list` carries every tool on every connection: measured with
- * `scripts/measure-toolset.mjs`, 43 tools and 39.2 KiB, spent before the
+ * `scripts/measure-toolset.mjs`, 44 tools and 39.7 KiB, spent before the
  * first question is asked. Two things come out of that. The context is gone whatever the
- * conversation turns out to be about, and a model choosing between 41
- * descriptions picks the wrong one more often than one choosing between 17.
+ * conversation turns out to be about, and a model choosing between 44
+ * descriptions picks the wrong one more often than one choosing between 18.
  *
  * So there is a smaller set, and `full` stays the default: nothing changes
  * for anyone who sets nothing.
@@ -23,7 +23,7 @@ export type Toolset = 'chat' | 'full';
 
 /**
  * The everyday set: reading, recording, categorising, and moving budgeted
- * money. 17 tools, 17.0 KiB, measured the same way as the figure above.
+ * money. 18 tools, 17.4 KiB, measured the same way as the figure above.
  *
  * What is out of it is set-up and repair: creating and deleting accounts,
  * categories, groups, payees and rules, `reconcile_currency_residual` and
@@ -40,6 +40,7 @@ export const CHAT_TOOLS: ReadonlySet<string> = new Set([
   'get_category_balance',
   'get_budget_summary',
   'get_payees',
+  'get_schedules',
   // Recording and categorising
   'create_transaction',
   'create_transactions',

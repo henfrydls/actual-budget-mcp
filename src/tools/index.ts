@@ -10,6 +10,7 @@ import { registerGetCategoryBalance } from './read/get-category-balance.js';
 import { registerGetBudgetSummary } from './read/get-budget-summary.js';
 import { registerGetCategories } from './read/get-categories.js';
 import { registerGetPayees } from './read/get-payees.js';
+import { registerGetSchedules } from './read/get-schedules.js';
 
 // Analysis tools
 import { registerBudgetVsActual } from './analysis/budget-vs-actual.js';
@@ -106,6 +107,7 @@ export function registerAllTools(rawServer: McpServer): void {
   registerGetBudgetSummary(server);
   registerGetCategories(server);
   registerGetPayees(server);
+  registerGetSchedules(server);
 
   // Analysis
   registerBudgetVsActual(server);
