@@ -110,17 +110,34 @@ jobs:
           filter='[.vulnerabilities[]?.via[]?
             | select(type == "object")
             | select(.severity == "high" or .severity == "critical")
-            | select(.url | contains($excepted) | not)]'
+            | select((.url // "") | contains($excepted) | not)]'
+          valid='has("vulnerabilities") and has("metadata")'
 
-          # Self-test: the filter must catch an advisory it does not except.
-          fake='{"vulnerabilities":{"x":{"via":[{"severity":"high","url":"https://github.com/advisories/GHSA-0000-0000-0000","name":"x","title":"injected"}]}}}'
+          # Self-test: the filter must catch a non-excepted advisory,
+          # reject an npm-error JSON, and reject empty output.
+          fake='{"vulnerabilities":{"x":{"via":[{"severity":"high","url":"https://github.com/advisories/GHSA-0000-0000-0000","name":"x","title":"injected"}]}},"metadata":{"vulnerabilities":{}}}'
           caught=$(printf '%s' "$fake" | jq --arg excepted "$excepted" "$filter | length")
           if [ "$caught" -ne 1 ]; then
-            echo "::error::production audit filter self-test failed"
+            echo "::error::self-test: filter did not catch the injected advisory"
+            exit 1
+          fi
+          err='{"error":{"code":"ENOTFOUND","summary":"request to https://registry.npmjs.org failed"}}'
+          if printf '%s' "$err" | jq -e "$valid" >/dev/null 2>&1; then
+            echo "::error::self-test: filter accepted an npm-error response"
+            exit 1
+          fi
+          if printf '' | jq -e "$valid" >/dev/null 2>&1; then
+            echo "::error::self-test: filter accepted empty output"
             exit 1
           fi
 
           audit=$(npm audit --omit=dev --json 2>/dev/null || true)
+          if ! printf '%s' "$audit" | jq -e "$valid" >/dev/null 2>&1; then
+            printf '%s' "$audit" | jq '.error // empty' 2>/dev/null || true
+            echo "::error::npm audit did not return a valid report"
+            exit 1
+          fi
+
           hits=$(printf '%s' "$audit" | jq --arg excepted "$excepted" "$filter")
           count=$(printf '%s' "$hits" | jq 'length')
 

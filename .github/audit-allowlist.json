@@ -1,5 +1,5 @@
 {
-  "$comment": "Advisories the dependency tree carries on purpose, by GHSA id, each with why and when to revisit. Everything else at high or above fails CI, through scripts/audit-tooling.mjs.",
+  "$comment": "Advisories the dependency tree carries on purpose, by GHSA id, each with why and when to revisit. Everything else at high or above fails CI, through scripts/audit-tooling.mjs. The production gate has its own exception for GHSA-mrhx-c7xc-m3w5 in ci.yml; both point to #280.",
   "allowed": {
     "GHSA-mrhx-c7xc-m3w5": "zod 3.x has no patch; the migration to zod 4 is #280"
   }
