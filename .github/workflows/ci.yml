@@ -99,8 +99,37 @@ jobs:
 
       # Blocking gate: production dependencies are what users install, so a
       # high+ advisory there must fail the build.
+      #
+      # zod 3.x carries GHSA-mrhx-c7xc-m3w5 (memory exhaustion on oversized
+      # constrained collections) with no patch in the 3.x branch; the
+      # migration to zod 4 is tracked in #280. Remove this exception once
+      # #280 lands.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          excepted='GHSA-mrhx-c7xc-m3w5'
+          filter='[.vulnerabilities[]?.via[]?
+            | select(type == "object")
+            | select(.severity == "high" or .severity == "critical")
+            | select(.url | contains($excepted) | not)]'
+
+          # Self-test: the filter must catch an advisory it does not except.
+          fake='{"vulnerabilities":{"x":{"via":[{"severity":"high","url":"https://github.com/advisories/GHSA-0000-0000-0000","name":"x","title":"injected"}]}}}'
+          caught=$(printf '%s' "$fake" | jq --arg excepted "$excepted" "$filter | length")
+          if [ "$caught" -ne 1 ]; then
+            echo "::error::production audit filter self-test failed"
+            exit 1
+          fi
+
+          audit=$(npm audit --omit=dev --json 2>/dev/null || true)
+          hits=$(printf '%s' "$audit" | jq --arg excepted "$excepted" "$filter")
+          count=$(printf '%s' "$hits" | jq 'length')
+
+          if [ "$count" -gt 0 ]; then
+            printf '%s' "$hits" | jq -r '.[] | "\(.severity) \(.name): \(.title)"'
+            echo "::error::${count} high/critical production advisory/advisories not accounted for"
+            exit 1
+          fi
+          echo "no unaccounted high/critical production advisories ($excepted excepted)"
 
       # Blocking as well, now that the tree is clean (#212). It was
       # informational for a reason that has gone: vitest 3 and what it pulled
