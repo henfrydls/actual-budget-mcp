@@ -99,8 +99,54 @@ jobs:
 
       # Blocking gate: production dependencies are what users install, so a
       # high+ advisory there must fail the build.
+      #
+      # zod 3.x carries GHSA-mrhx-c7xc-m3w5 (memory exhaustion on oversized
+      # constrained collections) with no patch in the 3.x branch; the
+      # migration to zod 4 is tracked in #280. Remove this exception once
+      # #280 lands.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: |
+          excepted='GHSA-mrhx-c7xc-m3w5'
+          filter='[.vulnerabilities[]?.via[]?
+            | select(type == "object")
+            | select(.severity == "high" or .severity == "critical")
+            | select((.url // "") | contains($excepted) | not)]'
+          valid='has("vulnerabilities") and has("metadata")'
+
+          # Self-test: the filter must catch a non-excepted advisory,
+          # reject an npm-error JSON, and reject empty output.
+          fake='{"vulnerabilities":{"x":{"via":[{"severity":"high","url":"https://github.com/advisories/GHSA-0000-0000-0000","name":"x","title":"injected"}]}},"metadata":{"vulnerabilities":{}}}'
+          caught=$(printf '%s' "$fake" | jq --arg excepted "$excepted" "$filter | length")
+          if [ "$caught" -ne 1 ]; then
+            echo "::error::self-test: filter did not catch the injected advisory"
+            exit 1
+          fi
+          err='{"error":{"code":"ENOTFOUND","summary":"request to https://registry.npmjs.org failed"}}'
+          if printf '%s' "$err" | jq -e "$valid" >/dev/null 2>&1; then
+            echo "::error::self-test: filter accepted an npm-error response"
+            exit 1
+          fi
+          if printf '' | jq -e "$valid" >/dev/null 2>&1; then
+            echo "::error::self-test: filter accepted empty output"
+            exit 1
+          fi
+
+          audit=$(npm audit --omit=dev --json 2>/dev/null || true)
+          if ! printf '%s' "$audit" | jq -e "$valid" >/dev/null 2>&1; then
+            printf '%s' "$audit" | jq '.error // empty' 2>/dev/null || true
+            echo "::error::npm audit did not return a valid report"
+            exit 1
+          fi
+
+          hits=$(printf '%s' "$audit" | jq --arg excepted "$excepted" "$filter")
+          count=$(printf '%s' "$hits" | jq 'length')
+
+          if [ "$count" -gt 0 ]; then
+            printf '%s' "$hits" | jq -r '.[] | "\(.severity) \(.name): \(.title)"'
+            echo "::error::${count} high/critical production advisory/advisories not accounted for"
+            exit 1
+          fi
+          echo "no unaccounted high/critical production advisories ($excepted excepted)"
 
       # Blocking as well, now that the tree is clean (#212). It was
       # informational for a reason that has gone: vitest 3 and what it pulled
