@@ -6,6 +6,7 @@ import { resolveAccountId } from '../../utils/resolvers.js';
 import { describeError } from '../../utils/errors.js';
 import { queueTransactionWrite } from '../../utils/transaction-writes.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { describeSync, countLinkedAccounts, isAccountLinked, type SyncOutcome } from '../../utils/bank-sync-report.js';
 
 export function registerRunBankSync(server: McpServer): void {
   server.tool(
@@ -33,30 +34,60 @@ export function registerRunBankSync(server: McpServer): void {
         if (account) {
           const accountId = await resolveAccountId(account);
           const acct = accounts.find((a) => a.id === accountId);
+          const name = acct?.name || accountId;
 
-          await api.runBankSync({ accountId });
+          if (!(await isAccountLinked(accountId))) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: `${name} is not linked to a bank provider. Nothing was synced.`,
+                },
+              ],
+            };
+          }
+
+          const outcome = (await api.runBankSync({ accountId })) as unknown as
+            | SyncOutcome
+            | undefined;
           await syncNow();
 
           return {
             content: [
               {
                 type: 'text',
-                text: `Bank sync completed for: ${acct?.name || accountId}`,
+                text: [
+                  `Bank sync completed for: ${name}`,
+                  ...(await describeSync(outcome, accounts)),
+                ].join('\n'),
               },
             ],
           };
         }
 
         // Sync all accounts (no arg = all)
-        await api.runBankSync();
+        const linked = await countLinkedAccounts();
+
+        if (linked === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'No accounts are linked to a bank provider. Nothing was synced.',
+              },
+            ],
+          };
+        }
+
+        const outcome = (await api.runBankSync()) as unknown as SyncOutcome | undefined;
         await syncNow();
 
-        const openAccounts = accounts.filter((a) => !a.closed);
+        const header = `Bank sync completed for ${linked} linked ${linked === 1 ? 'account' : 'accounts'}.`;
         return {
           content: [
             {
               type: 'text',
-              text: `Bank sync completed for all linked accounts (${openAccounts.length} accounts).`,
+              text: [header, ...(await describeSync(outcome, accounts))].join('\n'),
             },
           ],
         };
