@@ -4,6 +4,11 @@ vi.mock('@actual-app/api', () => ({
   default: {},
   getPayees: vi.fn(),
   getTransactions: vi.fn(),
+  runQuery: vi.fn(),
+  q: vi.fn(() => ({
+    filter: vi.fn().mockReturnThis(),
+    calculate: vi.fn().mockReturnThis(),
+  })),
   utils: {
     amountToInteger: (a: number) => Math.round(a * 100),
     integerToAmount: (c: number) => c / 100,
@@ -11,7 +16,7 @@ vi.mock('@actual-app/api', () => ({
 }));
 
 import * as api from '@actual-app/api';
-import { describeSync } from '../bank-sync-report.js';
+import { describeSync, countLinkedAccounts, isAccountLinked } from '../bank-sync-report.js';
 
 const ACCOUNTS = [
   { id: 'a1', name: 'Checking' },
@@ -59,7 +64,7 @@ describe('the report of a bank sync', () => {
     expect(api.getTransactions).not.toHaveBeenCalled();
   });
 
-  it('says nothing new came in when nothing did', async () => {
+  it('says nothing new came in when the sync found nothing', async () => {
     const lines = await describeSync(
       { newTransactions: [], matchedTransactions: [], updatedAccounts: [] },
       ACCOUNTS,
@@ -121,6 +126,26 @@ describe('the report of a bank sync', () => {
     await describeSync({ newTransactions: ['t1'], matchedTransactions: [] }, ACCOUNTS);
 
     expect(api.getTransactions).toHaveBeenCalledTimes(2);
+  });
+
+  it('counts linked accounts through the database', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: 3 } as never);
+
+    const count = await countLinkedAccounts();
+
+    expect(count).toBe(3);
+    const filter = vi.mocked(api.q).mock.results[0].value.filter;
+    expect(filter).toHaveBeenCalledWith(
+      expect.objectContaining({ account_sync_source: { $ne: null } }),
+    );
+  });
+
+  it('answers whether one account is linked', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: 1 } as never);
+    expect(await isAccountLinked('a1')).toBe(true);
+
+    vi.mocked(api.runQuery).mockResolvedValue({ data: 0 } as never);
+    expect(await isAccountLinked('a2')).toBe(false);
   });
 
   it('says how many it could not find rather than letting the figures disagree', async () => {

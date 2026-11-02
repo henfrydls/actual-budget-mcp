@@ -6,6 +6,11 @@ vi.mock('@actual-app/api', () => ({
   getPayees: vi.fn(),
   getTransactions: vi.fn(),
   runBankSync: vi.fn(),
+  runQuery: vi.fn(),
+  q: vi.fn(() => ({
+    filter: vi.fn().mockReturnThis(),
+    calculate: vi.fn().mockReturnThis(),
+  })),
   sync: vi.fn().mockResolvedValue(undefined),
   utils: {
     amountToInteger: (a: number) => Math.round(a * 100),
@@ -61,6 +66,7 @@ describe('what run_bank_sync says afterwards', () => {
       { id: 't1', date: today, amount: -4550, payee: 'p1' },
     ] as never);
     vi.mocked(api.runBankSync).mockReset();
+    vi.mocked(api.runQuery).mockReset().mockResolvedValue({ data: 2 } as never);
   });
 
   it('says what came in, for one account', async () => {
@@ -90,11 +96,11 @@ describe('what run_bank_sync says afterwards', () => {
 
     expect(result.isError).toBeFalsy();
     const text = result.content[0].text;
-    expect(text).toContain('Bank sync completed for all linked accounts (2 accounts).');
+    expect(text).toContain('Bank sync completed for 2 linked accounts.');
     expect(text).toContain('1 new transaction, 0 matched');
   });
 
-  it('says nothing new came in when nothing did', async () => {
+  it('says nothing new came in when linked accounts synced but found nothing', async () => {
     vi.mocked(api.runBankSync).mockResolvedValue({
       newTransactions: [],
       matchedTransactions: [],
@@ -104,6 +110,27 @@ describe('what run_bank_sync says afterwards', () => {
     const text = (await handlerFor()({})).content[0].text;
 
     expect(text).toContain('Nothing new came in.');
+    expect(text).toContain('2 linked accounts');
+  });
+
+  it('says no accounts are linked when the count is zero', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: 0 } as never);
+
+    const text = (await handlerFor()({})).content[0].text;
+
+    expect(text).toContain('No accounts are linked');
+    expect(text).not.toContain('Nothing new came in');
+    expect(api.runBankSync, 'should not call the engine when nothing is linked').not.toHaveBeenCalled();
+  });
+
+  it('says a specific unlinked account is not linked', async () => {
+    vi.mocked(api.runQuery).mockResolvedValue({ data: 0 } as never);
+
+    const text = (await handlerFor()({ account: 'Checking' })).content[0].text;
+
+    expect(text).toContain('Checking is not linked');
+    expect(text).toContain('Nothing was synced');
+    expect(api.runBankSync).not.toHaveBeenCalled();
   });
 
   it('answers as it always did on a library that reports nothing', async () => {
@@ -113,7 +140,7 @@ describe('what run_bank_sync says afterwards', () => {
 
     const text = (await handlerFor()({})).content[0].text;
 
-    expect(text).toBe('Bank sync completed for all linked accounts (2 accounts).');
+    expect(text).toBe('Bank sync completed for 2 linked accounts.');
   });
 
   it('still explains an unlinked account rather than reporting a sync', async () => {

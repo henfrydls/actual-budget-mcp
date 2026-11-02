@@ -2,6 +2,34 @@ import * as api from '@actual-app/api';
 import { formatMoney } from './money.js';
 
 /**
+ * How many open accounts are linked to a bank provider.
+ *
+ * The public `getAccounts` strips the field, so this reads the column
+ * directly. The count decides whether a sync that touched nothing means
+ * "nothing new" or "nothing linked".
+ */
+export async function countLinkedAccounts(): Promise<number> {
+  const result = await api.runQuery(
+    api
+      .q('accounts')
+      .filter({ closed: false, account_sync_source: { $ne: null } })
+      .calculate({ $count: '$id' }),
+  );
+  return (result as { data: number }).data ?? 0;
+}
+
+/** Whether one specific account is linked to a bank provider. */
+export async function isAccountLinked(accountId: string): Promise<boolean> {
+  const result = await api.runQuery(
+    api
+      .q('accounts')
+      .filter({ id: accountId, account_sync_source: { $ne: null } })
+      .calculate({ $count: '$id' }),
+  );
+  return ((result as { data: number }).data ?? 0) > 0;
+}
+
+/**
  * What a bank sync brought in, from what the engine says it did (#221).
  *
  * From Actual 26.11 `runBankSync` answers
