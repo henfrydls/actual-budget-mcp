@@ -137,7 +137,7 @@ describe.skipIf(skip)('amounts in a currency with no decimal places (#141)', () 
       { date: '2026-10-12', amount: -1000, payee_name: 'Bookshop', cleared: true } as never,
     ]);
 
-    const text = await getTransactionsReport({ account: 'Checking', limit: 5 } as never);
+    const text = await getTransactionsReport({ account: 'Checking', start_date: '2026-10-01', end_date: '2026-10-31', limit: 5 } as never);
     // Before the fix this read 10.00, a hundredth of what the app shows.
     expect(text).toContain('1,000');
     expect(text, 'a currency with no decimals should not be printed with any').not.toContain(
@@ -157,6 +157,8 @@ describe.skipIf(skip)('amounts in a currency with no decimal places (#141)', () 
 
     const found = await getTransactionsReport({
       account: 'Checking',
+      start_date: '2026-10-01',
+      end_date: '2026-10-31',
       max_amount: -500,
       limit: 5,
     } as never);
@@ -165,6 +167,8 @@ describe.skipIf(skip)('amounts in a currency with no decimal places (#141)', () 
     // And the other side of the bound still excludes it.
     const excluded = await getTransactionsReport({
       account: 'Checking',
+      start_date: '2026-10-01',
+      end_date: '2026-10-31',
       min_amount: -500,
       limit: 5,
     } as never);
