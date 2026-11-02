@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.11.1
+
+What a bank sync brought in, what the schedules look like, and four replies
+that were true and read as something else.
+
+### What a bank sync brought in (#221)
+
+`run_bank_sync` answered that the sync had run, which is the one thing the
+caller already knew. Whether anything came in, and what, took another call.
+
+From Actual 26.11 the engine says what it added and matched, so the reply says
+it too: how many new transactions, how many matched to rows already there, and
+the new ones listed newest first with their payee, amount and account.
+
+When no accounts are linked to a bank provider the reply says so before
+calling the engine, and when a single account is asked for and is not linked
+the reply says that rather than running a sync that has nothing to sync. The
+count is the linked accounts, not the open ones: an unlinked account does not
+become linked by being open.
+
+### Schedules (#150)
+
+`get_schedules` lists a budget's recurring payments: the name, the next date,
+the amount, how often, whether it is paid or late, and the last time it
+posted. Read-only, no parameters.
+
+A schedule can happen once or repeat, its amount can be a figure or a range,
+its payee can be a transfer, and whether it is paid depends on a window that
+the date condition decides. Each of those shapes was found against a real
+engine rather than assumed from the type.
+
+The chat toolset has it too, so the chat set goes from 17 to 18.
+
+### The library underneath (#219, #233)
+
+`@actual-app/api` moved from 26.10 to ^26.11.0. `runBankSync` answers what it
+did, which makes the bank sync report above possible. 26.11 also changes
+password sessions (a new token on every sign-in, and changing the password
+closes every session). What the server does with that (signing in again when
+the session expires, counting the servers left alive, closing on exit) was
+already adjusted in #232. Starting, starting again right away and closing
+were checked live against a 26.11.0 server.
+
+### Held money in the month (#265)
+
+`hold_for_next_month` could set money aside, and nothing that read a month
+showed it. `get_budget_month` and `get_budget_summary` now show the held
+figure under what is left to assign, when there is some.
+
+### Four replies that read as something else
+
+- When the group hiding a category and a category share a name, the note said
+  the name without saying it was the group. It says "The group X is hidden"
+  now. (#266)
+- `update_category_group` answered "Category group updated: Hidden: true"
+  without naming which group. It names it now, with the old and new value.
+  (#266)
+- `delete_category_group` asked for a transfer target even when the group had
+  no categories, and then said "Transactions transferred to: X" when nothing
+  moved. An empty group needs neither. (#266)
+- `transfer_between_categories` ending with "To Budget is now over" was true,
+  but when the month was already over before the call, the sentence reads as
+  though the move had done it. It now says "was already X over before this
+  move, and is Y over now" when the move did not cause it. (#267)
+
+### Also
+
+- Four overrides to their patched versions: body-parser, fast-uri,
+  ip-address, qs. (#281)
+- `@modelcontextprotocol/sdk` to 1.32.2. (#278)
+- Docker login action to 4.7.0. (#279)
+
 ## 0.11.0
 
 Money that can be moved to and from what is not budgeted yet, two things an
