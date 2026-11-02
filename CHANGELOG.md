@@ -40,7 +40,8 @@ did, which makes the bank sync report above possible. 26.11 also changes
 password sessions (a new token on every sign-in, and changing the password
 closes every session). What the server does with that (signing in again when
 the session expires, counting the servers left alive, closing on exit) was
-already adjusted in #232 and tested live against a 26.11.0 server.
+already adjusted in #232. Starting, starting again right away and closing
+were checked live against a 26.11.0 server.
 
 ### Held money in the month (#265)
 
