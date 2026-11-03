@@ -1,10 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
-import { ensureConnection } from '../../connection.js';
+import { ensureConnection, serverVersionCheck } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import { configuredBudgetIds, openBudgetId, servesManyBudgets } from '../../utils/budgets.js';
 import { poolInUse } from '../../workers/current.js';
+import { versionNote } from '../../utils/server-version.js';
 
 /**
  * The budgets this server serves, by the id a caller has to pass (#229).
@@ -100,6 +101,16 @@ export function registerListBudgets(server: McpServer): void {
           lines.push(
             'This server serves one budget. Set ACTUAL_BUDGET_IDS to serve more than one.',
           );
+        }
+
+        // What the versions said when the budget was opened, where somebody
+        // can act on it (#229). The same thing went to stderr then, and a
+        // server a client starts in the background has nobody reading that.
+        const checked = serverVersionCheck();
+        const note = checked === undefined ? undefined : versionNote(checked);
+        if (note !== undefined) {
+          lines.push('');
+          lines.push(note);
         }
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };

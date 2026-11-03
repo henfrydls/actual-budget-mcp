@@ -49,7 +49,7 @@ const LIBRARY = actualApiVersion();
 const [MAJOR, MINOR] = LIBRARY.split('.').map((part) => Number.parseInt(part, 10));
 /** A server one minor behind the library, which is the case #139 is about. */
 const OLDER = `${MINOR === 1 ? MAJOR - 1 : MAJOR}.${MINOR === 1 ? 12 : MINOR - 1}.0`;
-/** A server one minor ahead, which this warning is not about. */
+/** A server one minor ahead, which is the ordinary case the month Actual releases. */
 const NEWER = `${MINOR === 12 ? MAJOR + 1 : MAJOR}.${MINOR === 12 ? 1 : MINOR + 1}.0`;
 
 /** What the engine prints on its way to resolving anyway. */
@@ -364,7 +364,7 @@ describe('a budget that does not open (#139)', () => {
     expect(message).not.toMatch(/could not open your budget/);
   });
 
-  describe('a server older than this library', () => {
+  describe('a server whose version differs from this library', () => {
     const connectCleanly = async (serverVersion: string | undefined) => {
       getServerVersion.mockResolvedValue(
         serverVersion === undefined ? undefined : { version: serverVersion },
@@ -409,16 +409,60 @@ describe('a budget that does not open (#139)', () => {
       expect(await connectCleanly(LIBRARY)).not.toMatch(/migrate/i);
     });
 
-    it('says nothing when the server is newer', async () => {
-      // That direction is the one #139 is about and is reported elsewhere; it
-      // is not this warning's business.
-      expect(await connectCleanly(NEWER)).not.toMatch(/migrate/i);
+    it('says so when the server is ahead as well, which is the other way to lose a budget', async () => {
+      // #139 itself: a budget already migrated past this library opens as
+      // whatever this library understands of it, and the failure arrives as
+      // a message about a file. Actual's minor is the month, so this is the
+      // ordinary state of things from an Actual release until ours.
+      const said = await connectCleanly(NEWER);
+      expect(said).toContain(NEWER);
+      expect(said).toContain(LIBRARY);
+      expect(said).toMatch(/ahead/i);
     });
 
-    it('works when the server does not report a version', async () => {
+    it('opens the budget in either direction, because the minor is the month', async () => {
+      // A refusal here would leave every deployment without a budget for the
+      // days between an Actual release and this server following it, by
+      // default, every month. The warning is the whole intervention.
+      for (const version of [OLDER, NEWER]) {
+        vi.resetModules();
+        downloadBudget.mockReset();
+        getBudgetMonths.mockReset();
+        getServerVersion.mockReset().mockResolvedValue({ version });
+        downloadBudget.mockImplementation(async () => {});
+        getBudgetMonths.mockResolvedValue(['2026-01']);
+
+        const { ensureConnection } = await import('../../connection.js');
+        await expect(ensureConnection(), version).resolves.toBeUndefined();
+        expect(downloadBudget, version).toHaveBeenCalled();
+      }
+    });
+
+    it('says the version could not be read, and opens anyway', async () => {
       // Not every server answers, and a missing version is not a reason to
-      // refuse to work.
-      expect(await connectCleanly(undefined)).not.toMatch(/migrate/i);
+      // refuse to work: a server that is down, one behind a proxy that hides
+      // /info and one too old to have it all answer the same way.
+      const said = await connectCleanly(undefined);
+      expect(said).toMatch(/did not report a version/i);
+      expect(said).not.toMatch(/migrate/i);
+      expect(downloadBudget).toHaveBeenCalled();
+    });
+
+    it('says it once, however many times the connection is attempted', async () => {
+      // A connection that fails is retried by the next tool call, and the
+      // server that could not answer this does not start answering it. The
+      // line is for the operator, once, not once per attempt.
+      getServerVersion.mockResolvedValue(undefined);
+      downloadBudget.mockImplementation(async () => {});
+      getBudgetMonths.mockRejectedValueOnce(new Error('No budget file is open'));
+      getBudgetMonths.mockResolvedValue(['2026-01']);
+
+      const { ensureConnection } = await import('../../connection.js');
+      await expect(ensureConnection()).rejects.toThrow();
+      await expect(ensureConnection()).resolves.toBeUndefined();
+
+      const times = stderr.filter((line) => /did not report a version/i.test(line)).length;
+      expect(times, stderr.join('\n')).toBe(1);
     });
 
     it('gives up on a server that never answers the version', async () => {

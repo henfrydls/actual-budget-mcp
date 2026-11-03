@@ -9,8 +9,10 @@ vi.mock('@actual-app/api', () => ({
     integerToAmount: (c: number, places = 2) => c / Math.pow(10, places),
   },
 }));
+const versionCheck = vi.fn();
 vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
+  serverVersionCheck: () => versionCheck(),
 }));
 
 import { registerListBudgets } from '../read/list-budgets.js';
@@ -43,6 +45,33 @@ describe('listing the budgets this server serves', () => {
     for (const name of VARS) delete process.env[name];
     getBudgets.mockReset();
     usePool(undefined);
+    versionCheck.mockReset();
+  });
+
+  it('carries the version mismatch to whoever asked, in one line', async () => {
+    // A server a client starts in the background says this on stderr and
+    // nobody is there to read it. This is the reply somebody did ask for.
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    getBudgets.mockResolvedValue([{ groupId: 'sync-one', name: 'Household' }]);
+    versionCheck.mockReturnValue({
+      kind: 'mismatch',
+      server: '26.12.0',
+      library: '26.11.0',
+      serverIs: 'ahead',
+    });
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('26.12.0');
+    expect(text).toContain('26.11.0');
+  });
+
+  it('says nothing about versions when they agree', async () => {
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    getBudgets.mockResolvedValue([{ groupId: 'sync-one', name: 'Household' }]);
+    versionCheck.mockReturnValue({ kind: 'match', server: '26.11.0', library: '26.11.0' });
+
+    expect((await handler()()).content[0].text).not.toContain('26.11.0');
   });
 
   /** A pool that knows what its workers have told it. */

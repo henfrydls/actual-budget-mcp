@@ -10,6 +10,8 @@ import {
   ensureDataDirExists,
 } from './utils/data-dir-lock.js';
 import { packageVersion, actualApiVersion } from './utils/version.js';
+import { checkVersions, versionSentence } from './utils/server-version.js';
+import type { VersionCheck } from './utils/server-version.js';
 import { readEnv } from './utils/env.js';
 import { refreshBudgetDecimalPlaces, resetBudgetDecimalPlaces } from './utils/currency.js';
 import { withoutCredentials } from './utils/redact.js';
@@ -419,31 +421,24 @@ async function budgetIsOpen(): Promise<{ open: boolean; why?: string }> {
 const VERSION_CHECK_TIMEOUT_MS = 5_000;
 
 /**
- * Warn before opening a budget this library would migrate past its server.
+ * The Actual server's version, or `undefined` when it cannot be read.
  *
- * Opening a budget runs any migration the library has and the file does not,
- * and the next sync pushes the result. So a 26.10 library against a 26.9
- * server quietly takes the budget somewhere the user's own 26.9 app can no
- * longer follow: measured, 59 migrations become 60, and a 26.9 client
- * downloading from scratch then fails exactly the way #139 did.
- *
- * Actual's own 26.10 client does the same thing, so this is not a fault to
- * refuse -- it is a consequence nobody is told about. Hence a warning rather
- * than a block: refusing would strand anyone deliberately on an older server,
- * and the migration is what makes the budget readable at all here.
- *
- * Only the minor is compared. Actual releases month.minor and the migrations
- * come with those; a patch has never carried one.
+ * Measured against three servers, read the way the engine reads them:
+ * one that answers `/info` with `{build: {version}}` gives
+ * `{version: '26.10.0'}`; one with no `/info` at all gives
+ * `network-failure`, because the parse throws; and one that answers `/info`
+ * without `build.version` gives `network-failure` as well, because the read
+ * throws. A server that is down gives `network-failure` too, so a version
+ * that cannot be read says nothing about why.
  */
-async function warnIfServerIsOlder(): Promise<void> {
-  let serverVersion: string | undefined;
+async function readServerVersion(): Promise<string | undefined> {
   try {
     // On a deadline of its own. `getServerVersion` is a plain fetch with no
     // timeout inside the SDK, and this runs before the budget is downloaded:
     // a server that accepts the connection and never answers would hang the
-    // whole startup here, on a warning nobody asked for. The global fetch
-    // deadline (#99) covers the request, but not a promise that never settles
-    // for some other reason, so the race is belt and braces.
+    // whole startup here. The global fetch deadline (#99) covers the
+    // request, but not a promise that never settles for some other reason,
+    // so the race is belt and braces.
     // The timer is cleared whichever side wins. Left running, it keeps the
     // event loop alive for its full five seconds after everything else is
     // done, which `test:connection` pays for on every successful run.
@@ -455,33 +450,60 @@ async function warnIfServerIsOlder(): Promise<void> {
           timer = setTimeout(() => resolve(undefined), VERSION_CHECK_TIMEOUT_MS);
         }),
       ])) as { version?: string } | undefined;
-      serverVersion = reported?.version;
+      return reported?.version;
     } finally {
       if (timer) clearTimeout(timer);
     }
   } catch {
-    // Not every server answers this, and a missing version is not a reason to
-    // refuse to work.
-    return;
+    // Not every server answers this.
+    return undefined;
   }
-  if (!serverVersion) return;
+}
 
-  const parts = (v: string) => v.split('.').map(Number);
-  const [serverMajor, serverMinor] = parts(serverVersion);
-  const [libMajor, libMinor] = parts(actualApiVersion());
-  if (![serverMajor, serverMinor, libMajor, libMinor].every(Number.isFinite)) return;
+/** Said once per process: the same server answers the same way every time. */
+let unreadableVersionSaid = false;
 
-  const older = serverMajor < libMajor || (serverMajor === libMajor && serverMinor < libMinor);
-  if (!older) return;
+/** What the versions said, for whoever answers a caller rather than a log. */
+let lastVersionCheck: VersionCheck | undefined;
+
+/**
+ * The comparison this process made when it opened the budget, if it has.
+ *
+ * `list_budgets` reads it rather than asking the server again: the answer
+ * does not change while the process runs, and a server that does not answer
+ * this would otherwise cost every call the full wait.
+ */
+export function serverVersionCheck(): VersionCheck | undefined {
+  return lastVersionCheck;
+}
+
+/**
+ * Say so before opening a budget the two versions do not agree about (#229).
+ *
+ * The comparison and the wording are shared with `list_budgets`, in
+ * `utils/server-version.ts`, which is also where the reasoning lives: it
+ * says so and opens anyway, in both directions, because Actual's minor is
+ * the month and a refusal would leave every deployment without a budget for
+ * the days between an Actual release and ours.
+ *
+ * Before the download, which is what migrates the file, so that the line is
+ * read while it can still be acted on.
+ */
+async function warnIfVersionsDiffer(): Promise<void> {
+  const check = checkVersions(await readServerVersion());
+  lastVersionCheck = check;
+  const sentence = versionSentence(check);
+  if (sentence === undefined) return;
+
+  // A server that cannot answer this does not start answering it later, and
+  // every reconnection would say it again.
+  if (check.kind === 'unreadable') {
+    if (unreadableVersionSaid) return;
+    unreadableVersionSaid = true;
+  }
 
   // stderr: stdout carries JSON-RPC.
-  console.error(
-    `[actual-budget-mcp] your Actual server is ${serverVersion} and this server's Actual ` +
-      `library is ${actualApiVersion()}. Opening your budget here will migrate it to the ` +
-      'newer format and the next sync will upload that, after which an Actual app still on ' +
-      `${serverVersion} can no longer open it. Actual's own apps do this too when they ` +
-      'update. Update your Actual server and apps to match, or stop this server now.',
-  );
+  console.error(`[actual-budget-mcp] ${sentence}`);
 }
 
 /**
@@ -710,7 +732,7 @@ export async function ensureConnection(): Promise<void> {
     }
 
     // Before the download, because the download is what migrates it.
-    await warnIfServerIsOlder();
+    await warnIfVersionsDiffer();
 
     try {
       const outcome = await downloadBudgetWatchingMigrations(

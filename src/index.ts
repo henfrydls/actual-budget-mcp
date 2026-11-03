@@ -37,17 +37,12 @@ import { ensureNativeBinding } from './utils/native-binding.js';
 import { assertSupportedRuntime } from './utils/runtime-check.js';
 import { serverUrlProblem } from './utils/server-url.js';
 import { readEnv } from './utils/env.js';
+import { sendConsoleToStderr } from './utils/console-to-stderr.js';
 
-// Redirect console.log/warn/info to stderr so they don't contaminate
-// the MCP JSON-RPC protocol on stdout. Libraries like @actual-app/api
-// print debug messages (e.g., [Breadcrumb], "Syncing...") to stdout
-// via console.log, which breaks MCP clients like Claude Desktop.
-const originalLog = console.log;
-const originalInfo = console.info;
-const originalWarn = console.warn;
-console.log = (...args: unknown[]) => console.error(...args);
-console.info = (...args: unknown[]) => console.error(...args);
-console.warn = (...args: unknown[]) => console.error(...args);
+// stdout carries the protocol, and the engine prints as it works, so the
+// console goes to stderr before anything can print. A worker keeps it: it
+// is this same entry point, and the front end reads its stderr.
+const restoreConsole = sendConsoleToStderr();
 
 // #39: keep a rejection from inside @actual-app/api (e.g. a failed budget
 // download) from killing the process under Node's default
@@ -62,7 +57,10 @@ installProcessGuards();
 // "Missing required environment variables", which answers a question nobody
 // asked and hides the one they did.
 if (process.argv.includes('--version') || process.argv.includes('-v')) {
-  originalLog(packageVersion);
+  // On stdout, where whoever asked is reading: this answers and leaves, so
+  // there is no protocol on it to contaminate.
+  restoreConsole();
+  console.log(packageVersion);
   process.exit(0);
 }
 
@@ -125,9 +123,7 @@ if (passwordsProblem !== undefined) {
 
 // --verify flag: test connection and exit (restore stdout for user output)
 if (process.argv.includes('--verify')) {
-  console.log = originalLog;
-  console.info = originalInfo;
-  console.warn = originalWarn;
+  restoreConsole();
   try {
     console.log('Verifying connection to Actual Budget...\n');
     await ensureConnection();

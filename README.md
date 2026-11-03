@@ -1142,11 +1142,19 @@ Stuck on something that is not listed here? [Tell me what tripped you up](https:
   migrations become 60.
 - Actual's own apps do exactly the same when they update; the difference is
   that this one can reach your budget before you have updated anything else.
-- The server warns on startup when it finds your Actual server is older than
-  its library, before downloading anything.
-- **Solution:** update your Actual server and apps to 26.10 or newer *before*
-  using this version. If you have already hit it, update them and the budget
-  opens again, with nothing lost.
+- The other direction is the same problem seen from the other end: an Actual
+  server ahead of this server's library holds a budget that may carry
+  migrations the library does not have, and a tool then fails with a message
+  about a file rather than about a version.
+- The server says so on startup, before it downloads anything, whichever of
+  the two is behind, and `list_budgets` says it again in its answer, because
+  a server your client starts in the background has nobody reading its log.
+  It says it and opens the budget anyway: Actual's minor is the month, so a
+  server that updates itself is a minor ahead of this one every time Actual
+  releases, and refusing to work on that would be worse than the warning.
+- **Solution:** keep your Actual server and this server on the same Actual
+  version. If you have already hit it, update whichever is behind and the
+  budget opens again, with nothing lost.
 
 **"version `GLIBC_2.34' not found", or the budget never opens on an older Linux**
 - Actual's SQLite binary for Linux is built against **glibc 2.34**, so it does
