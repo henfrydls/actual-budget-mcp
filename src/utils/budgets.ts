@@ -55,32 +55,39 @@ export function servesManyBudgets(): boolean {
 /**
  * What is wrong with the budget a call asked for, if anything.
  *
- * Three answers rather than two, because "we do not serve that" and "we
- * serve it and cannot open it yet" are different things to be told, and
- * telling someone their id is wrong when it is not sends them to look in
- * the wrong place.
+ * One question now, where there were two: is it one this server serves. The
+ * second answer, "we serve it and cannot open it yet", was true while one
+ * process could only hold one budget. A worker per budget is what took it
+ * away, so what is left is the configuration: a budget that is not on the
+ * operator's list cannot be reached by asking for its id.
  */
 export function budgetProblem(asked: string | undefined): string | undefined {
   if (asked === undefined) return undefined;
 
   const wanted = asked.trim();
-  const open = openBudgetId();
-  if (wanted === '' || wanted === open) return undefined;
+  if (wanted === '') return undefined;
 
   const configured = configuredBudgetIds();
-  if (configured.includes(wanted)) {
-    return (
-      `This server has ${open ?? 'no budget'} open, and opens one budget at a time, so ` +
-      `${wanted} cannot be read from here yet. Run a second server configured for it, ` +
-      'or ask this one for the budget it has open.'
-    );
-  }
+  if (configured.includes(wanted)) return undefined;
 
   return (
     `No budget with id ${wanted} is configured on this server. It serves: ` +
     `${configured.join(', ')}. The id is the sync id, from Settings > Show advanced ` +
     'settings in the Actual app.'
   );
+}
+
+/**
+ * A sync id that would not stay inside the directory it is given.
+ *
+ * Each budget gets a directory of its own under the data directory, named
+ * by its id, so an id with a path in it is a budget cache somewhere else:
+ * `ACTUAL_BUDGET_IDS=../x` puts one next to the data directory rather than
+ * inside it. An Actual sync id is a UUID, so this refuses only what is
+ * actually a path, and leaves anything else alone.
+ */
+export function unsafeBudgetId(id: string): boolean {
+  return /[/\\]/.test(id) || id.includes('..') || id.startsWith('.') || id.trim() !== id;
 }
 
 /**
@@ -96,6 +103,20 @@ export function budgetsProblem(): string | undefined {
     ?.split(',')
     .map((id) => id.trim())
     .filter((id) => id !== '');
+
+  // Only when there is a worker per budget. With one budget nothing here
+  // names a directory -- the data directory is whatever ACTUAL_DATA_DIR
+  // says -- so an id with a dot in it has always worked and goes on
+  // working: this check would have stopped a server that master starts.
+  const all = configuredBudgetIds();
+  const unsafe = all.length > 1 ? all.filter((id) => unsafeBudgetId(id)) : [];
+  if (unsafe.length > 0) {
+    return (
+      `These budget ids are not ids: ${unsafe.join(', ')}. Each budget is kept in a ` +
+      'directory named after its id, so an id with a path in it would put one outside the ' +
+      'data directory. A sync id is the one from Settings > Show advanced settings.'
+    );
+  }
 
   if (open === undefined || listed === undefined || listed.length === 0) return undefined;
   if (listed.includes(open)) return undefined;

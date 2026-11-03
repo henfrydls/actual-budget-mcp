@@ -350,6 +350,10 @@ accident, because it is there all day for a second client to point at.
 | `ACTUAL_BUDGET_ID` | Yes | Budget Sync ID (found in Settings > Show advanced settings) |
 | `ACTUAL_BUDGET_IDS` | No | Every budget this server serves, comma separated, when it is more than one. Each tool then takes a `budget_id`. See [More than one budget](#more-than-one-budget) |
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
+| `ACTUAL_ENCRYPTION_PASSWORDS` | No | A JSON object of sync id to password, when more than one of the budgets is encrypted. See [More than one budget](#more-than-one-budget) |
+| `ACTUAL_BUDGET_WORKERS` | No | How many budgets stay open at once. Defaults to 3. Only used with `ACTUAL_BUDGET_IDS` |
+| `ACTUAL_WORKER_IDLE_MINUTES` | No | How long an open budget with nothing to do stays open. Defaults to 15 |
+| `ACTUAL_WORKER_READY_SECONDS` | No | How long a call waits for a budget that is still opening. Defaults to 45 |
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
 | `ACTUAL_TOOLSET` | No | `chat` offers the 18 everyday tools instead of all 44. Defaults to `full`. See [Choosing a toolset](#choosing-a-toolset) |
@@ -698,23 +702,53 @@ because there is nothing to choose.
 when there is more than one. Two things appear when it is set, and only then:
 
 - A tool called `list_budgets`, which names them by the sync id a caller
-  passes, with the open one marked. It lists what you configured and nothing
-  else: a budget on the account that is not in the list cannot be reached by
-  asking for its id.
-- An optional `budget_id` on every tool. Left out, a call is for the budget
-  the server has open.
+  passes, with the open ones marked. A budget's own name is inside its file,
+  so it appears once the budget has been opened at least one time, and stays
+  afterwards: one that has never been opened is listed by id alone. It lists
+  what you configured and nothing else: a budget on the account that is not
+  in the list cannot be reached by asking for its id.
+- An optional `budget_id` on every tool. Left out, a call is for the budget in
+  `ACTUAL_BUDGET_ID`.
 
-This server opens one budget at a time, because the Actual library opens one
-budget per process. A call for another budget on the list is refused and says
-so, rather than answering from the wrong one, and a second server configured
-for it is how to read both today. Serving them from one server, with a worker
-process per budget, is the rest of this work.
+The Actual library opens one budget per process, so the server opens a child
+process per budget and routes each call to the one that holds it. Three stay
+open at once by default, and a fourth budget closes the one that went longest
+without a call, never one with a call in flight. A budget that goes 15 minutes
+without a call closes on its own. `ACTUAL_BUDGET_WORKERS` and
+`ACTUAL_WORKER_IDLE_MINUTES` change those two numbers.
 
-Both cost context on every connection, so neither appears when there is one
-budget. Measured with two budgets configured, the full set goes from 39.7 KiB
-to 47.4 KiB of tool descriptions, which is 7.7 KiB more, nearly a fifth. With
-`ACTUAL_BUDGET_IDS` unset, what a client is sent is byte for byte what it was
-sent before any of this: no extra tool, no extra parameter.
+Opening a budget takes about a second on a small file, so the first call for a
+budget waits. If it is still not open after `ACTUAL_WORKER_READY_SECONDS`, the
+call answers that the budget is still opening and asks you to try again, rather
+than hanging past the client's own one minute timeout. For a write, the answer
+says that nothing was sent to the budget, so repeating it cannot write twice.
+
+The resources (`actual://accounts` and the other two) are not offered when
+there is more than one budget. A resource is a URI and nothing else: it has
+nowhere to say which budget it is about, and answering from the default one
+would be a second, quieter answer that contradicts the tools. The tools take
+`budget_id`, so they are the one way to ask.
+
+Each budget gets its own directory under `ACTUAL_DATA_DIR`, named after its
+sync id, so the ids have to be ids: a list with a path in one of them is
+refused at startup rather than writing a budget cache somewhere else. Two
+processes cannot share one budget cache. If more than one of the budgets is
+encrypted, `ACTUAL_ENCRYPTION_PASSWORDS` maps sync id to password:
+
+```json
+{"budget-sync-id-one": "first password", "budget-sync-id-two": "second"}
+```
+
+Each budget is given its own password and nothing else: the map itself never
+reaches the processes that open the budgets. With one encrypted budget,
+`ACTUAL_ENCRYPTION_PASSWORD` on its own still works.
+
+Both the tool and the parameter cost context on every connection, so neither
+appears when there is one budget. Measured with two budgets configured, the
+full set goes from 39.7 KiB to 47.6 KiB of tool descriptions, which is 7.9 KiB
+more, a fifth again. With `ACTUAL_BUDGET_IDS` unset, what a client is sent is
+byte for byte what it was sent before any of this: no extra tool, no extra
+parameter.
 
 ### Choosing a toolset
 

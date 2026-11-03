@@ -3,7 +3,8 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
-import { configuredBudgetIds, openBudgetId } from '../../utils/budgets.js';
+import { configuredBudgetIds, openBudgetId, servesManyBudgets } from '../../utils/budgets.js';
+import { poolInUse } from '../../workers/current.js';
 
 /**
  * The budgets this server serves, by the id a caller has to pass (#229).
@@ -35,6 +36,43 @@ export function registerListBudgets(server: McpServer): void {
     { title: 'List budgets', readOnlyHint: true },
     async () => {
       try {
+        // With workers, the front end opens no budget, so there is no
+        // `getBudgets` to ask here and no name to show for a budget that is
+        // not open: the name lives inside the file. What it can say is which
+        // ids this server serves and which of them are open right now, and
+        // the id is what a caller passes anyway (#229).
+        const pool = poolInUse();
+        if (servesManyBudgets()) {
+          // Whatever the pool is doing, including not existing yet: with
+          // more than one budget this process opens none of them, and
+          // asking the engine here is how the front end would end up
+          // holding one (#229).
+          const open = new Set(pool?.openBudgets() ?? []);
+          // The name comes from the worker that opened the budget, which is
+          // the only process that can read it: it is inside the file. The
+          // pool keeps the last one it was told, so a budget that was open
+          // this morning is still named after its worker was closed for
+          // idleness.
+          const known = pool?.knownBudgets() ?? new Map();
+          const serving = configuredBudgetIds();
+          const lines: string[] = [sectionHeader(`Budgets (${serving.length})`), ''];
+          for (const id of serving) {
+            const name = known.get(id)?.name;
+            if (name === undefined) {
+              lines.push(`${id}${open.has(id) ? '  [open]' : '  (not opened yet)'}`);
+            } else {
+              lines.push(`${name} (${id})  ${open.has(id) ? '[open]' : '(closed)'}`);
+            }
+          }
+          lines.push('');
+          lines.push(
+            'Each budget is opened in its own process, as it is first asked for. A name is ' +
+              'inside the budget file, so a budget nobody has opened yet is listed by id ' +
+              'alone. Pass the id, whichever is shown.',
+          );
+          return { content: [{ type: 'text', text: lines.join('\n') }] };
+        }
+
         await ensureConnection();
         const known = (await api.getBudgets()) as unknown as BudgetRow[];
         const open = openBudgetId();

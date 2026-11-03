@@ -14,6 +14,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import { registerListBudgets } from '../read/list-budgets.js';
+import { usePool } from '../../workers/current.js';
 
 const VARS = ['ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS'];
 
@@ -41,34 +42,75 @@ describe('listing the budgets this server serves', () => {
   afterEach(() => {
     for (const name of VARS) delete process.env[name];
     getBudgets.mockReset();
+    usePool(undefined);
   });
 
-  it('lists the configured ones by sync id, and marks the open one', async () => {
+  /** A pool that knows what its workers have told it. */
+  function fakePool(open: string[], known: Record<string, string> = {}): void {
+    usePool({
+      openBudgets: () => open,
+      knownBudgets: () =>
+        new Map(Object.entries(known).map(([id, name]) => [id, { budgetId: id, name }])),
+    } as never);
+  }
+
+  it('says which of them are open, and opens none of them to say it', async () => {
+    // With workers the front end holds no budget, so there is no
+    // `getBudgets` to ask here: what it knows about a budget is what the
+    // worker holding it said (#229).
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two,sync-three';
+    fakePool(['sync-one', 'sync-three']);
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('=== Budgets (3) ===');
+    expect(text).toContain('sync-one  [open]');
+    expect(text).toContain('sync-three  [open]');
+    expect(text).toContain('sync-two  (not opened yet)');
+    expect(getBudgets).not.toHaveBeenCalled();
+  });
+
+  it('names the budgets a worker has opened, and keeps the name after it closed', async () => {
+    // A worker is closed after fifteen idle minutes. If the name went with
+    // it, this would say "not opened yet" about a budget it opened twice
+    // this morning, which is the state most of the day.
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two,sync-three';
+    fakePool(['sync-one'], { 'sync-one': 'Household', 'sync-two': 'Business' });
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('Household (sync-one)  [open]');
+    expect(text).toContain('Business (sync-two)  (closed)');
+    expect(text).toContain('sync-three  (not opened yet)');
+  });
+
+  it('lists the configured ones by sync id, without opening any of them', async () => {
+    // With more than one budget this process holds none of them, so there
+    // is no `getBudgets` to ask and no name to show: the name lives inside
+    // the budget file, which is in a worker's data directory. Asking the
+    // engine here is how the front end would end up holding a budget.
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
-    getBudgets.mockResolvedValue([
-      { id: 'local-1', name: 'Household', groupId: 'sync-one' },
-      { id: 'local-2', name: 'Business', groupId: 'sync-two' },
-    ]);
 
     const text = (await handler()()).content[0].text;
 
     expect(text).toContain('=== Budgets (2) ===');
-    expect(text).toContain('Household (sync-one)  [open]');
-    expect(text).toContain('Business (sync-two)');
-    expect(text).not.toContain('Business (sync-two)  [open]');
+    expect(text).toContain('sync-one  (not opened yet)');
+    expect(text).toContain('sync-two  (not opened yet)');
+    expect(getBudgets).not.toHaveBeenCalled();
   });
 
-  it('says so when a budget has never been downloaded here', async () => {
+  it('says a budget is open when a worker has it, and not otherwise', async () => {
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-three';
-    getBudgets.mockResolvedValue([{ id: 'local-1', name: 'Household', groupId: 'sync-one' }]);
+    fakePool(['sync-three']);
 
     const text = (await handler()()).content[0].text;
 
-    // The name lives in the file and the file is not here. Inventing one
-    // would be worse than saying the id alone.
-    expect(text).toContain('(not downloaded here) (sync-three)');
+    expect(text).toContain('sync-three  [open]');
+    expect(text).toContain('sync-one  (not opened yet)');
   });
 
   it('lists none of the budgets on the server that nobody configured', async () => {
