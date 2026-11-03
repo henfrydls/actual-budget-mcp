@@ -698,7 +698,7 @@ real client for `tools/list`:
 | `full` (default) | 44 | 39.7 KiB |
 | `chat` | 18 | 17.4 KiB |
 | `chat` with `ACTUAL_READ_ONLY=1` | 8 | 5.7 KiB |
-| `full` with `ACTUAL_READ_ONLY=1` | 17 | 12.4 KiB |
+| `full` with `ACTUAL_READ_ONLY=1` | 17 | 12.5 KiB |
 
 `chat` is the everyday set: reading the budget, recording and categorising
 transactions, and moving budgeted money between categories. What it leaves out

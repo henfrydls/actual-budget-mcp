@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isReadOnly } from '../utils/mode.js';
 import { withInFlight } from '../utils/in-flight.js';
+import { withSchemaHint } from '../utils/schema-hint.js';
 
 // Read tools
 import { registerListAccounts } from './read/list-accounts.js';
@@ -116,8 +117,13 @@ export function registerAllTools(
   // same, since nothing is registered either way, but a tool the set does
   // not offer would be wrapped four times on its way to being dropped. The
   // decision is made once, at the top.
+  // `withSchemaHint` innermost, against the real server: it is the only one
+  // that touches the schema rather than the handler, and it has to be the
+  // last hand on the call before the SDK takes it (#280).
   const server = withToolset(
-    withRecord(withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(rawServer))))),
+    withRecord(
+      withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(withSchemaHint(rawServer))))),
+    ),
   );
   // Read
   registerListAccounts(server);

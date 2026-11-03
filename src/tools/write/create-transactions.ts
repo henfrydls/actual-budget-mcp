@@ -1136,7 +1136,7 @@ export function registerCreateTransactions(server: McpServer): void {
                   'its checks. It does not reach the imported_id checks, which are identity ' +
                   'rather than a guess, and the reply says what the checks found about it.',
               ),
-          }),
+          }).meta({ additionalProperties: false }),
         )
         .describe(
           'The transactions to create. All of them are written, or none.',

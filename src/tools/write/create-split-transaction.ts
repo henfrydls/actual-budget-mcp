@@ -183,7 +183,7 @@ export function registerCreateSplitTransaction(server: McpServer): void {
               .number()
               .describe('Split amount (same sign as the total). Human amounts, not cents.'),
             notes: z.string().optional().describe('Notes for this split'),
-          }),
+          }).meta({ additionalProperties: false }),
         )
         .min(2)
         .describe('Two or more splits whose amounts sum to the total.'),
