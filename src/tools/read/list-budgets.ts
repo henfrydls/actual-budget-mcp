@@ -1,10 +1,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
-import { ensureConnection } from '../../connection.js';
+import { ensureConnection, serverVersionCheck } from '../../connection.js';
 import { sectionHeader } from '../../utils/formatters.js';
 import { describeError } from '../../utils/errors.js';
 import { configuredBudgetIds, openBudgetId, servesManyBudgets } from '../../utils/budgets.js';
 import { poolInUse } from '../../workers/current.js';
+import { versionNote, type VersionCheck } from '../../utils/server-version.js';
 
 /**
  * The budgets this server serves, by the id a caller has to pass (#229).
@@ -56,13 +57,26 @@ export function registerListBudgets(server: McpServer): void {
           const known = pool?.knownBudgets() ?? new Map();
           const serving = configuredBudgetIds();
           const lines: string[] = [sectionHeader(`Budgets (${serving.length})`), ''];
+          // And what its worker said about the two versions, which the
+          // front end cannot work out either: it has no connection to the
+          // Actual server to ask. The line goes beside the budget it was
+          // said about, and the sentence that explains it goes once.
+          let mismatch: VersionCheck | undefined;
           for (const id of serving) {
-            const name = known.get(id)?.name;
-            if (name === undefined) {
-              lines.push(`${id}${open.has(id) ? '  [open]' : '  (not opened yet)'}`);
-            } else {
-              lines.push(`${name} (${id})  ${open.has(id) ? '[open]' : '(closed)'}`);
-            }
+            const report = known.get(id);
+            const name = report?.name;
+            const differs = report?.version?.kind === 'mismatch';
+            if (differs && mismatch === undefined) mismatch = report?.version;
+            const state = open.has(id) ? '[open]' : name === undefined ? '(not opened yet)' : '(closed)';
+            const versions =
+              report?.version?.kind === 'mismatch'
+                ? `  Actual ${report.version.server}, library ${report.version.library}`
+                : '';
+            lines.push(
+              name === undefined
+                ? `${id}  ${state}${versions}`
+                : `${name} (${id})  ${state}${versions}`,
+            );
           }
           lines.push('');
           lines.push(
@@ -70,6 +84,10 @@ export function registerListBudgets(server: McpServer): void {
               'inside the budget file, so a budget nobody has opened yet is listed by id ' +
               'alone. Pass the id, whichever is shown.',
           );
+          if (mismatch !== undefined) {
+            lines.push('');
+            lines.push(versionNote(mismatch) ?? '');
+          }
           return { content: [{ type: 'text', text: lines.join('\n') }] };
         }
 
@@ -100,6 +118,16 @@ export function registerListBudgets(server: McpServer): void {
           lines.push(
             'This server serves one budget. Set ACTUAL_BUDGET_IDS to serve more than one.',
           );
+        }
+
+        // What the versions said when the budget was opened, where somebody
+        // can act on it (#229). The same thing went to stderr then, and a
+        // server a client starts in the background has nobody reading that.
+        const checked = serverVersionCheck();
+        const note = checked === undefined ? undefined : versionNote(checked);
+        if (note !== undefined) {
+          lines.push('');
+          lines.push(note);
         }
 
         return { content: [{ type: 'text', text: lines.join('\n') }] };

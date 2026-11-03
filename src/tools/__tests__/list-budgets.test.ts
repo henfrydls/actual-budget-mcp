@@ -9,8 +9,10 @@ vi.mock('@actual-app/api', () => ({
     integerToAmount: (c: number, places = 2) => c / Math.pow(10, places),
   },
 }));
+const versionCheck = vi.fn();
 vi.mock('../../connection.js', () => ({
   ensureConnection: vi.fn().mockResolvedValue(undefined),
+  serverVersionCheck: () => versionCheck(),
 }));
 
 import { registerListBudgets } from '../read/list-budgets.js';
@@ -43,14 +45,44 @@ describe('listing the budgets this server serves', () => {
     for (const name of VARS) delete process.env[name];
     getBudgets.mockReset();
     usePool(undefined);
+    versionCheck.mockReset();
+  });
+
+  it('carries the version mismatch to whoever asked, in one line', async () => {
+    // A server a client starts in the background says this on stderr and
+    // nobody is there to read it. This is the reply somebody did ask for.
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    getBudgets.mockResolvedValue([{ groupId: 'sync-one', name: 'Household' }]);
+    versionCheck.mockReturnValue({
+      kind: 'mismatch',
+      server: '26.12.0',
+      library: '26.11.0',
+      serverIs: 'ahead',
+    });
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('26.12.0');
+    expect(text).toContain('26.11.0');
+  });
+
+  it('says nothing about versions when they agree', async () => {
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    getBudgets.mockResolvedValue([{ groupId: 'sync-one', name: 'Household' }]);
+    versionCheck.mockReturnValue({ kind: 'match', server: '26.11.0', library: '26.11.0' });
+
+    expect((await handler()()).content[0].text).not.toContain('26.11.0');
   });
 
   /** A pool that knows what its workers have told it. */
-  function fakePool(open: string[], known: Record<string, string> = {}): void {
+  function fakePool(
+    open: string[],
+    known: Record<string, { name?: string; version?: unknown }> = {},
+  ): void {
     usePool({
       openBudgets: () => open,
       knownBudgets: () =>
-        new Map(Object.entries(known).map(([id, name]) => [id, { budgetId: id, name }])),
+        new Map(Object.entries(known).map(([id, report]) => [id, { budgetId: id, ...report }])),
     } as never);
   }
 
@@ -77,7 +109,10 @@ describe('listing the budgets this server serves', () => {
     // this morning, which is the state most of the day.
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two,sync-three';
-    fakePool(['sync-one'], { 'sync-one': 'Household', 'sync-two': 'Business' });
+    fakePool(['sync-one'], {
+      'sync-one': { name: 'Household' },
+      'sync-two': { name: 'Business' },
+    });
 
     const text = (await handler()()).content[0].text;
 
@@ -111,6 +146,48 @@ describe('listing the budgets this server serves', () => {
 
     expect(text).toContain('sync-three  [open]');
     expect(text).toContain('sync-one  (not opened yet)');
+  });
+
+  it('says which budget the versions disagree about, and why, once', async () => {
+    // The front end has no connection to the Actual server, so it cannot
+    // work this out: it is what the worker that opened the budget said
+    // when it opened it. The line goes beside that budget; the sentence
+    // that explains it goes once.
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
+    fakePool(['sync-one', 'sync-two'], {
+      'sync-one': {
+        name: 'Household',
+        version: { kind: 'mismatch', server: '26.12.0', library: '26.11.0', serverIs: 'ahead' },
+      },
+      'sync-two': {
+        name: 'Business',
+        version: { kind: 'match', server: '26.11.0', library: '26.11.0' },
+      },
+    });
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('Household (sync-one)  [open]  Actual 26.12.0, library 26.11.0');
+    expect(text).toContain('Business (sync-two)  [open]');
+    expect(text).not.toContain('Business (sync-two)  [open]  Actual');
+    // And the sentence, once, at the end: the line says which budget and
+    // the sentence says what it means.
+    expect(text).toContain('migrations this library does not have');
+    expect(text.match(/26\.12\.0/g)).toHaveLength(2);
+  });
+
+  it('says nothing about versions when every worker found them matching', async () => {
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
+    fakePool(['sync-one'], {
+      'sync-one': {
+        name: 'Household',
+        version: { kind: 'match', server: '26.11.0', library: '26.11.0' },
+      },
+    });
+
+    expect((await handler()()).content[0].text).not.toContain('26.11.0');
   });
 
   it('lists none of the budgets on the server that nobody configured', async () => {

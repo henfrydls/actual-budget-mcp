@@ -7,7 +7,7 @@ import { withoutCredentials } from '../utils/redact.js';
 import { effectiveDataDir } from '../utils/data-dir-lock.js';
 import { unsafeBudgetId } from '../utils/budgets.js';
 import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import { WORKER_LOGGER, tidyName, type BudgetReport } from './report.js';
+import { WORKER_LOGGER, tidyCheck, tidyName, type BudgetReport } from './report.js';
 import { WORKER_FLAG } from './worker-env.js';
 import { encryptionPasswordFor, workerEnvironment } from './worker-env.js';
 
@@ -240,7 +240,11 @@ export class WorkerPool {
     if ((params as { logger?: unknown })?.logger !== WORKER_LOGGER) return;
     if (typeof data !== 'object' || data === null) return;
 
-    const { budgetId, name } = data as { budgetId?: unknown; name?: unknown };
+    const { budgetId, name, version } = data as {
+      budgetId?: unknown;
+      name?: unknown;
+      version?: unknown;
+    };
     if (budgetId !== worker.budgetId) return;
 
     // Not just the type and the length: this name is going into a list
@@ -249,9 +253,15 @@ export class WorkerPool {
     const tidy = tidyName(name);
     if (name !== undefined && tidy === undefined) return;
 
+    // The same for what it says about the versions, which becomes a
+    // sentence in that same reply.
+    const checked = tidyCheck(version);
+    if (version !== undefined && checked === undefined) return;
+
     this.seen.set(worker.budgetId, {
       budgetId: worker.budgetId,
       ...(tidy === undefined ? {} : { name: tidy }),
+      ...(checked === undefined ? {} : { version: checked }),
     });
   }
 

@@ -1,6 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as api from '@actual-app/api';
 import { openBudgetId } from '../utils/budgets.js';
+import type { VersionCheck } from '../utils/server-version.js';
+import { serverVersionCheck } from '../connection.js';
 import { startedByPool } from './worker-env.js';
 
 /**
@@ -27,6 +29,15 @@ export const WORKER_LOGGER = 'actual-budget-mcp/worker';
 export interface BudgetReport {
   budgetId: string;
   name?: string;
+  /**
+   * What the two versions said when this worker opened the budget.
+   *
+   * It travels with the name for the same reason the name does: the front
+   * end has no connection to the Actual server, so it has no version of
+   * its own to compare, and the line that says so on stderr is written in
+   * a child process nobody is reading.
+   */
+  version?: VersionCheck;
 }
 
 /** The longest name this will carry, so a reply cannot be filled from below. */
@@ -78,6 +89,35 @@ async function openBudgetName(budgetId: string): Promise<string | undefined> {
 }
 
 /**
+ * A version check fit to believe, or nothing.
+ *
+ * It arrives from another process, like the name, so its shape is checked
+ * rather than assumed: a kind this code knows, and versions that are short
+ * strings on one line. What is built from it is a sentence in a reply.
+ */
+export function tidyCheck(raw: unknown): VersionCheck | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { kind, server, library, serverIs } = raw as Record<string, unknown>;
+  const version = (value: unknown): string | undefined => {
+    const tidy = tidyName(value);
+    return tidy === undefined || tidy.length > 40 ? undefined : tidy;
+  };
+
+  const tidyLibrary = version(library);
+  if (tidyLibrary === undefined) return undefined;
+
+  if (kind === 'unreadable') return { kind, library: tidyLibrary };
+
+  const tidyServer = version(server);
+  if (tidyServer === undefined) return undefined;
+  if (kind === 'match') return { kind, server: tidyServer, library: tidyLibrary };
+  if (kind === 'mismatch' && (serverIs === 'behind' || serverIs === 'ahead')) {
+    return { kind, server: tidyServer, library: tidyLibrary, serverIs };
+  }
+  return undefined;
+}
+
+/**
  * Say it once, after the budget is open.
  *
  * Only from a process the pool started: anywhere else there is nobody
@@ -90,7 +130,12 @@ export async function reportToPool(server: McpServer): Promise<void> {
 
   try {
     const name = await openBudgetName(budgetId);
-    const report: BudgetReport = { budgetId, ...(name === undefined ? {} : { name }) };
+    const version = serverVersionCheck();
+    const report: BudgetReport = {
+      budgetId,
+      ...(name === undefined ? {} : { name }),
+      ...(version === undefined ? {} : { version }),
+    };
     await server.server.sendLoggingMessage({
       level: 'info',
       logger: WORKER_LOGGER,
