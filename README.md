@@ -352,7 +352,7 @@ accident, because it is there all day for a second client to point at.
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
-| `ACTUAL_TOOLSET` | No | `chat` offers the 19 everyday tools instead of all 45. Defaults to `full`. See [Choosing a toolset](#choosing-a-toolset) |
+| `ACTUAL_TOOLSET` | No | `chat` offers the 18 everyday tools instead of all 44. Defaults to `full`. See [Choosing a toolset](#choosing-a-toolset) |
 
 ### Using a session token (OIDC servers)
 
@@ -678,7 +678,7 @@ consecutive pulls, so a remote server pays a redundant round trip.
 
 ### Read-only mode
 
-Set `ACTUAL_READ_ONLY=1` and the server exposes only the 18 read, analysis and
+Set `ACTUAL_READ_ONLY=1` and the server exposes only the 17 read, analysis and
 repair tools. The write tools are **not registered at all**, so they never
 appear in tool discovery, and an agent cannot be talked into calling something it
 cannot see.
@@ -695,12 +695,13 @@ of the budget this server opens, and no tool asks which budget a call is for,
 because there is nothing to choose.
 
 `ACTUAL_BUDGET_IDS` lists every budget the server serves, comma separated,
-when there is more than one. Two things follow from setting it:
+when there is more than one. Two things appear when it is set, and only then:
 
-- `list_budgets` names them, by the sync id a caller passes and with the open
-  one marked. It lists what you configured and nothing else: a budget on the
-  account that is not in the list cannot be reached by asking for its id.
-- Every tool takes an optional `budget_id`. Left out, a call is for the budget
+- A tool called `list_budgets`, which names them by the sync id a caller
+  passes, with the open one marked. It lists what you configured and nothing
+  else: a budget on the account that is not in the list cannot be reached by
+  asking for its id.
+- An optional `budget_id` on every tool. Left out, a call is for the budget
   the server has open.
 
 This server opens one budget at a time, because the Actual library opens one
@@ -709,9 +710,11 @@ so, rather than answering from the wrong one, and a second server configured
 for it is how to read both today. Serving them from one server, with a worker
 process per budget, is the rest of this work.
 
-Asking for 4 KiB of extra tool descriptions is what the parameter costs, so
-nobody with one budget pays it: with `ACTUAL_BUDGET_IDS` unset the schemas are
-exactly what they were.
+Both cost context on every connection, so neither appears when there is one
+budget. Measured with two budgets configured, the full set goes from 39.7 KiB
+to 47.4 KiB of tool descriptions, which is 7.7 KiB more, nearly a fifth. With
+`ACTUAL_BUDGET_IDS` unset, what a client is sent is byte for byte what it was
+sent before any of this: no extra tool, no extra parameter.
 
 ### Choosing a toolset
 
@@ -721,10 +724,10 @@ real client for `tools/list`:
 
 | `ACTUAL_TOOLSET` | Tools | `tools/list` |
 |---|---|---|
-| `full` (default) | 45 | 40.0 KiB |
-| `chat` | 19 | 17.8 KiB |
-| `chat` with `ACTUAL_READ_ONLY=1` | 9 | 6.0 KiB |
-| `full` with `ACTUAL_READ_ONLY=1` | 18 | 12.8 KiB |
+| `full` (default) | 44 | 39.7 KiB |
+| `chat` | 18 | 17.4 KiB |
+| `chat` with `ACTUAL_READ_ONLY=1` | 8 | 5.7 KiB |
+| `full` with `ACTUAL_READ_ONLY=1` | 17 | 12.5 KiB |
 
 `chat` is the everyday set: reading the budget, recording and categorising
 transactions, and moving budgeted money between categories. What it leaves out
@@ -734,8 +737,8 @@ and `repair_sync`.
 
 It is worth setting for two reasons, and the second is the bigger one: the
 context is spent whatever the conversation turns out to be about, and a model
-choosing between 45 descriptions picks the wrong tool more often than one
-choosing between 19.
+choosing between 44 descriptions picks the wrong tool more often than one
+choosing between 18.
 
 The prompts go with the tools they call. Each one is a short script naming
 three or four tools, so a prompt whose tools are not offered is not offered
@@ -746,9 +749,9 @@ not supported, rather than with an empty list.
 The two settings narrow together rather than fighting: read-only decides which
 tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
 
-## Tools (45)
+## Tools (44)
 
-### Read (12)
+### Read (11)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
@@ -760,7 +763,6 @@ tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
 | `get_categories` | All category groups and categories, with `include_hidden` for the hidden ones | "What categories do I have?" |
 | `get_payees` | All payees in the budget | "List all my payees" |
 | `get_schedules` | Recurring payments: what is due next, how much, and whether the last one posted | "What bills are coming up?" |
-| `list_budgets` | The budgets this server serves, by sync id, and which one is open | "Which budgets can you reach?" |
 | `reconcile_account` | Compare an account against a bank figure and explain the gap | "My checking statement says 12,500.00, what am I missing?" |
 | `get_rules` | All transaction rules | "Show me my rules" |
 | `balance_history` | Account balance over time | "Show balance history for my checking account" |

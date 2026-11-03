@@ -3,6 +3,7 @@ import { isReadOnly } from '../utils/mode.js';
 import { withInFlight } from '../utils/in-flight.js';
 import { withSchemaHint } from '../utils/schema-hint.js';
 import { withBudgetId } from '../utils/budget-id.js';
+import { servesManyBudgets } from '../utils/budgets.js';
 
 // Read tools
 import { registerListAccounts } from './read/list-accounts.js';
@@ -144,7 +145,11 @@ export function registerAllTools(
   registerGetCategories(server);
   registerGetPayees(server);
   registerGetSchedules(server);
-  registerListBudgets(server);
+  // Only when there is more than one to list (#229). With one budget it
+  // would answer what the configuration already says, and it would do it on
+  // every connection, in the set that exists to be the smallest one. That is
+  // the argument this work makes about `budget_id`, and it applies here.
+  if (servesManyBudgets()) registerListBudgets(server);
 
   // Analysis
   registerBudgetVsActual(server);
