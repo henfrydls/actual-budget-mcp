@@ -861,6 +861,23 @@ call answers that the budget is still opening and asks you to try again, rather
 than hanging past the client's own one minute timeout. For a write, the answer
 says that nothing was sent to the budget, so repeating it cannot write twice.
 
+When every budget this server keeps open is busy, a call for another one
+waits for room and is then told that everything is busy, in the same words
+and with the same promise: nothing was read or written, and nothing was sent.
+A write that takes longer than this server waits for one is the other way
+round, and says so plainly: the worker is still applying it, so check the
+budget before repeating it rather than sending it twice.
+
+`list_budgets` is where a deployment with several budgets finds out what it
+is talking to. Each budget is listed with the name its own worker read out of
+the file, `[open]` while a worker holds it and `(closed)` once that worker
+has gone, and a budget nobody has opened yet is listed by its id alone. If a
+worker found that your Actual server and this server's Actual library differ
+on major or minor, the line says which budget that was and both versions, and
+one sentence at the end says what it means. Nothing refuses to open over it:
+Actual's minor is the month, so a server that updates itself is a minor ahead
+of this one every time Actual releases.
+
 The resources (`actual://accounts` and the other two) are not offered when
 there is more than one budget. A resource is a URI and nothing else: it has
 nowhere to say which budget it is about, and answering from the default one
@@ -886,7 +903,136 @@ appears when there is one budget. Measured with two budgets configured, the
 full set goes from 39.7 KiB to 47.6 KiB of tool descriptions, which is 7.9 KiB
 more, a fifth again. With `ACTUAL_BUDGET_IDS` unset, what a client is sent is
 byte for byte what it was sent before any of this: no extra tool, no extra
-parameter.
+parameter, and no child process.
+
+#### Serving them to more than one client
+
+Several budgets and [HTTP mode](#running-it-over-http) are the same
+deployment in practice: one server somewhere that several people, or several
+clients, point at. The two work together without anything new. The read path
+and the write path are the same process, the budget each call is for is the
+`budget_id` it names, and which tools exist is decided per path, so a
+credential that may only read cannot write in any budget rather than in some
+of them.
+
+What a worker is started with is built rather than inherited, which matters
+once this runs in a container: `TZ`, the proxy variables and the certificate
+paths are passed down, because they are facts about the machine and a budget
+is full of dates, while the HTTP port and its credentials are not, because a
+worker has no door of its own.
+
+#### In Docker, with a volume
+
+```yaml
+# compose.yaml
+services:
+  actual-budget-mcp:
+    image: ghcr.io/henfrydls/actual-budget-mcp:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - actual-budget-mcp-data:/data
+    environment:
+      ACTUAL_SERVER_URL: http://actual:5006
+      ACTUAL_PASSWORD: ${ACTUAL_PASSWORD}
+      ACTUAL_BUDGET_ID: first-budget-sync-id
+      ACTUAL_BUDGET_IDS: first-budget-sync-id,second-budget-sync-id
+      ACTUAL_HTTP_PORT: "3000"
+      ACTUAL_HTTP_HOST: "0.0.0.0"
+      ACTUAL_HTTP_ALLOW_REMOTE: "1"
+      ACTUAL_HTTP_ALLOWED_HOSTS: "localhost,127.0.0.1"
+      ACTUAL_HTTP_TOKEN: ${ACTUAL_HTTP_TOKEN}
+      ACTUAL_HTTP_WRITE_TOKEN: ${ACTUAL_HTTP_WRITE_TOKEN}
+      TZ: America/Santo_Domingo
+
+volumes:
+  actual-budget-mcp-data:
+```
+
+The volume is the point of the whole file. `ACTUAL_DATA_DIR` is `/data` in
+the image, each budget gets its own directory under it, and without
+somewhere to keep them every restart downloads every budget again. Binding
+the port to `127.0.0.1` keeps it on the host; `ACTUAL_HTTP_HOST=0.0.0.0` is
+about the inside of the container, where `127.0.0.1` would be unreachable
+from anywhere, and `ACTUAL_HTTP_ALLOW_REMOTE=1` is this server asking you to
+mean it. Off loopback it also wants `ACTUAL_HTTP_ALLOWED_HOSTS`: the
+hostnames clients put in the `Host` header, **without ports**, since the
+check ignores the port. Get it wrong and every request comes back `403
+Invalid Host`, which is the failure that looks like a broken token. Both
+tokens are at least 32 characters.
+
+#### In Kubernetes
+
+The same thing, with four things worth knowing before you write the manifest:
+
+- **One replica.** Two processes sharing one budget cache is what drives a
+  budget out of sync, so a second replica on the same volume does not share
+  it: it steps aside to a directory of its own and downloads everything
+  again. If you need more throughput, give each replica its own volume and
+  its own budgets, not a copy of the same ones.
+- **The image runs as uid 1000** (`node`), so the volume needs
+  `securityContext: {runAsUser: 1000, fsGroup: 1000}` or the first write to
+  `/data` fails.
+- **Probe the port, not a path.** Every path answers `401` without a
+  credential, by design, so a `tcpSocket` probe is the honest one. An
+  `httpGet` probe works too if you treat `401` as healthy.
+- **Size it per budget that stays open.** `ACTUAL_BUDGET_WORKERS` is how many
+  processes hold a budget at once, each one a Node process with a budget in
+  it, so the memory this needs is that number times one budget, not one.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: actual-budget-mcp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: actual-budget-mcp}
+  template:
+    metadata:
+      labels: {app: actual-budget-mcp}
+    spec:
+      securityContext:
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: server
+          image: ghcr.io/henfrydls/actual-budget-mcp:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - {name: ACTUAL_SERVER_URL, value: http://actual:5006}
+            - {name: ACTUAL_BUDGET_ID, value: first-budget-sync-id}
+            - {name: ACTUAL_BUDGET_IDS, value: "first-budget-sync-id,second-budget-sync-id"}
+            - {name: ACTUAL_BUDGET_WORKERS, value: "2"}
+            - {name: ACTUAL_HTTP_PORT, value: "3000"}
+            - {name: ACTUAL_HTTP_HOST, value: "0.0.0.0"}
+            - {name: ACTUAL_HTTP_ALLOW_REMOTE, value: "1"}
+            - {name: ACTUAL_HTTP_ALLOWED_HOSTS, value: "actual-budget-mcp,mcp.example.internal"}
+            - {name: TZ, value: America/Santo_Domingo}
+          envFrom:
+            - secretRef: {name: actual-budget-mcp}
+          readinessProbe:
+            tcpSocket: {port: 3000}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: actual-budget-mcp}
+```
+
+`ACTUAL_HTTP_ALLOWED_HOSTS` is the names clients actually use, without
+ports: the Service name inside the cluster, and whatever host an Ingress
+answers to. The `Secret` holds `ACTUAL_PASSWORD`,
+`ACTUAL_HTTP_TOKEN`,
+`ACTUAL_HTTP_WRITE_TOKEN` and, if your budgets are encrypted,
+`ACTUAL_ENCRYPTION_PASSWORDS`. `strategy: Recreate` rather than a rolling
+update, for the same reason there is one replica: during a rollout the old
+pod still holds the volume.
 
 ### Choosing a toolset
 

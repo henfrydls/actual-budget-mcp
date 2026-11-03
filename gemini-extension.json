@@ -34,12 +34,41 @@
       "name": "Toolset",
       "description": "Set to chat to offer the 18 everyday tools instead of all 44: reading, recording and categorising transactions, and moving budgeted money. Setting up and repairing a budget is left out. Defaults to full.",
       "envVar": "ACTUAL_TOOLSET"
+    },
+    {
+      "name": "Other budgets this server serves",
+      "description": "Every budget sync id this server should serve, comma separated, when it is more than one. Each tool then takes a budget_id, each budget is opened in a process of its own, and list_budgets says which ones there are.",
+      "envVar": "ACTUAL_BUDGET_IDS"
+    },
+    {
+      "name": "Encryption passwords (several budgets)",
+      "description": "A JSON object of budget sync id to encryption password, for when more than one of the budgets is end-to-end encrypted: {\"<sync id>\": \"<password>\"}. With one encrypted budget the single password setting is enough.",
+      "envVar": "ACTUAL_ENCRYPTION_PASSWORDS",
+      "sensitive": true
+    },
+    {
+      "name": "Budgets open at once",
+      "description": "How many budgets stay open at the same time, each in its own process. Defaults to 3; a fourth budget closes the one that went longest without a call.",
+      "envVar": "ACTUAL_BUDGET_WORKERS"
+    },
+    {
+      "name": "Minutes before an idle budget closes",
+      "description": "How long an open budget with nothing to do stays open. Defaults to 15.",
+      "envVar": "ACTUAL_WORKER_IDLE_MINUTES"
+    },
+    {
+      "name": "Seconds to wait for a budget to open",
+      "description": "How long a call waits for a budget that is still opening before it answers that it is still opening and nothing was sent. Defaults to 45.",
+      "envVar": "ACTUAL_WORKER_READY_SECONDS"
     }
   ],
   "mcpServers": {
     "actual": {
       "command": "npx",
-      "args": ["-y", "actual-budget-mcp"]
+      "args": [
+        "-y",
+        "actual-budget-mcp"
+      ]
     }
   }
 }
