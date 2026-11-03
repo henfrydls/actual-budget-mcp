@@ -7,6 +7,7 @@ import { describeError } from '../../utils/errors.js';
 import { isIncome } from '../../utils/income.js';
 import {
   countHidden,
+  groupsWithCategories,
   inHiddenGroup,
   notListedLine,
   type CategoryRow,
@@ -31,6 +32,16 @@ import {
  * so this listed them as ordinary categories while the app showed none of
  * them. They are treated as hidden here too, counted apart because what
  * brings them back is `update_category_group` rather than `update_category`.
+ *
+ * ## A group with no categories is still a group (#283)
+ *
+ * One with nothing in it was skipped in silence, so a group created a moment
+ * ago with `create_category_group` was not in the reply and there was no way
+ * to read its id back from here. It is listed now, marked `[empty]`.
+ *
+ * Empty means no categories at all, not "none that this reply shows". A
+ * group whose categories are all hidden keeps the old behaviour: it stays
+ * out, and the closing line is what says they are there.
  */
 export function registerGetCategories(server: McpServer): void {
   server.tool(
@@ -53,6 +64,9 @@ export function registerGetCategories(server: McpServer): void {
         const categories = (await api.getCategories()) as unknown as CategoryRow[];
 
         const groupById = new Map(groups.map((g) => [g.id, g]));
+        // Asked of every category there is, before any filter, because what
+        // makes a group empty is having none rather than showing none.
+        const withAny = groupsWithCategories(categories);
         // Counted while walking the categories rather than from the lines, so
         // a category left out by one of the filters below cannot go unsaid.
         // The rule itself is shared with the resource, which used to have its
@@ -84,9 +98,15 @@ export function registerGetCategories(server: McpServer): void {
               !isIncome(undefined, c as never),
           );
 
-          if (groupCats.length === 0) continue;
+          const empty = !withAny.has(group.id);
+          // Nothing to show and something to show it from: the categories
+          // are there and hidden, which the closing line already covers.
+          if (groupCats.length === 0 && !empty) continue;
 
-          lines.push(`${group.name} (${group.id})${group.hidden ? '  [hidden]' : ''}`);
+          lines.push(
+            `${group.name} (${group.id})${group.hidden ? '  [hidden]' : ''}` +
+              `${empty ? '  [empty]' : ''}`,
+          );
 
           for (const cat of groupCats) {
             lines.push(`  ${cat.name} (${cat.id})${mark(cat)}`);
@@ -102,6 +122,12 @@ export function registerGetCategories(server: McpServer): void {
         const incomeCats = categories.filter(
           (c) => listed(c) && isIncome(groupById.get(c.group_id ?? '') as never, c as never),
         );
+        if (incomeCats.length === 0 && incomeGroup !== undefined && !withAny.has(incomeGroup.id)) {
+          // The same rule, for the one group this reply builds from its
+          // categories rather than from the group list.
+          lines.push(`${incomeGroup.name} (${incomeGroup.id})  [empty]`);
+          lines.push('');
+        }
         if (incomeCats.length > 0) {
           lines.push(`${incomeGroup?.name ?? 'Income'} (${incomeGroup?.id ?? ''})`);
           for (const cat of incomeCats) {
