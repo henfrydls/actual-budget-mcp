@@ -105,6 +105,25 @@ const SHARED = [
   'ACTUAL_HTTP_TIMEOUT_MS',
 ];
 
+/**
+ * The marker the pool puts in a worker's environment.
+ *
+ * Not configuration: nobody sets this, it is how a process started by the
+ * pool knows it is one. A worker uses it to report its budget's name back
+ * up the stdio pipe, which needs the `logging` capability declared, and
+ * declaring that capability changes what `initialize` answers. Measured:
+ * capabilities go from {"tools":{"listChanged":true}} to
+ * {"logging":{},"tools":{"listChanged":true}}. So it is declared only here,
+ * in processes the pool starts, and a server anybody else runs answers
+ * exactly what it answered before.
+ */
+const MARKER = 'ACTUAL_MCP_WORKER';
+
+/** Whether this process was started by a pool. */
+export function startedByPool(): boolean {
+  return readEnv(MARKER) === '1';
+}
+
 export interface WorkerEnvironment {
   budgetId: string;
   dataDir: string;
@@ -122,6 +141,7 @@ export function workerEnvironment(options: WorkerEnvironment): Record<string, st
   const nodeFlags = nodeOptions();
   if (nodeFlags !== undefined) env.NODE_OPTIONS = nodeFlags;
 
+  env[MARKER] = '1';
   env.ACTUAL_BUDGET_ID = options.budgetId;
   env.ACTUAL_DATA_DIR = options.dataDir;
   if (options.encryptionPassword !== undefined) {

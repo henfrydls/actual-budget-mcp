@@ -468,6 +468,43 @@ describe('the worker pool', () => {
     expect(said(reply)).toContain('Nothing was changed');
   }, 30_000);
 
+  it('learns a budget name from the worker that opened it, and keeps it', async () => {
+    // The front end cannot read it: the name is inside the budget file, in
+    // the worker's data directory. It arrives as a notification on the pipe
+    // the pool is already listening to, so it costs no round trip, and it
+    // outlives the worker because a worker is closed after fifteen idle
+    // minutes and a list of ids is what this was meant to stop.
+    const workers = pool({}, ['--report-name=Household']);
+
+    await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(workers.knownBudgets().get('sync-one')?.name).toBe('Household');
+
+    await workers.stop();
+    expect(workers.openBudgets()).toEqual([]);
+    expect(workers.knownBudgets().get('sync-one')?.name).toBe('Household');
+  }, 30_000);
+
+  it('believes a worker about its own budget and nothing else', async () => {
+    // It arrives as a log notification, which anything on the other end of
+    // a pipe can send.
+    const cases = [
+      ['--report-id=sync-two', '--report-name=Somebody else'],
+      ['--report-name=TOO-LONG'],
+      ['--report-logger=something-else', '--report-name=Household'],
+    ];
+
+    for (const flags of cases) {
+      const workers = pool({}, flags);
+      await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect([...workers.knownBudgets().keys()], flags.join(' ')).toEqual([]);
+      await workers.stop();
+    }
+  }, 30_000);
+
   it('lets go of a worker that has had nothing to do', async () => {
     const workers = pool({ idleMs: 60 });
     await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });

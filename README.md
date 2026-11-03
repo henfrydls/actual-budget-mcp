@@ -702,9 +702,11 @@ because there is nothing to choose.
 when there is more than one. Two things appear when it is set, and only then:
 
 - A tool called `list_budgets`, which names them by the sync id a caller
-  passes, with the open ones marked. It lists what you configured and nothing
-  else: a budget on the account that is not in the list cannot be reached by
-  asking for its id.
+  passes, with the open ones marked. A budget's own name is inside its file,
+  so it appears once the budget has been opened at least one time, and stays
+  afterwards: one that has never been opened is listed by id alone. It lists
+  what you configured and nothing else: a budget on the account that is not
+  in the list cannot be reached by asking for its id.
 - An optional `budget_id` on every tool. Left out, a call is for the budget in
   `ACTUAL_BUDGET_ID`.
 

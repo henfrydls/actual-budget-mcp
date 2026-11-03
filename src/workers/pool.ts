@@ -6,6 +6,8 @@ import { readEnv } from '../utils/env.js';
 import { withoutCredentials } from '../utils/redact.js';
 import { effectiveDataDir } from '../utils/data-dir-lock.js';
 import { unsafeBudgetId } from '../utils/budgets.js';
+import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { MAX_NAME, WORKER_LOGGER, type BudgetReport } from './report.js';
 import { encryptionPasswordFor, workerEnvironment } from './worker-env.js';
 
 /**
@@ -174,6 +176,15 @@ function number(name: string, fallback: number): number {
 
 export class WorkerPool {
   private readonly workers = new Map<string, Worker>();
+  /**
+   * The last thing each budget's worker said about itself.
+   *
+   * Kept by budget and not by worker, on purpose: a worker is closed after
+   * fifteen idle minutes, and a name that went with it would leave
+   * `list_budgets` saying "not opened yet" about a budget it opened twice
+   * this morning. So this is the last seen, and a new worker replaces it.
+   */
+  private readonly seen = new Map<string, BudgetReport>();
   private readonly options: Required<Omit<PoolOptions, 'dataDirFor' | 'log'>> &
     Pick<PoolOptions, 'dataDirFor' | 'log'>;
   private stopped = false;
@@ -197,6 +208,37 @@ export class WorkerPool {
   /** Which budgets are open, for diagnostics and for the tests. */
   openBudgets(): string[] {
     return [...this.workers.keys()];
+  }
+
+  /** What each budget's worker said about it, the last time one ran. */
+  knownBudgets(): ReadonlyMap<string, BudgetReport> {
+    return this.seen;
+  }
+
+  /**
+   * Believe a worker about its own budget, and nothing else.
+   *
+   * It arrives as a log notification, which anything on the other end of a
+   * pipe can send, so what is accepted is narrow: this pool's own child,
+   * the logger name a worker uses, its own budget id, and a name that is a
+   * string of a sane length. Anything else is dropped without a word, and
+   * none of it is ever passed on to the client.
+   */
+  private heard(worker: Worker, params: unknown): void {
+    const data = (params as { logger?: unknown; data?: unknown })?.data;
+    if ((params as { logger?: unknown })?.logger !== WORKER_LOGGER) return;
+    if (typeof data !== 'object' || data === null) return;
+
+    const { budgetId, name } = data as { budgetId?: unknown; name?: unknown };
+    if (budgetId !== worker.budgetId) return;
+    if (name !== undefined && (typeof name !== 'string' || name === '' || name.length > MAX_NAME)) {
+      return;
+    }
+
+    this.seen.set(worker.budgetId, {
+      budgetId: worker.budgetId,
+      ...(typeof name === 'string' ? { name } : {}),
+    });
   }
 
   async call(budgetId: string, call: ToolCall): Promise<ToolReply> {
@@ -336,6 +378,12 @@ export class WorkerPool {
       lastUsed: Date.now(),
       ready: Promise.resolve(),
     };
+
+    // Before connecting, because a worker says it as soon as its budget is
+    // open and that can be before the probe comes back.
+    client.setNotificationHandler(LoggingMessageNotificationSchema, (notification) => {
+      this.heard(worker, notification.params);
+    });
 
     worker.ready = (async () => {
       await client.connect(transport);

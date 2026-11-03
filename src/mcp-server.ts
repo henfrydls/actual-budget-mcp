@@ -5,6 +5,7 @@ import { registerAllResources } from './resources.js';
 import { serverInstructions } from './utils/instructions.js';
 import { isReadOnly } from './utils/mode.js';
 import { packageVersion } from './utils/version.js';
+import { startedByPool } from './workers/worker-env.js';
 
 /**
  * One configured MCP server, built the same way wherever it is used (#228).
@@ -26,11 +27,18 @@ export function createMcpServer(
 
   const server = new McpServer(
     { name: 'actual-budget-mcp', version: packageVersion },
-    // What the protocol calls instructions: the conventions that hold across
-    // the tools, said once at connection rather than inferred from forty
-    // descriptions (#222). Read-only drops the paragraphs about writing,
-    // which describe tools this server does not have.
-    { instructions: serverInstructions({ readOnly }) },
+    {
+      // What the protocol calls instructions: the conventions that hold
+      // across the tools, said once at connection rather than inferred from
+      // forty descriptions (#222). Read-only drops the paragraphs about
+      // writing, which describe tools this server does not have.
+      instructions: serverInstructions({ readOnly }),
+      // Only in a worker, and only because a worker has something to say
+      // upwards: its budget's name, which the front end cannot read without
+      // opening the budget itself (#229). Declaring it changes what
+      // `initialize` answers, so every other server declares nothing new.
+      ...(startedByPool() ? { capabilities: { logging: {} } } : {}),
+    },
   );
 
   registerAllTools(server, { readOnly, includeRepairSync: options.includeRepairSync });

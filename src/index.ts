@@ -19,6 +19,8 @@ import {
 } from './utils/http-config.js';
 import { startHttpServer } from './http.js';
 import { WorkerPool } from './workers/pool.js';
+import { reportToPool } from './workers/report.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { usePool } from './workers/current.js';
 import { servesManyBudgets } from './utils/budgets.js';
 import { encryptionPasswordsProblem } from './workers/worker-env.js';
@@ -210,6 +212,8 @@ if (chosenToolset() === 'chat') {
 // budget there is no pool, no child process and nothing routed: this
 // process opens the budget itself, as it always has.
 const pool = servesManyBudgets() ? new WorkerPool() : undefined;
+/** The stdio server, kept so that a worker can speak to its pool. */
+let stdioServer: McpServer | undefined;
 usePool(pool);
 
 installExitPaths({
@@ -248,7 +252,8 @@ if (http?.config !== undefined) {
   );
 } else {
   const transport = new StdioServerTransport();
-  await createMcpServer().connect(transport);
+  stdioServer = createMcpServer();
+  await stdioServer.connect(transport);
 }
 
 // Validate connection eagerly on startup so config errors surface immediately
@@ -261,6 +266,9 @@ if (http?.config !== undefined) {
 if (pool === undefined) {
   try {
     await ensureConnection();
+    // With the budget open, a worker tells the pool its name. Anywhere else
+    // this does nothing at all (#229).
+    if (stdioServer !== undefined) await reportToPool(stdioServer);
   } catch (error) {
     console.error(`Startup validation failed: ${describeError(error)}`);
     // Don't exit — let the MCP server stay alive so the error reaches the client

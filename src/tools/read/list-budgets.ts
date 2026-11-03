@@ -48,15 +48,27 @@ export function registerListBudgets(server: McpServer): void {
           // asking the engine here is how the front end would end up
           // holding one (#229).
           const open = new Set(pool?.openBudgets() ?? []);
+          // The name comes from the worker that opened the budget, which is
+          // the only process that can read it: it is inside the file. The
+          // pool keeps the last one it was told, so a budget that was open
+          // this morning is still named after its worker was closed for
+          // idleness.
+          const known = pool?.knownBudgets() ?? new Map();
           const serving = configuredBudgetIds();
           const lines: string[] = [sectionHeader(`Budgets (${serving.length})`), ''];
           for (const id of serving) {
-            lines.push(`${id}${open.has(id) ? '  [open]' : ''}`);
+            const name = known.get(id)?.name;
+            if (name === undefined) {
+              lines.push(`${id}${open.has(id) ? '  [open]' : '  (not opened yet)'}`);
+            } else {
+              lines.push(`${name} (${id})  ${open.has(id) ? '[open]' : '(closed)'}`);
+            }
           }
           lines.push('');
           lines.push(
             'Each budget is opened in its own process, as it is first asked for. A name is ' +
-              'inside the budget file, so it is not shown here: pass the id.',
+              'inside the budget file, so a budget nobody has opened yet is listed by id ' +
+              'alone. Pass the id, whichever is shown.',
           );
           return { content: [{ type: 'text', text: lines.join('\n') }] };
         }

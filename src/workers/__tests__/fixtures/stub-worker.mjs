@@ -9,7 +9,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 const budget = process.env.ACTUAL_BUDGET_ID ?? '(none)';
-const server = new McpServer({ name: 'stub-worker', version: '0' });
+// The capability is declared the way the real worker declares it: only when
+// the pool put its marker in this process's environment. A test that sets
+// --report-name and sees nothing arrive is a test that the marker did not.
+const server = new McpServer(
+  { name: 'stub-worker', version: '0' },
+  process.env.ACTUAL_MCP_WORKER === '1' ? { capabilities: { logging: {} } } : {},
+);
 
 // What it does is told through argv rather than the environment, because
 // the pool builds a worker's environment from an allowlist and these are
@@ -95,7 +101,23 @@ server.registerTool(
 // something to carry.
 console.error(`stub worker up for ${budget} at http://user:hunter2@actual.example:5006`);
 
+// What this worker says about its budget, once it is connected.
+const reportName = flag('report-name');
+const reportId = flag('report-id');
+const reportLogger = flag('report-logger');
+
 await server.connect(new StdioServerTransport());
+
+if (reportName !== undefined) {
+  await server.server.sendLoggingMessage({
+    level: 'info',
+    logger: reportLogger ?? 'actual-budget-mcp/worker',
+    data: {
+      budgetId: reportId ?? budget,
+      name: reportName === 'TOO-LONG' ? 'x'.repeat(201) : reportName,
+    },
+  });
+}
 
 // Last, and with no newline after it: what a process says on its way out,
 // which is the half that used to be dropped.

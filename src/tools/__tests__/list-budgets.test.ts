@@ -45,21 +45,45 @@ describe('listing the budgets this server serves', () => {
     usePool(undefined);
   });
 
+  /** A pool that knows what its workers have told it. */
+  function fakePool(open: string[], known: Record<string, string> = {}): void {
+    usePool({
+      openBudgets: () => open,
+      knownBudgets: () =>
+        new Map(Object.entries(known).map(([id, name]) => [id, { budgetId: id, name }])),
+    } as never);
+  }
+
   it('says which of them are open, and opens none of them to say it', async () => {
     // With workers the front end holds no budget, so there is no
-    // `getBudgets` to ask and no name to show for one that is not open: the
-    // name lives inside the file (#229).
+    // `getBudgets` to ask here: what it knows about a budget is what the
+    // worker holding it said (#229).
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two,sync-three';
-    usePool({ openBudgets: () => ['sync-one', 'sync-three'] } as never);
+    fakePool(['sync-one', 'sync-three']);
 
     const text = (await handler()()).content[0].text;
 
     expect(text).toContain('=== Budgets (3) ===');
     expect(text).toContain('sync-one  [open]');
     expect(text).toContain('sync-three  [open]');
-    expect(text).toMatch(/^sync-two$/m);
+    expect(text).toContain('sync-two  (not opened yet)');
     expect(getBudgets).not.toHaveBeenCalled();
+  });
+
+  it('names the budgets a worker has opened, and keeps the name after it closed', async () => {
+    // A worker is closed after fifteen idle minutes. If the name went with
+    // it, this would say "not opened yet" about a budget it opened twice
+    // this morning, which is the state most of the day.
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two,sync-three';
+    fakePool(['sync-one'], { 'sync-one': 'Household', 'sync-two': 'Business' });
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('Household (sync-one)  [open]');
+    expect(text).toContain('Business (sync-two)  (closed)');
+    expect(text).toContain('sync-three  (not opened yet)');
   });
 
   it('lists the configured ones by sync id, without opening any of them', async () => {
@@ -73,20 +97,20 @@ describe('listing the budgets this server serves', () => {
     const text = (await handler()()).content[0].text;
 
     expect(text).toContain('=== Budgets (2) ===');
-    expect(text).toMatch(/^sync-one$/m);
-    expect(text).toMatch(/^sync-two$/m);
+    expect(text).toContain('sync-one  (not opened yet)');
+    expect(text).toContain('sync-two  (not opened yet)');
     expect(getBudgets).not.toHaveBeenCalled();
   });
 
   it('says a budget is open when a worker has it, and not otherwise', async () => {
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-three';
-    usePool({ openBudgets: () => ['sync-three'] } as never);
+    fakePool(['sync-three']);
 
     const text = (await handler()()).content[0].text;
 
     expect(text).toContain('sync-three  [open]');
-    expect(text).toMatch(/^sync-one$/m);
+    expect(text).toContain('sync-one  (not opened yet)');
   });
 
   it('lists none of the budgets on the server that nobody configured', async () => {
