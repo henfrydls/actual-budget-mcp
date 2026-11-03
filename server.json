@@ -58,6 +58,32 @@
           "isSecret": true
         },
         {
+          "name": "ACTUAL_BUDGET_IDS",
+          "description": "Every budget this server serves, comma separated, when it is more than one. Each tool then takes a budget_id, and each budget is opened in a process of its own",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_ENCRYPTION_PASSWORDS",
+          "description": "A JSON object of budget sync id to encryption password, for when more than one of the budgets is encrypted. Each worker is given its own and never the map",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_BUDGET_WORKERS",
+          "description": "How many budgets stay open at once. Defaults to 3. A fourth budget closes the one that went longest without a call",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_WORKER_IDLE_MINUTES",
+          "description": "How long an open budget with nothing to do stays open. Defaults to 15",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_WORKER_READY_SECONDS",
+          "description": "How long a call waits for a budget that is still opening before it answers that it is still opening. Defaults to 45",
+          "isRequired": false
+        },
+        {
           "name": "ACTUAL_READ_ONLY",
           "description": "Set to 1 to hide every write tool from the model, exposing only reads and analysis",
           "isRequired": false
@@ -75,6 +101,38 @@
         {
           "name": "ACTUAL_HTTP_TIMEOUT_MS",
           "description": "How long to wait for your server to start replying, in milliseconds. Defaults to 60000; raise it if a GoCardless bank sync is being cut off",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_PORT",
+          "description": "Serve MCP over HTTP on this port instead of stdio. Only for a server you run yourself and point clients at: a client that starts this package itself speaks stdio and cannot reach it once this is set",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_TOKEN",
+          "description": "The credential for the read path, /mcp. Required once ACTUAL_HTTP_PORT is set, and at least 32 characters",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_HTTP_WRITE_TOKEN",
+          "description": "A second credential, for the write path, /mcp-write. Without it the server serves no write path at all",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_HTTP_HOST",
+          "description": "What to bind to. Defaults to 127.0.0.1; inside a container that is unreachable, so 0.0.0.0 together with ACTUAL_HTTP_ALLOW_REMOTE",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_ALLOW_REMOTE",
+          "description": "Set to 1 to bind somewhere other than loopback. Nothing here terminates TLS, so put something in front of it that does",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_ALLOWED_HOSTS",
+          "description": "Hostnames to accept in the Host header, comma separated and without ports, for a server that is not on loopback. Anything else is answered 403",
           "isRequired": false
         }
       ]
@@ -109,6 +167,32 @@
           "isRequired": true
         },
         {
+          "name": "ACTUAL_BUDGET_IDS",
+          "description": "Every budget this server serves, comma separated, when it is more than one. Each tool then takes a budget_id, and each budget is opened in a process of its own",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_ENCRYPTION_PASSWORDS",
+          "description": "A JSON object of budget sync id to encryption password, for when more than one of the budgets is encrypted. Each worker is given its own and never the map",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_BUDGET_WORKERS",
+          "description": "How many budgets stay open at once. Defaults to 3. A fourth budget closes the one that went longest without a call",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_WORKER_IDLE_MINUTES",
+          "description": "How long an open budget with nothing to do stays open. Defaults to 15",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_WORKER_READY_SECONDS",
+          "description": "How long a call waits for a budget that is still opening before it answers that it is still opening. Defaults to 45",
+          "isRequired": false
+        },
+        {
           "name": "ACTUAL_READ_ONLY",
           "description": "Set to 1 to hide every write tool from the model, exposing only reads and analysis",
           "isRequired": false
@@ -121,6 +205,38 @@
         {
           "name": "ACTUAL_HTTP_TIMEOUT_MS",
           "description": "How long to wait for your server to start replying, in milliseconds. Defaults to 60000; raise it if a GoCardless bank sync is being cut off",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_PORT",
+          "description": "Serve MCP over HTTP on this port instead of stdio. Only for a server you run yourself and point clients at: a client that starts this package itself speaks stdio and cannot reach it once this is set",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_TOKEN",
+          "description": "The credential for the read path, /mcp. Required once ACTUAL_HTTP_PORT is set, and at least 32 characters",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_HTTP_WRITE_TOKEN",
+          "description": "A second credential, for the write path, /mcp-write. Without it the server serves no write path at all",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "ACTUAL_HTTP_HOST",
+          "description": "What to bind to. Defaults to 127.0.0.1; inside a container that is unreachable, so 0.0.0.0 together with ACTUAL_HTTP_ALLOW_REMOTE",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_ALLOW_REMOTE",
+          "description": "Set to 1 to bind somewhere other than loopback. Nothing here terminates TLS, so put something in front of it that does",
+          "isRequired": false
+        },
+        {
+          "name": "ACTUAL_HTTP_ALLOWED_HOSTS",
+          "description": "Hostnames to accept in the Host header, comma separated and without ports, for a server that is not on loopback. Anything else is answered 403",
           "isRequired": false
         }
       ]
