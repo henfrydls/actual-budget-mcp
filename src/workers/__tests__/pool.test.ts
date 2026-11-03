@@ -311,7 +311,11 @@ describe('the worker pool', () => {
     // it, because a budget closed underneath a write is how one gets half
     // applied.
     const counted = scratch('writes');
-    const workers = pool({ writeTimeoutMs: 300, maxWorkers: 1, readyMs: 400 }, [
+    // `readyMs` well above what spawning costs, including on the slowest
+    // runner: it is the wait for a worker to open, and this test is about
+    // what happens after one has. It is also how long the second budget
+    // waits for room before saying everything is busy.
+    const workers = pool({ writeTimeoutMs: 300, maxWorkers: 1, readyMs: 5_000 }, [
       '--slow-write-ms=1500',
       `--count-file=${counted}`,
     ]);
