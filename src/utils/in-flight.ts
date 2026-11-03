@@ -61,8 +61,8 @@ export function whenIdle(): Promise<void> {
  * answered `Error: No budget file is open` and wrote its rows anyway.
  */
 export const LEAVING_MESSAGE =
-  'This server is shutting down and did not run that: the client it was started by ' +
-  'has gone. Nothing was read or written. Start it again.';
+  'This server is shutting down and did not run that. Nothing was read or written. ' +
+  'Try again once it is running.';
 
 export function startLeaving(): void {
   leaving = true;

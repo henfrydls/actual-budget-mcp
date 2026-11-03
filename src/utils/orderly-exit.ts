@@ -46,8 +46,15 @@ export interface ExitPaths {
   stopAccepting?: () => void;
   /** How to leave, so a test can watch rather than die. */
   exit: (code: number) => void;
-  /** Where end-of-file arrives. */
-  stdin: {
+  /**
+   * Where end-of-file arrives, when end-of-file is how the client leaves.
+   *
+   * A stdio server passes `process.stdin`. An HTTP server passes nothing
+   * (#228): its clients come and go over the network, and a container
+   * started detached has no stdin to speak of, so watching for its end would
+   * shut the server down a moment after it came up.
+   */
+  stdin?: {
     on: (event: string, listener: () => void) => unknown;
   };
   /** Where a signal arrives. */
@@ -133,8 +140,8 @@ export function installExitPaths(paths: ExitPaths): void {
 
   // `end` is end-of-file, `close` is the stream being torn down. A client
   // that disappears gives one or the other depending on how it went.
-  paths.stdin.on('end', leave);
-  paths.stdin.on('close', leave);
+  paths.stdin?.on('end', leave);
+  paths.stdin?.on('close', leave);
   paths.signals.on('SIGINT', leave);
   paths.signals.on('SIGTERM', leave);
 }
