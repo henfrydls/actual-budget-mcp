@@ -39,9 +39,11 @@ a lot of people running Actual it does, a local model keeps it on your machine.
 
 ## Does it work with ChatGPT?
 
-No, and the reason is not this server. ChatGPT's connectors only accept remote MCP
-servers: a public HTTPS endpoint speaking SSE or Streamable HTTP. There is no way to
-point ChatGPT at a process running on your own machine, which is what this server is.
+No. ChatGPT's connectors only accept remote MCP
+servers: a public HTTPS endpoint speaking SSE or Streamable HTTP. With
+[HTTP mode](#running-it-over-http) this server can be one. What we have read says their
+connectors sign in through OAuth or not at all and cannot send the fixed token header
+this version takes, and nobody here has tried it.
 OpenAI does offer a tunnel for local servers, but it is limited to enterprise plans.
 
 Making it work would mean exposing your Actual server to the internet, which is the
@@ -340,6 +342,133 @@ Each client needs its own `ACTUAL_DATA_DIR`. Two processes sharing one local
 copy will corrupt it, and a long-lived server makes that easier to do by
 accident, because it is there all day for a second client to point at.
 
+## Running it over HTTP
+
+By default this server speaks stdio: the client starts it, talks to it over
+the pipe, and stops it. That works when the client runs on the same machine.
+When it does not, set `ACTUAL_HTTP_PORT` and the server listens instead.
+
+Setting that port is what asks for HTTP. Nothing changes for anyone who does
+not set it, and the rest of the variables are read only once it is.
+
+### Two paths, two credentials
+
+| Path | What it offers |
+|---|---|
+| `/mcp` | the read tools, whatever the process is otherwise allowed to do |
+| `/mcp-write` | every tool, and it is served only when `ACTUAL_HTTP_WRITE_TOKEN` is set |
+
+A write tool is not registered on the read path, so it cannot be called,
+talked into being called, or spent context on. It is the same choice
+`ACTUAL_READ_ONLY` makes, applied per path, and it means the default is a
+deployment that cannot change anything: without a write token there is no
+write path to find.
+
+The two tokens have to differ. One credential for both paths is the same as
+having one path, so the server says that and does not start.
+
+### On your own machine
+
+```bash
+export ACTUAL_HTTP_PORT=3000
+export ACTUAL_HTTP_TOKEN="$(openssl rand -hex 16)"
+npx -y actual-budget-mcp
+```
+
+The usual `ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD` and `ACTUAL_BUDGET_ID` are read
+the same way as over stdio.
+
+`openssl rand -hex 16` gives 32 characters, which is the shortest token this
+server will start with. The server binds to `127.0.0.1`, prints one line
+saying where it is, and nothing outside the machine can reach it.
+
+To be able to write as well, add a second token:
+
+```bash
+export ACTUAL_HTTP_WRITE_TOKEN="$(openssl rand -hex 16)"
+```
+
+### Through a tunnel
+
+A tunnel is the shortest way to reach the server from a phone or from a
+client that is not on your network. Both of these open an outbound
+connection, so nothing is forwarded into your network, and both terminate
+TLS for you. Keep the server on `127.0.0.1` and let the tunnel reach it
+there. The address the tunnel prints is what a client connects to, and the
+token still has to be sent with every request.
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:3000
+```
+
+That is a quick tunnel: no account, no domain, and a `trycloudflare.com`
+address that lives as long as the process and changes every run. Cloudflare
+says it is for trying things out. For something you keep, create a named
+tunnel and point it at the same port.
+
+```bash
+tailscale funnel --bg 3000
+```
+
+Funnel has to be turned on for the tailnet first, in its settings. `--bg`
+keeps it running after the terminal closes.
+
+Both of these were checked against their own documentation in October 2026.
+They change; the addresses and flags above are worth a look before they are
+copied.
+
+### On a local network
+
+Binding anywhere other than loopback is refused unless you say that is what
+you meant:
+
+```bash
+export ACTUAL_HTTP_PORT=3000
+export ACTUAL_HTTP_HOST=0.0.0.0
+export ACTUAL_HTTP_ALLOW_REMOTE=1
+export ACTUAL_HTTP_ALLOWED_HOSTS=budget.local,192.168.1.10
+export ACTUAL_HTTP_TOKEN="$(openssl rand -hex 16)"
+```
+
+**This server does not terminate TLS.** Over plain HTTP on a local network
+the token is sent in the clear, in a header, with every request, and anyone
+who can see the traffic can read it and then read your budget. On a network
+you do not control, put a reverse proxy or a tunnel in front and let it do
+the encryption.
+
+`ACTUAL_HTTP_ALLOWED_HOSTS` is the list of `Host` headers the server
+answers. Set it whenever you bind wide: it is what keeps a page in a browser
+from reaching the server through a name that resolves to your machine.
+
+### What it refuses
+
+| Refused | Why |
+|---|---|
+| A request with no token, or the wrong one | The token stands for the whole budget. It is compared in constant time, so a wrong one does not say how much of it was right |
+| A token under 32 characters, before the port is opened | Nothing here limits how fast a token can be guessed |
+| A request carrying an `Origin` header | No browser is a legitimate client of this server, and that header is how a page would try |
+| A `Host` header that was not asked for | This is the DNS rebinding protection the MCP specification asks for |
+| Binding off loopback without `ACTUAL_HTTP_ALLOW_REMOTE` | See the warning above |
+
+Everything that is wrong with the configuration is printed at once, before
+anything is opened, so a deployment is not corrected one line and one restart
+at a time.
+
+Tool results are never written to the log, at any level. What this server
+returns is your budget, and a log is a copy of it that nobody meant to keep.
+
+### Reaching it from claude.ai
+
+A custom connector takes an HTTPS address, for example
+`https://budget.example.com/mcp`. The token goes in **Request headers**, with
+the scheme included, as `Bearer <token>`, together with **No sign-in**.
+
+Anthropic's documentation says that **Request headers** section is in beta
+and available to some organisations only. Where it is not there, a static
+token cannot be sent and this version of the server has no other way in:
+sign-in through OAuth is [#273](https://github.com/henfrydls/actual-budget-mcp/issues/273)
+and is not in this release.
+
 ## Configuration
 
 | Variable | Required | Description |
@@ -352,6 +481,12 @@ accident, because it is there all day for a second client to point at.
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
 | `ACTUAL_TOOLSET` | No | `chat` offers the 18 everyday tools instead of all 44. Defaults to `full`. See [Choosing a toolset](#choosing-a-toolset) |
+| `ACTUAL_HTTP_PORT` | No | Serve MCP over HTTP on this port instead of stdio. Nothing else below is read until it is set. See [Running it over HTTP](#running-it-over-http) |
+| `ACTUAL_HTTP_TOKEN` | No* | The credential for the read path. *Required once `ACTUAL_HTTP_PORT` is set, and at least 32 characters |
+| `ACTUAL_HTTP_WRITE_TOKEN` | No | A second credential, for the write path. Without it the server serves no write path at all |
+| `ACTUAL_HTTP_HOST` | No | What to bind to. Defaults to `127.0.0.1` |
+| `ACTUAL_HTTP_ALLOW_REMOTE` | No | Set to `1`/`true`/`yes` to bind somewhere other than loopback. Nothing here terminates TLS |
+| `ACTUAL_HTTP_ALLOWED_HOSTS` | No | Host headers to accept, comma separated, for a server that is not on loopback |
 
 ### Using a session token (OIDC servers)
 
@@ -1028,6 +1163,8 @@ Compared to other Actual Budget MCP servers:
 - All communication with your Actual Budget server happens locally (or to your self-hosted server)
 - The server only accesses budget data through the official `@actual-app/api` library
 - No data is sent to third parties
+- Over HTTP a bearer token is required, at least 32 characters, compared in constant time, and a request from a browser is refused outright
+- This server does not terminate TLS. On anything other than loopback, put a reverse proxy or a tunnel in front of it, or the token travels in the clear
 
 ## Troubleshooting
 
