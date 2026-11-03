@@ -88,9 +88,10 @@ describe('what a worker is started with', () => {
   });
 
   it('leaves NODE_OPTIONS out entirely when the inspector was all it held', () => {
-    process.env.NODE_OPTIONS = '--inspect-brk';
-
-    expect(workerEnvironment({ budgetId: 'one', dataDir: '/d' }).NODE_OPTIONS).toBeUndefined();
+    for (const flag of ['--inspect-brk', '--inspect-wait', '--inspect-port=9230', '--inspect']) {
+      process.env.NODE_OPTIONS = flag;
+      expect(workerEnvironment({ budgetId: 'one', dataDir: '/d' }).NODE_OPTIONS, flag).toBeUndefined();
+    }
   });
 
   it('gives each worker its own budget and its own directory', () => {

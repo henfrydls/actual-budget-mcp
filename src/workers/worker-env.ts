@@ -72,7 +72,7 @@ const PLATFORM = [
  * time somebody debugged the front end. Debugging a worker is
  * `ACTUAL_BUDGET_WORKERS=1` and a port of its own.
  */
-const INSPECTOR = /(^|\s)--(inspect|debug)(-brk|-port|-publish-uid)?(=\S*)?(?=\s|$)/g;
+const INSPECTOR = /(^|\s)--(inspect|debug)(-brk|-port|-publish-uid|-wait)?(=\S*)?(?=\s|$)/g;
 
 function nodeOptions(): string | undefined {
   const raw = process.env.NODE_OPTIONS;

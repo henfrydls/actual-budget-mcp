@@ -104,7 +104,12 @@ export function budgetsProblem(): string | undefined {
     .map((id) => id.trim())
     .filter((id) => id !== '');
 
-  const unsafe = configuredBudgetIds().filter((id) => unsafeBudgetId(id));
+  // Only when there is a worker per budget. With one budget nothing here
+  // names a directory -- the data directory is whatever ACTUAL_DATA_DIR
+  // says -- so an id with a dot in it has always worked and goes on
+  // working: this check would have stopped a server that master starts.
+  const all = configuredBudgetIds();
+  const unsafe = all.length > 1 ? all.filter((id) => unsafeBudgetId(id)) : [];
   if (unsafe.length > 0) {
     return (
       `These budget ids are not ids: ${unsafe.join(', ')}. Each budget is kept in a ` +

@@ -69,15 +69,36 @@ const BUFFER_BYTES = 32 * 1024 * 1024;
  * which reads like a refusal, while `WRITE APPLIED` turned up in the
  * worker's log three seconds later.
  *
- * So it is an hour, with the clock reset by any progress the worker
- * reports, which is far past any write a budget has and still an upper
- * bound rather than none. A write that reaches it is answered with what
- * cannot be ruled out, and its worker is not touched again until it
- * answers or dies. In the single-budget mode there is no ceiling at all,
- * and this is the closest thing to that which still lets go of a worker
- * that will never answer.
+ * So it is an hour, flat. Not `resetTimeoutOnProgress`: the SDK only sends
+ * a progress token when the caller passes `onprogress`, and these tools
+ * report no progress, so the option would have been a comment that was not
+ * true of the code. An hour is far past any write a budget has, and still
+ * an upper bound rather than none, which is the difference between a
+ * worker that will never answer and a budget held for the life of the
+ * process.
  */
 const WRITE_TIMEOUT_MS = 60 * 60_000;
+/**
+ * And how long a read waits.
+ *
+ * The SDK's own default, written down here because the answer names it:
+ * reading it off `DEFAULT_REQUEST_TIMEOUT_MSEC` would say 60 in one place
+ * and 3600 in the other, which is how a reply came to tell a caller their
+ * read had been waiting an hour.
+ */
+const READ_TIMEOUT_MS = 60_000;
+/**
+ * How long a worker is left alone after a write outlasted its timeout.
+ *
+ * The write is still running in there and nothing here can see the end of
+ * it: the SDK has already given up on the request, so the answer, whenever
+ * it comes, lands nowhere. Holding the budget for the life of the process
+ * is not an answer either -- measured, another budget went on being told
+ * everything was busy long after the write had been applied. So the slot
+ * comes back after this, and the worker is closed rather than reused,
+ * because a budget whose last write is unaccounted for is better reopened.
+ */
+const RECLAIM_MS = 5 * 60_000;
 
 export interface ToolCall {
   name: string;
@@ -99,6 +120,8 @@ export interface PoolOptions {
   readyMs?: number;
   bufferBytes?: number;
   writeTimeoutMs?: number;
+  readTimeoutMs?: number;
+  reclaimMs?: number;
   dataDirFor?: (budgetId: string) => string;
   log?: (line: string) => void;
 }
@@ -119,8 +142,18 @@ interface Worker {
   unfinishedWrites: number;
   lastUsed: number;
   idleTimer?: ReturnType<typeof setTimeout>;
+  reclaimTimer?: ReturnType<typeof setTimeout>;
   stopping?: boolean;
   died?: Error;
+  /**
+   * The last thing the transport complained about, which is not a death.
+   *
+   * Kept apart from `died` on purpose: a reply too large to read arrives
+   * here and nowhere else, so the answer that names `limit` is built from
+   * it, while the process it came from is still running and still has to
+   * be closed rather than dropped.
+   */
+  lastError?: Error;
 }
 
 function text(message: string, isError = true): ToolReply {
@@ -154,6 +187,8 @@ export class WorkerPool {
       readyMs: options.readyMs ?? number('ACTUAL_WORKER_READY_SECONDS', DEFAULT_READY_SECONDS) * 1_000,
       bufferBytes: options.bufferBytes ?? BUFFER_BYTES,
       writeTimeoutMs: options.writeTimeoutMs ?? WRITE_TIMEOUT_MS,
+      readTimeoutMs: options.readTimeoutMs ?? READ_TIMEOUT_MS,
+      reclaimMs: options.reclaimMs ?? RECLAIM_MS,
       dataDirFor: options.dataDirFor,
       log: options.log,
     };
@@ -339,9 +374,25 @@ export class WorkerPool {
     };
     const erroredBefore = worker.transport.onerror;
     worker.transport.onerror = (error: Error) => {
-      worker.died ??= error;
+      // Not a death. `onerror` is also how the transport reports a line it
+      // could not parse, and the process that wrote it is alive and well:
+      // measured, one `this is not json` on stdout used to leave three
+      // processes for one budget, two of them running and one in no map at
+      // all, which on a real server is the data directory lock refusing the
+      // replacement until the orphan idles out. Only `onclose` is a death.
+      // The line itself is worth saying, once, where the worker's own
+      // output goes.
+      worker.lastError = error;
+      this.say(worker, `transport error: ${error.message}`);
       erroredBefore?.(error);
     };
+  }
+
+  /** One line about a worker, where that worker's own output goes. */
+  private say(worker: Worker, line: string): void {
+    const said = `[${worker.budgetId}] ${withoutCredentials(line)}`;
+    if (this.options.log) this.options.log(said);
+    else console.error(said);
   }
 
   /** The child's own output, prefixed and with no credentials in it. */
@@ -351,9 +402,7 @@ export class WorkerPool {
     let rest = '';
     const say = (line: string) => {
       if (line.trim() === '') return;
-      const said = `[${worker.budgetId}] ${withoutCredentials(line)}`;
-      if (this.options.log) this.options.log(said);
-      else console.error(said);
+      this.say(worker, line);
     };
     stream.on('data', (chunk: Buffer) => {
       const lines = (rest + String(chunk)).split('\n');
@@ -380,16 +429,16 @@ export class WorkerPool {
     // like a write that may have happened. It did not: nothing left this
     // process.
     if (worker.died !== undefined) {
-      this.forget(worker);
+      void this.stopWorker(worker, 'it had already stopped');
       return this.neverSent(worker, call, mayRetry);
     }
 
-    // Writes on a clock of their own, reset by any progress the worker
-    // reports. The SDK's minute is for a question and an answer; a write
-    // is neither until the engine says so.
-    const options = call.readOnly
-      ? undefined
-      : { timeout: this.options.writeTimeoutMs, resetTimeoutOnProgress: true };
+    // A clock on each, and the one the answer names. The SDK's minute is
+    // for a question and an answer; a write is neither until the engine
+    // says so.
+    const options = {
+      timeout: call.readOnly ? this.options.readTimeoutMs : this.options.writeTimeoutMs,
+    };
 
     if (!call.readOnly) worker.unfinishedWrites += 1;
     try {
@@ -406,9 +455,37 @@ export class WorkerPool {
       // this process from closing that budget underneath it.
       if (!call.readOnly && (worker.died !== undefined || this.isTimeout(error) !== true)) {
         worker.unfinishedWrites -= 1;
+      } else if (!call.readOnly) {
+        this.reclaimLater(worker);
       }
       return this.failed(worker, call, mayRetry, error);
     }
+  }
+
+  /**
+   * Give the slot back, a while after a write outlasted its timeout.
+   *
+   * Nothing here can see that write end: the SDK gave up on the request,
+   * so its answer lands nowhere. Holding the budget until this process
+   * exits is not the answer either -- measured, another budget went on
+   * being told everything was busy long after the write had landed. So the
+   * worker is left alone for the reclaim window, and then closed rather
+   * than reused: a budget whose last write is unaccounted for is better
+   * reopened from the server than carried on with.
+   */
+  private reclaimLater(worker: Worker): void {
+    if (worker.reclaimTimer) return;
+    worker.reclaimTimer = setTimeout(() => {
+      worker.reclaimTimer = undefined;
+      worker.unfinishedWrites = 0;
+      if (worker.inFlight > 0) {
+        // Busy with something else. The idle timer gets it when it is not.
+        this.touch(worker);
+        return;
+      }
+      void this.stopWorker(worker, 'a write outlasted the time this server waits for one');
+    }, this.options.reclaimMs);
+    worker.reclaimTimer.unref?.();
   }
 
   /** `true` when the call ran out of time rather than failing. */
@@ -451,11 +528,11 @@ export class WorkerPool {
     // reply too large to read kills the transport, so the call itself comes
     // back as "Connection closed" and the reason is only in the other half:
     // `ReadBuffer exceeded maximum size of N bytes`.
-    const detail = `${message} ${worker.died?.message ?? ''}`;
+    const detail = `${message} ${worker.died?.message ?? ''} ${worker.lastError?.message ?? ''}`;
     const gone = worker.died !== undefined || /closed|terminated|EPIPE|exited/i.test(message);
 
     if (/ReadBuffer exceeded|maximum size|too large/i.test(detail)) {
-      this.forget(worker);
+      await this.stopWorker(worker, 'a reply it could not carry');
       return text(
         'That reply was too large to carry back from the budget it was read in. Ask for ' +
           'less of it: `limit` is what decides how many rows a listing returns.',
@@ -470,7 +547,7 @@ export class WorkerPool {
       return call.readOnly
         ? text(
             `That budget did not answer within ${Math.round(
-              this.options.writeTimeoutMs / 1000,
+              this.options.readTimeoutMs / 1000,
             )} seconds. Nothing was changed. It may still be downloading: ask again in a moment.`,
           )
         : text(
@@ -481,7 +558,11 @@ export class WorkerPool {
     }
 
     if (gone) {
-      this.forget(worker);
+      // Closed rather than dropped. A worker stops being tracked only by
+      // being stopped: anything else is how a live process ends up with no
+      // one holding its handle, on a data directory the next one cannot
+      // claim.
+      await this.stopWorker(worker, 'it stopped while a call was running');
       if (call.readOnly && mayRetry) return this.retryRead(budgetId, call);
       if (!call.readOnly) {
         return text(
@@ -548,6 +629,8 @@ export class WorkerPool {
   private forget(worker: Worker): void {
     if (worker.idleTimer) clearTimeout(worker.idleTimer);
     worker.idleTimer = undefined;
+    if (worker.reclaimTimer) clearTimeout(worker.reclaimTimer);
+    worker.reclaimTimer = undefined;
     if (this.workers.get(worker.budgetId) === worker) this.workers.delete(worker.budgetId);
   }
 

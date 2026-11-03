@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { WorkerPool } from '../pool.js';
 
 const STUB = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'stub-worker.mjs');
+const RAW = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'raw-worker.mjs');
 
 const VARS = ['ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS'];
 
@@ -382,6 +383,89 @@ describe('the worker pool', () => {
     // A line of its own: nothing followed it, so without the flush on
     // close it is never said at all.
     expect(lines).toContain('[sync-one] the last thing it ever said');
+  }, 30_000);
+
+  it('keeps a worker that wrote something it could not parse', async () => {
+    // `onerror` is not a death: the transport reports a line it could not
+    // read, and the process that wrote it is alive. Measured before this,
+    // one `this is not json` on stdout left three processes for one budget,
+    // two of them running and one in no map at all -- on a real server the
+    // data directory lock then refuses the replacement until the orphan
+    // idles out.
+    const pidFile = scratch('pids');
+    const lines: string[] = [];
+    const workers = pool({ log: (line: string) => lines.push(line) }, [
+      '--junk-line',
+      `--pid-file=${pidFile}`,
+    ]);
+
+    const reply = await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    // The second call is where a transport error mistaken for a death
+    // shows: the next dispatch finds a worker it believes is gone and
+    // starts another one on the same data directory.
+    const again = await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+
+    expect(said(reply)).toContain('month of sync-one');
+    expect(said(again)).toContain('month of sync-one');
+    expect(processes(pidFile).started).toHaveLength(1);
+    expect(workers.openBudgets()).toEqual(['sync-one']);
+    // Said once, where that worker's own output goes.
+    expect(lines.some((line) => line.includes('[sync-one] transport error'))).toBe(true);
+
+    await workers.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(processes(pidFile).alive).toEqual([]);
+  }, 30_000);
+
+  it('closes a worker it was told had gone, rather than dropping it', async () => {
+    // "Connection closed" from a process that is alive and goes on running.
+    // Forgetting one of those leaves nobody holding its handle, on a data
+    // directory the next worker for that budget cannot claim, until it
+    // idles out -- which is the same orphan the transport errors made.
+    const pidFile = scratch('pids');
+    const workers = pool({ args: [RAW, `--pid-file=${pidFile}`] });
+
+    const reply = await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    expect(reply.isError).toBe(true);
+
+    await workers.stop();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(processes(pidFile).alive).toEqual([]);
+  }, 30_000);
+
+  it('gives the slot back a while after a write outlasted its timeout', async () => {
+    // The write is still running in there and nothing here can see it end,
+    // so the budget was held for the life of the process: measured, another
+    // budget went on being told everything was busy long after the write
+    // had landed.
+    const counted = scratch('writes');
+    const workers = pool(
+      { writeTimeoutMs: 300, reclaimMs: 700, maxWorkers: 1, readyMs: 5_000 },
+      ['--slow-write-ms=1200', `--count-file=${counted}`],
+    );
+
+    const reply = await workers.call('sync-one', { name: 'create_transaction', readOnly: false });
+    expect(said(reply)).toContain('may have been applied');
+
+    // Held at first, which is the point of the window.
+    expect(workers.openBudgets()).toEqual(['sync-one']);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    // And then let go, so the one budget this pool has room for is free.
+    expect(workers.openBudgets()).toEqual([]);
+    const other = await workers.call('sync-two', { name: 'get_budget_month', readOnly: true });
+    expect(said(other)).toContain('month of sync-two');
+  }, 30_000);
+
+  it('names the time a read actually waited, not the time a write would', async () => {
+    const workers = pool({ readTimeoutMs: 2_000 }, ['--slow-call-ms=5000']);
+
+    const reply = await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+
+    expect(said(reply)).toContain('within 2 seconds');
+    expect(said(reply)).not.toContain('3600');
+    expect(said(reply)).toContain('Nothing was changed');
   }, 30_000);
 
   it('lets go of a worker that has had nothing to do', async () => {

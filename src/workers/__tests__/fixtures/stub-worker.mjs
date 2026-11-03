@@ -36,6 +36,11 @@ const dieOnce = flag('die-once');
 const slowWrite = Number(flag('slow-write-ms') ?? '0');
 // Something on stderr with no newline behind it, for the flush on close.
 const lastWord = flag('last-word');
+// And something on stdout that is not a message, which is how a transport
+// reports an error about a process that is alive and well. Written when a
+// tool is called, rather than at startup, so that it arrives after the pool
+// has installed its own handlers and not during the handshake.
+const junkLine = process.argv.includes('--junk-line');
 
 // `registerTool` rather than `tool`: the latter guesses which overload it
 // was called with, and a tool that takes no arguments gives it nothing to
@@ -53,6 +58,7 @@ server.registerTool(
   'get_budget_month',
   { description: 'a read', annotations: { readOnlyHint: true } },
   async () => {
+    if (junkLine) process.stdout.write('this is not json\n');
     if (countFile !== undefined) appendFileSync(countFile, `read in ${budget}\n`);
     if (dies === 'read') process.exit(1);
     if (dieOnce !== undefined && !existsSync(dieOnce)) {
