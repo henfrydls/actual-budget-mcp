@@ -35,6 +35,16 @@ describe('getConfig', () => {
     expect(() => getConfig()).not.toThrow(/hunter2/);
   });
 
+  it('refuses a budget list that leaves out the budget it opens', () => {
+    // Left alone it reads as "this deployment serves these two", while the
+    // one it answers with is a third (#229).
+    process.env.ACTUAL_SERVER_URL = 'http://localhost:5007';
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-two,sync-three';
+
+    expect(() => getConfig()).toThrow(/does not include ACTUAL_BUDGET_ID/);
+  });
+
   it('defaults password to empty string when not set', () => {
     process.env.ACTUAL_SERVER_URL = 'http://localhost:5007';
     process.env.ACTUAL_BUDGET_ID = 'abc-123';

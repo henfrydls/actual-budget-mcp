@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isReadOnly } from '../utils/mode.js';
 import { withInFlight } from '../utils/in-flight.js';
 import { withSchemaHint } from '../utils/schema-hint.js';
+import { withBudgetId } from '../utils/budget-id.js';
+import { servesManyBudgets } from '../utils/budgets.js';
 
 // Read tools
 import { registerListAccounts } from './read/list-accounts.js';
@@ -11,6 +13,7 @@ import { registerGetCategoryBalance } from './read/get-category-balance.js';
 import { registerGetBudgetSummary } from './read/get-budget-summary.js';
 import { registerGetCategories } from './read/get-categories.js';
 import { registerGetPayees } from './read/get-payees.js';
+import { registerListBudgets } from './read/list-budgets.js';
 import { registerGetSchedules } from './read/get-schedules.js';
 
 // Analysis tools
@@ -117,12 +120,20 @@ export function registerAllTools(
   // same, since nothing is registered either way, but a tool the set does
   // not offer would be wrapped four times on its way to being dropped. The
   // decision is made once, at the top.
+  // `withBudgetId` under the toolset filter and over everything else
+  // (#229): a tool the set does not offer never needs the parameter, and a
+  // call for a budget this server does not serve is refused before anything
+  // syncs, counts or opens.
   // `withSchemaHint` innermost, against the real server: it is the only one
   // that touches the schema rather than the handler, and it has to be the
-  // last hand on the call before the SDK takes it (#280).
+  // last hand on the call before the SDK takes it (#280). So it sees the
+  // shape `withBudgetId` has already widened, and says what it says about
+  // that one.
   const server = withToolset(
-    withRecord(
-      withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(withSchemaHint(rawServer))))),
+    withBudgetId(
+      withRecord(
+        withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(withSchemaHint(rawServer))))),
+      ),
     ),
   );
   // Read
@@ -134,6 +145,11 @@ export function registerAllTools(
   registerGetCategories(server);
   registerGetPayees(server);
   registerGetSchedules(server);
+  // Only when there is more than one to list (#229). With one budget it
+  // would answer what the configuration already says, and it would do it on
+  // every connection, in the set that exists to be the smallest one. That is
+  // the argument this work makes about `budget_id`, and it applies here.
+  if (servesManyBudgets()) registerListBudgets(server);
 
   // Analysis
   registerBudgetVsActual(server);

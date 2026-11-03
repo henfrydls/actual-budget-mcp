@@ -75,6 +75,26 @@ describe('the chat toolset (#222)', () => {
   afterEach(() => {
     delete process.env.ACTUAL_TOOLSET;
     delete process.env.ACTUAL_READ_ONLY;
+    for (const name of ['ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS']) delete process.env[name];
+  });
+
+  it('offers one tool fewer with a single budget', () => {
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_TOOLSET = 'chat';
+    const names = registeredToolNames();
+
+    expect(names.length).toBe(18);
+    expect(names).not.toContain('list_budgets');
+  });
+
+  it('adds the one tool that only exists with more than one budget', () => {
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
+
+    expect(registeredToolNames().length).toBe(45);
+    process.env.ACTUAL_TOOLSET = 'chat';
+    expect(registeredToolNames()).toContain('list_budgets');
+    expect(registeredToolNames().length).toBe(19);
   });
 
   it('offers every tool when nothing is set', () => {
@@ -83,10 +103,14 @@ describe('the chat toolset (#222)', () => {
   });
 
   it('offers the everyday set and nothing else', () => {
+    // With more than one budget, because one of the everyday tools only
+    // exists then and the set is the list, not a subset of it (#229).
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
     process.env.ACTUAL_TOOLSET = 'chat';
     const names = registeredToolNames();
 
-    expect(names.length).toBe(18);
+    expect(names.length).toBe(19);
     expect([...names].sort()).toEqual([...CHAT_TOOLS].sort());
     // The ones a conversation about money actually reaches for.
     expect(names).toContain('get_transactions');
@@ -101,6 +125,11 @@ describe('the chat toolset (#222)', () => {
   it('puts every tool on one side or the other', () => {
     // The declaration this file exists for. A new tool fails here until
     // someone says whether it belongs in a conversation.
+    //
+    // With more than one budget configured, so that the one tool which only
+    // exists then is on a side too (#229).
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
     const all = registeredToolNames();
     const undeclared = all.filter((name) => !CHAT_TOOLS.has(name) && !NOT_IN_CHAT.has(name));
 

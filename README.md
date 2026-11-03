@@ -348,6 +348,7 @@ accident, because it is there all day for a second client to point at.
 | `ACTUAL_PASSWORD` | Yes* | Server password (set in Actual Budget under Settings). *Not needed if you use `ACTUAL_SESSION_TOKEN` |
 | `ACTUAL_SESSION_TOKEN` | No | For servers behind **OIDC**, which have no password. Use this instead of `ACTUAL_PASSWORD`; if both are set, the token wins |
 | `ACTUAL_BUDGET_ID` | Yes | Budget Sync ID (found in Settings > Show advanced settings) |
+| `ACTUAL_BUDGET_IDS` | No | Every budget this server serves, comma separated, when it is more than one. Each tool then takes a `budget_id`. See [More than one budget](#more-than-one-budget) |
 | `ACTUAL_ENCRYPTION_PASSWORD` | No | Only if your budget file is encrypted |
 | `ACTUAL_DATA_DIR` | No | Where the budget cache lives. Defaults to your OS data directory (see below) |
 | `ACTUAL_READ_ONLY` | No | Set to `1`/`true`/`yes` to run read-only. See [Safety](#safety) |
@@ -686,6 +687,34 @@ cannot see.
 budget data, and hiding it would leave a desynced budget with no way to recover.
 
 Writes are enabled by default. Read-only is opt-in.
+
+### More than one budget
+
+One budget is the default and needs nothing: `ACTUAL_BUDGET_ID` is the sync id
+of the budget this server opens, and no tool asks which budget a call is for,
+because there is nothing to choose.
+
+`ACTUAL_BUDGET_IDS` lists every budget the server serves, comma separated,
+when there is more than one. Two things appear when it is set, and only then:
+
+- A tool called `list_budgets`, which names them by the sync id a caller
+  passes, with the open one marked. It lists what you configured and nothing
+  else: a budget on the account that is not in the list cannot be reached by
+  asking for its id.
+- An optional `budget_id` on every tool. Left out, a call is for the budget
+  the server has open.
+
+This server opens one budget at a time, because the Actual library opens one
+budget per process. A call for another budget on the list is refused and says
+so, rather than answering from the wrong one, and a second server configured
+for it is how to read both today. Serving them from one server, with a worker
+process per budget, is the rest of this work.
+
+Both cost context on every connection, so neither appears when there is one
+budget. Measured with two budgets configured, the full set goes from 39.7 KiB
+to 47.4 KiB of tool descriptions, which is 7.7 KiB more, nearly a fifth. With
+`ACTUAL_BUDGET_IDS` unset, what a client is sent is byte for byte what it was
+sent before any of this: no extra tool, no extra parameter.
 
 ### Choosing a toolset
 

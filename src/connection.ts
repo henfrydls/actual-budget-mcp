@@ -14,6 +14,7 @@ import { readEnv } from './utils/env.js';
 import { refreshBudgetDecimalPlaces, resetBudgetDecimalPlaces } from './utils/currency.js';
 import { withoutCredentials } from './utils/redact.js';
 import { serverUrlProblem } from './utils/server-url.js';
+import { budgetsProblem } from './utils/budgets.js';
 
 let initialized = false;
 let initializing: Promise<void> | null = null;
@@ -70,6 +71,12 @@ export function getConfig(): ConnectionConfig {
   // listening.
   const problem = serverUrlProblem(serverURL);
   if (problem !== undefined) throw new Error(problem);
+
+  // And the budget list that does not contain the budget this server opens
+  // (#229), for the same reason: one clear error beats every call being
+  // answered from somewhere the configuration did not say.
+  const budgets = budgetsProblem();
+  if (budgets !== undefined) throw new Error(budgets);
 
   return {
     serverURL,

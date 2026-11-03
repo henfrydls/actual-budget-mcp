@@ -41,6 +41,10 @@ export const CHAT_TOOLS: ReadonlySet<string> = new Set([
   'get_budget_summary',
   'get_payees',
   'get_schedules',
+  // Only registered when more than one budget is configured, and in the
+  // everyday set when it is: which budget am I looking at is as ordinary a
+  // question as any other read (#229).
+  'list_budgets',
   // Recording and categorising
   'create_transaction',
   'create_transactions',

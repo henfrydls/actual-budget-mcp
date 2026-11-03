@@ -32,6 +32,18 @@ function registeredToolNames(): string[] {
 describe('read-only mode hides write tools from discovery', () => {
   afterEach(() => {
     delete process.env.ACTUAL_READ_ONLY;
+    for (const name of ['ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS']) delete process.env[name];
+  });
+
+  it('keeps list_budgets when there is more than one, since it reads (#229)', () => {
+    process.env.ACTUAL_READ_ONLY = '1';
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
+
+    const names = registeredToolNames();
+
+    expect(names).toContain('list_budgets');
+    expect(names.length).toBe(18);
   });
 
   it('exposes every tool by default', () => {
