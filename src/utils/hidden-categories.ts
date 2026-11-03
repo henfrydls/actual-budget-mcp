@@ -53,6 +53,27 @@ export function countHidden(
 }
 
 /**
+ * The groups that have at least one category, listed or not (#283).
+ *
+ * "Empty" means a group with no categories at all. It does not mean "none
+ * that this reply shows": a group whose categories are all hidden has
+ * categories, and the closing line is what says they are there. Deciding it
+ * from the lines that were printed would call those groups empty, which is
+ * the opposite of true and would send someone to delete one.
+ *
+ * Shared for the reason this module exists: the tool and the resource are
+ * two ways of asking the same question, and both skipped an empty group in
+ * silence, so a group created a moment ago could not be found by either.
+ */
+export function groupsWithCategories(categories: CategoryRow[]): Set<string> {
+  const withAny = new Set<string>();
+  for (const cat of categories) {
+    if (cat.group_id !== undefined) withAny.add(cat.group_id);
+  }
+  return withAny;
+}
+
+/**
  * The closing line, when there is something a listing does not show.
  *
  * The two counts are kept apart because they are undone by different tools:

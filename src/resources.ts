@@ -3,6 +3,7 @@ import * as api from '@actual-app/api';
 import { ensureConnection } from './connection.js';
 import {
   countHidden,
+  groupsWithCategories,
   inHiddenGroup,
   notListedLine,
   type CategoryRow,
@@ -96,15 +97,23 @@ export function registerAllResources(rawServer: McpServer): void {
         // see them. The line says which way of asking has one.
         const groupById = new Map(groups.map((g) => [g.id, g]));
         const { own, byGroup } = countHidden(categories, groupById);
+        // The same rule as the tool, from the same place (#283): a group
+        // with no categories at all is listed and marked, and one whose
+        // categories are all hidden stays out, which the closing line covers.
+        const withAny = groupsWithCategories(categories);
 
         const lines: string[] = ['Categories:'];
         for (const group of groups) {
           const groupCats = categories.filter(
             (c) => c.group_id === group.id && !c.hidden && !inHiddenGroup(c, groupById),
           );
-          if (groupCats.length === 0) continue;
+          const empty = !withAny.has(group.id);
+          if (groupCats.length === 0 && !empty) continue;
 
-          lines.push(`  ${group.name} (${group.id})${group.is_income ? ' [Income]' : ''}`);
+          lines.push(
+            `  ${group.name} (${group.id})${group.is_income ? ' [Income]' : ''}` +
+              `${empty ? '  [empty]' : ''}`,
+          );
           for (const cat of groupCats) {
             lines.push(`    ${cat.name} (${cat.id})`);
           }
