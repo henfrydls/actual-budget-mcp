@@ -78,6 +78,19 @@ export function budgetProblem(asked: string | undefined): string | undefined {
 }
 
 /**
+ * A sync id that would not stay inside the directory it is given.
+ *
+ * Each budget gets a directory of its own under the data directory, named
+ * by its id, so an id with a path in it is a budget cache somewhere else:
+ * `ACTUAL_BUDGET_IDS=../x` puts one next to the data directory rather than
+ * inside it. An Actual sync id is a UUID, so this refuses only what is
+ * actually a path, and leaves anything else alone.
+ */
+export function unsafeBudgetId(id: string): boolean {
+  return /[/\\]/.test(id) || id.includes('..') || id.startsWith('.') || id.trim() !== id;
+}
+
+/**
  * The configuration that contradicts itself, caught where the rest is.
  *
  * A list that leaves out the budget this server actually opens is a list
@@ -90,6 +103,15 @@ export function budgetsProblem(): string | undefined {
     ?.split(',')
     .map((id) => id.trim())
     .filter((id) => id !== '');
+
+  const unsafe = configuredBudgetIds().filter((id) => unsafeBudgetId(id));
+  if (unsafe.length > 0) {
+    return (
+      `These budget ids are not ids: ${unsafe.join(', ')}. Each budget is kept in a ` +
+      'directory named after its id, so an id with a path in it would put one outside the ' +
+      'data directory. A sync id is the one from Settings > Show advanced settings.'
+    );
+  }
 
   if (open === undefined || listed === undefined || listed.length === 0) return undefined;
   if (listed.includes(open)) return undefined;

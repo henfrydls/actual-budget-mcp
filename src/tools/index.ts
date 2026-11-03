@@ -129,12 +129,20 @@ export function registerAllTools(
   // last hand on the call before the SDK takes it (#280). So it sees the
   // shape `withBudgetId` has already widened, and says what it says about
   // that one.
+  //
+  // The three engine wrappers are left out when this server serves more than
+  // one budget, and that is the whole point of the line. A wrapper runs
+  // before the handler it wraps, and the handler `withBudgetId` installs is
+  // the one that routes, so leaving them in meant the front end synced,
+  // re-read the currency and opened a budget of its own -- measured, a read
+  // routed to another budget left a lock file and a downloaded copy of
+  // ACTUAL_BUDGET_ID in the data directory, next to the worker's. The front
+  // end holds no budget here: it checks the arguments, counts the call and
+  // hands it to the worker that does.
+  const engineSide = (server: McpServer): McpServer =>
+    servesManyBudgets() ? server : withWriteNotice(withReadSync(withCurrentCurrency(server)));
   const server = withToolset(
-    withBudgetId(
-      withRecord(
-        withInFlight(withWriteNotice(withReadSync(withCurrentCurrency(withSchemaHint(rawServer))))),
-      ),
-    ),
+    withBudgetId(withRecord(withInFlight(engineSide(withSchemaHint(rawServer))))),
   );
   // Read
   registerListAccounts(server);

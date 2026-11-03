@@ -5,6 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { readEnv } from '../utils/env.js';
 import { withoutCredentials } from '../utils/redact.js';
 import { effectiveDataDir } from '../utils/data-dir-lock.js';
+import { unsafeBudgetId } from '../utils/budgets.js';
 import { encryptionPasswordFor, workerEnvironment } from './worker-env.js';
 
 /**
@@ -58,6 +59,25 @@ const DEFAULT_READY_SECONDS = 45;
  * reply that still does not fit is answered by naming `limit`.
  */
 const BUFFER_BYTES = 32 * 1024 * 1024;
+/**
+ * How long the front end waits for a write before it stops waiting.
+ *
+ * The SDK gives a request 60 seconds by default, and that default is wrong
+ * here in the one case that matters: a write that takes longer is not a
+ * write that failed, it is a write still being applied in a process this
+ * one cannot see into. Sixty seconds of it produced `Request timed out`,
+ * which reads like a refusal, while `WRITE APPLIED` turned up in the
+ * worker's log three seconds later.
+ *
+ * So it is an hour, with the clock reset by any progress the worker
+ * reports, which is far past any write a budget has and still an upper
+ * bound rather than none. A write that reaches it is answered with what
+ * cannot be ruled out, and its worker is not touched again until it
+ * answers or dies. In the single-budget mode there is no ceiling at all,
+ * and this is the closest thing to that which still lets go of a worker
+ * that will never answer.
+ */
+const WRITE_TIMEOUT_MS = 60 * 60_000;
 
 export interface ToolCall {
   name: string;
@@ -78,6 +98,7 @@ export interface PoolOptions {
   idleMs?: number;
   readyMs?: number;
   bufferBytes?: number;
+  writeTimeoutMs?: number;
   dataDirFor?: (budgetId: string) => string;
   log?: (line: string) => void;
 }
@@ -88,6 +109,14 @@ interface Worker {
   transport: StdioClientTransport;
   ready: Promise<void>;
   inFlight: number;
+  /**
+   * Writes that were sent and never came back.
+   *
+   * A write that outlasts the front end's patience is still running in the
+   * worker, and the worker is the only thing that knows how it ends. It is
+   * counted so that nothing here closes that budget underneath it.
+   */
+  unfinishedWrites: number;
   lastUsed: number;
   idleTimer?: ReturnType<typeof setTimeout>;
   stopping?: boolean;
@@ -124,6 +153,7 @@ export class WorkerPool {
       idleMs: options.idleMs ?? number('ACTUAL_WORKER_IDLE_MINUTES', DEFAULT_IDLE_MINUTES) * 60_000,
       readyMs: options.readyMs ?? number('ACTUAL_WORKER_READY_SECONDS', DEFAULT_READY_SECONDS) * 1_000,
       bufferBytes: options.bufferBytes ?? BUFFER_BYTES,
+      writeTimeoutMs: options.writeTimeoutMs ?? WRITE_TIMEOUT_MS,
       dataDirFor: options.dataDirFor,
       log: options.log,
     };
@@ -137,11 +167,22 @@ export class WorkerPool {
   async call(budgetId: string, call: ToolCall): Promise<ToolReply> {
     if (this.stopped) return text('This server is shutting down and did not run that.');
 
-    const worker = await this.waitingFor(budgetId);
+    let worker: { worker: Worker } | { refusal: ToolReply };
+    try {
+      worker = await this.waitingFor(budgetId);
+    } catch (error) {
+      // Nothing was started, so there is nothing to clean up and nothing
+      // was sent: an id that is not an id lands here.
+      return text(
+        `That budget could not be opened: ${withoutCredentials(
+          error instanceof Error ? error.message : String(error),
+        )}`,
+      );
+    }
     if ('refusal' in worker) return worker.refusal;
 
     try {
-      return await this.dispatch(worker.worker, budgetId, call, true);
+      return await this.dispatch(worker.worker, call, true);
     } finally {
       // Claimed in `waitingFor`, released here: a worker is spoken for from
       // the moment a call starts waiting on it, not from the moment the
@@ -182,7 +223,7 @@ export class WorkerPool {
     }
     if (ready instanceof Error) {
       existing.inFlight -= 1;
-      this.forget(budgetId);
+      this.forget(existing);
       return { refusal: text(`That budget could not be opened: ${ready.message}`) };
     }
 
@@ -201,7 +242,10 @@ export class WorkerPool {
   private async makeRoom(budgetId: string, started: number): Promise<ToolReply | undefined> {
     while (this.workers.size >= this.options.maxWorkers && !this.workers.has(budgetId)) {
       const idle = [...this.workers.values()]
-        .filter((worker) => worker.inFlight === 0 && worker.stopping !== true)
+        .filter(
+          (worker) =>
+            worker.inFlight === 0 && worker.unfinishedWrites === 0 && worker.stopping !== true,
+        )
         .sort((a, b) => a.lastUsed - b.lastUsed)[0];
 
       if (idle !== undefined) {
@@ -223,6 +267,15 @@ export class WorkerPool {
 
   /** Spawn one, and probe it until the budget is actually open. */
   private start(budgetId: string): Worker {
+    // The id names a directory, so it has to be an id. Startup says this
+    // about the configuration; this is the place that would build the path.
+    if (unsafeBudgetId(budgetId)) {
+      throw new Error(
+        `${budgetId} is not a budget id, and each budget is kept in a directory named after ` +
+          'its id. Nothing was opened.',
+      );
+    }
+
     const dataDir =
       this.options.dataDirFor?.(budgetId) ?? path.join(effectiveDataDir(), 'budgets', budgetId);
 
@@ -244,6 +297,7 @@ export class WorkerPool {
       client,
       transport,
       inFlight: 0,
+      unfinishedWrites: 0,
       lastUsed: Date.now(),
       ready: Promise.resolve(),
     };
@@ -276,6 +330,11 @@ export class WorkerPool {
     const closedBefore = worker.transport.onclose;
     worker.transport.onclose = () => {
       worker.died ??= new Error('the worker stopped');
+      // Out of the map the moment it dies, and by identity: the next call
+      // for this budget starts a worker instead of sending to a transport
+      // that is already closed, and a replacement that is already there is
+      // left alone.
+      this.forget(worker);
       closedBefore?.();
     };
     const erroredBefore = worker.transport.onerror;
@@ -290,33 +349,84 @@ export class WorkerPool {
     const stream = worker.transport.stderr;
     if (!stream) return;
     let rest = '';
+    const say = (line: string) => {
+      if (line.trim() === '') return;
+      const said = `[${worker.budgetId}] ${withoutCredentials(line)}`;
+      if (this.options.log) this.options.log(said);
+      else console.error(said);
+    };
     stream.on('data', (chunk: Buffer) => {
       const lines = (rest + String(chunk)).split('\n');
       rest = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.trim() === '') continue;
-        const said = `[${worker.budgetId}] ${withoutCredentials(line)}`;
-        if (this.options.log) this.options.log(said);
-        else console.error(said);
-      }
+      for (const line of lines) say(line);
     });
+    // Whatever was written without a newline behind it. A process that dies
+    // mid-sentence says the most interesting thing it will ever say, and
+    // waiting for a newline that is never coming is how it gets dropped.
+    const flush = () => {
+      const last = rest;
+      rest = '';
+      say(last);
+    };
+    stream.on('end', flush);
+    stream.on('close', flush);
   }
 
-  private async dispatch(
-    worker: Worker,
-    budgetId: string,
-    call: ToolCall,
-    mayRetry: boolean,
-  ): Promise<ToolReply> {
+  private async dispatch(worker: Worker, call: ToolCall, mayRetry: boolean): Promise<ToolReply> {
     this.touch(worker);
-    try {
-      return (await worker.client.callTool({
-        name: call.name,
-        arguments: call.arguments ?? {},
-      })) as ToolReply;
-    } catch (error) {
-      return this.failed(worker, budgetId, call, mayRetry, error);
+
+    // A worker that died while it was idle is still the one this call was
+    // handed, and sending into a closed transport fails in a way that reads
+    // like a write that may have happened. It did not: nothing left this
+    // process.
+    if (worker.died !== undefined) {
+      this.forget(worker);
+      return this.neverSent(worker, call, mayRetry);
     }
+
+    // Writes on a clock of their own, reset by any progress the worker
+    // reports. The SDK's minute is for a question and an answer; a write
+    // is neither until the engine says so.
+    const options = call.readOnly
+      ? undefined
+      : { timeout: this.options.writeTimeoutMs, resetTimeoutOnProgress: true };
+
+    if (!call.readOnly) worker.unfinishedWrites += 1;
+    try {
+      const reply = (await worker.client.callTool(
+        { name: call.name, arguments: call.arguments ?? {} },
+        undefined,
+        options,
+      )) as ToolReply;
+      if (!call.readOnly) worker.unfinishedWrites -= 1;
+      return reply;
+    } catch (error) {
+      // A write that threw is only finished if the worker is gone. A
+      // timeout leaves it running in there, and the count is what keeps
+      // this process from closing that budget underneath it.
+      if (!call.readOnly && (worker.died !== undefined || this.isTimeout(error) !== true)) {
+        worker.unfinishedWrites -= 1;
+      }
+      return this.failed(worker, call, mayRetry, error);
+    }
+  }
+
+  /** `true` when the call ran out of time rather than failing. */
+  private isTimeout(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = (error as { code?: unknown })?.code;
+    return /timed out|timeout/i.test(message) || code === -32001;
+  }
+
+  /** The answer for a call that was never put on the wire. */
+  private neverSent(worker: Worker, call: ToolCall, mayRetry: boolean): Promise<ToolReply> {
+    if (call.readOnly && mayRetry) return this.retryRead(worker.budgetId, call);
+    return Promise.resolve(
+      text(
+        `The worker holding that budget had already stopped, so nothing was sent to it and ` +
+          'nothing was read or written. Ask again and it will be started.',
+      ),
+    );
   }
 
   /**
@@ -331,12 +441,12 @@ export class WorkerPool {
    */
   private async failed(
     worker: Worker,
-    budgetId: string,
     call: ToolCall,
     mayRetry: boolean,
     error: unknown,
   ): Promise<ToolReply> {
     const message = error instanceof Error ? error.message : String(error);
+    const budgetId = worker.budgetId;
     // What the call threw and what the transport said on its way out. A
     // reply too large to read kills the transport, so the call itself comes
     // back as "Connection closed" and the reason is only in the other half:
@@ -345,26 +455,34 @@ export class WorkerPool {
     const gone = worker.died !== undefined || /closed|terminated|EPIPE|exited/i.test(message);
 
     if (/ReadBuffer exceeded|maximum size|too large/i.test(detail)) {
-      this.forget(budgetId);
+      this.forget(worker);
       return text(
         'That reply was too large to carry back from the budget it was read in. Ask for ' +
           'less of it: `limit` is what decides how many rows a listing returns.',
       );
     }
 
+    // Out of time rather than gone. The worker is alive and the call is
+    // still in it, so the worker is left exactly where it is: a write that
+    // is still being applied must not have its budget closed underneath it,
+    // which is what evicting or idling it out would do.
+    if (!gone && this.isTimeout(error)) {
+      return call.readOnly
+        ? text(
+            `That budget did not answer within ${Math.round(
+              this.options.writeTimeoutMs / 1000,
+            )} seconds. Nothing was changed. It may still be downloading: ask again in a moment.`,
+          )
+        : text(
+            'That budget did not answer in time, and the worker holding it is still working ' +
+              'on it. Check the budget before repeating it: the change may have been applied ' +
+              'already, and repeating it would duplicate it.',
+          );
+    }
+
     if (gone) {
-      this.forget(budgetId);
-      if (call.readOnly && mayRetry) {
-        const fresh = this.workers.get(budgetId) ?? this.start(budgetId);
-        fresh.inFlight += 1;
-        try {
-          const ready = await this.within(fresh.ready, this.options.readyMs);
-          if (ready === undefined) return await this.dispatch(fresh, budgetId, call, false);
-        } finally {
-          fresh.inFlight -= 1;
-          this.touch(fresh);
-        }
-      }
+      this.forget(worker);
+      if (call.readOnly && mayRetry) return this.retryRead(budgetId, call);
       if (!call.readOnly) {
         return text(
           `The worker holding that budget stopped while this was running: ${withoutCredentials(
@@ -378,20 +496,59 @@ export class WorkerPool {
     return text(`That budget could not answer: ${withoutCredentials(message)}`);
   }
 
+  /**
+   * One more go at a read, on a worker that is not the dead one.
+   *
+   * A read that happens twice costs a round trip, so it is worth repeating
+   * once; `mayRetry` is false the second time, so this cannot loop.
+   */
+  private async retryRead(budgetId: string, call: ToolCall): Promise<ToolReply> {
+    const fresh = this.workers.get(budgetId) ?? this.start(budgetId);
+    fresh.inFlight += 1;
+    try {
+      const ready = await this.within(fresh.ready, this.options.readyMs);
+      if (ready === undefined) return await this.dispatch(fresh, call, false);
+      return text(`That budget could not be opened: ${String(ready)}`);
+    } finally {
+      fresh.inFlight -= 1;
+      this.touch(fresh);
+    }
+  }
+
   private touch(worker: Worker): void {
     worker.lastUsed = Date.now();
     if (worker.idleTimer) clearTimeout(worker.idleTimer);
-    if (worker.inFlight > 0) return;
+    worker.idleTimer = undefined;
+    // Every worker gets a timer, including one that has been forgotten:
+    // that is the one most worth closing, and `stopWorker` is identity-safe,
+    // so a timer left over from a replaced worker cannot take the live one
+    // out of the map. Measured before that: the healthy worker was dropped
+    // with a call in flight, by its predecessor's timer.
+    if (worker.inFlight > 0 || worker.unfinishedWrites > 0) return;
     worker.idleTimer = setTimeout(() => {
-      if (worker.inFlight === 0) void this.stopWorker(worker, 'idle');
+      // No identity check here on purpose: a worker that has been forgotten
+      // and is somehow still alive is exactly the one that should be closed
+      // rather than left running. `stopWorker` only removes it from the map
+      // if it is still the one there.
+      if (worker.inFlight > 0 || worker.unfinishedWrites > 0) return;
+      void this.stopWorker(worker, 'idle');
     }, this.options.idleMs);
     worker.idleTimer.unref?.();
   }
 
-  private forget(budgetId: string): void {
-    const worker = this.workers.get(budgetId);
-    if (worker?.idleTimer) clearTimeout(worker.idleTimer);
-    this.workers.delete(budgetId);
+  /**
+   * Drop this worker, if it is still the one holding its budget.
+   *
+   * By identity and not by id. Two calls in flight on a worker that dies
+   * each come through here, and the second one deleting by id would take
+   * out the replacement the first one had already started: measured, three
+   * processes for one budget, two of them alive on the same data directory,
+   * one of them in no map at all and still running after `stop()`.
+   */
+  private forget(worker: Worker): void {
+    if (worker.idleTimer) clearTimeout(worker.idleTimer);
+    worker.idleTimer = undefined;
+    if (this.workers.get(worker.budgetId) === worker) this.workers.delete(worker.budgetId);
   }
 
   /**
@@ -405,8 +562,7 @@ export class WorkerPool {
   private async stopWorker(worker: Worker, why: string): Promise<void> {
     if (worker.stopping === true) return;
     worker.stopping = true;
-    if (worker.idleTimer) clearTimeout(worker.idleTimer);
-    this.workers.delete(worker.budgetId);
+    this.forget(worker);
     const said = `[actual-budget-mcp] closing the worker for ${worker.budgetId} (${why})`;
     if (this.options.log) this.options.log(said);
     try {

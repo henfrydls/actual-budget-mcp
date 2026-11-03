@@ -6,6 +6,11 @@ import {
 } from '../worker-env.js';
 
 const VARS = [
+  'TZ',
+  'HTTPS_PROXY',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'NODE_OPTIONS',
   'ACTUAL_SERVER_URL',
   'ACTUAL_PASSWORD',
   'ACTUAL_SESSION_TOKEN',
@@ -51,6 +56,41 @@ describe('what a worker is started with', () => {
     expect(env.ACTUAL_HTTP_WRITE_TOKEN).toBeUndefined();
     // A worker serves one budget; a list would make it think otherwise.
     expect(env.ACTUAL_BUDGET_IDS).toBeUndefined();
+  });
+
+  it('carries the clock, the proxy and the certificates, which are the machine', () => {
+    // A worker in UTC while the front end is in its own zone gives two
+    // different answers to "today", and a date is what half of these tools
+    // are about. The proxy and the certificates are how it reaches the
+    // Actual server at all, which is its job now.
+    process.env.TZ = 'America/Santo_Domingo';
+    process.env.HTTPS_PROXY = 'http://proxy.internal:3128';
+    process.env.no_proxy = 'localhost,127.0.0.1';
+    process.env.SSL_CERT_FILE = '/etc/ssl/certs/ca.pem';
+
+    const env = workerEnvironment({ budgetId: 'one', dataDir: '/data/one' });
+
+    expect(env.TZ).toBe('America/Santo_Domingo');
+    expect(env.HTTPS_PROXY).toBe('http://proxy.internal:3128');
+    expect(env.no_proxy).toBe('localhost,127.0.0.1');
+    expect(env.SSL_CERT_FILE).toBe('/etc/ssl/certs/ca.pem');
+  });
+
+  it('passes NODE_OPTIONS without the inspector, which is a port and not a setting', () => {
+    // Measured: a second process with --inspect says `Starting inspector on
+    // 127.0.0.1:9229 failed: address already in use` and runs on, so three
+    // workers would each say it every time somebody debugged the front end.
+    process.env.NODE_OPTIONS = '--max-old-space-size=4096 --inspect=9229 --use-openssl-ca';
+
+    const env = workerEnvironment({ budgetId: 'one', dataDir: '/data/one' });
+
+    expect(env.NODE_OPTIONS).toBe('--max-old-space-size=4096 --use-openssl-ca');
+  });
+
+  it('leaves NODE_OPTIONS out entirely when the inspector was all it held', () => {
+    process.env.NODE_OPTIONS = '--inspect-brk';
+
+    expect(workerEnvironment({ budgetId: 'one', dataDir: '/d' }).NODE_OPTIONS).toBeUndefined();
   });
 
   it('gives each worker its own budget and its own directory', () => {

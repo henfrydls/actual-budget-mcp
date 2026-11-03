@@ -224,16 +224,48 @@ describe('what is in flight', () => {
  * That the server counts them, which the counter cannot say for itself.
  */
 describe('the wiring', () => {
-  it('puts every tool through the counter, outside the other wrappers', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const source = readFileSync(
-      fileURLToPath(new URL('../../tools/index.ts', import.meta.url)),
-      'utf8',
-    );
+  it('counts a routed call while it runs, and lets go of it after', async () => {
+    // It used to be read off the source of `tools/index.ts`, which stopped
+    // saying anything the day the chain below it changed shape: with more
+    // than one budget the wrappers that touch the engine are left out, and
+    // the counter is not one of them. The exit waits on this, so a routed
+    // call that is not counted is a budget closed underneath a worker.
+    const { registerAllTools } = await import('../../tools/index.js');
+    const { usePool } = await import('../../workers/current.js');
 
-    expect(source).toContain('withInFlight(withWriteNotice(');
-  });
+    resetInFlight();
+    process.env.ACTUAL_BUDGET_ID = 'bud-a';
+    process.env.ACTUAL_BUDGET_IDS = 'bud-a,bud-b';
+    let counted = -1;
+    usePool({
+      call: async () => {
+        counted = inFlightCount();
+        return { content: [{ type: 'text', text: 'answered' }] };
+      },
+      openBudgets: () => [],
+      stop: async () => undefined,
+    } as never);
+
+    const handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    registerAllTools({
+      tool: (...args: unknown[]) => {
+        if (typeof args[0] === 'string') {
+          handlers.set(args[0], args.at(-1) as (a: Record<string, unknown>) => Promise<unknown>);
+        }
+      },
+    } as never);
+
+    try {
+      await handlers.get('get_budget_month')!({ month: '2026-01', budget_id: 'bud-b' });
+
+      expect(counted).toBe(1);
+      expect(inFlightCount()).toBe(0);
+    } finally {
+      usePool(undefined);
+      delete process.env.ACTUAL_BUDGET_ID;
+      delete process.env.ACTUAL_BUDGET_IDS;
+    }
+  }, 30_000);
 
   it('puts the resources through it too', async () => {
     // They are registered in their own file and were left out: a resource

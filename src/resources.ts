@@ -12,6 +12,7 @@ import {
 import { formatMoney } from './utils/money.js';
 import { withReadSync } from './utils/read-sync.js';
 import { withInFlight } from './utils/in-flight.js';
+import { servesManyBudgets } from './utils/budgets.js';
 import { describeError } from './utils/errors.js';
 
 /**
@@ -33,6 +34,15 @@ async function described<T>(read: () => Promise<T>): Promise<T> {
 }
 
 export function registerAllResources(rawServer: McpServer): void {
+  // Not when this server serves more than one budget (#229). A resource is
+  // a URI and nothing else: `actual://accounts` does not say which budget
+  // its accounts are in, and there is no argument to put one in. Registered
+  // anyway, every one of these would open a budget here in the front end,
+  // sync it, and answer about ACTUAL_BUDGET_ID whichever budget the caller
+  // had in mind -- a second, quieter answer that contradicts the tools.
+  // So the tools are the one way to ask, and they take `budget_id`.
+  if (servesManyBudgets()) return;
+
   // Resources are reads, so they pull the server's changes first and carry the
   // same staleness notice the read tools do (#126). They were missed the first
   // time round: `actual://accounts` went on serving balances from a copy that

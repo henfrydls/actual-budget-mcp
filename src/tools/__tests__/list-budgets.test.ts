@@ -62,32 +62,31 @@ describe('listing the budgets this server serves', () => {
     expect(getBudgets).not.toHaveBeenCalled();
   });
 
-  it('lists the configured ones by sync id, and marks the open one', async () => {
+  it('lists the configured ones by sync id, without opening any of them', async () => {
+    // With more than one budget this process holds none of them, so there
+    // is no `getBudgets` to ask and no name to show: the name lives inside
+    // the budget file, which is in a worker's data directory. Asking the
+    // engine here is how the front end would end up holding a budget.
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
-    getBudgets.mockResolvedValue([
-      { id: 'local-1', name: 'Household', groupId: 'sync-one' },
-      { id: 'local-2', name: 'Business', groupId: 'sync-two' },
-    ]);
 
     const text = (await handler()()).content[0].text;
 
     expect(text).toContain('=== Budgets (2) ===');
-    expect(text).toContain('Household (sync-one)  [open]');
-    expect(text).toContain('Business (sync-two)');
-    expect(text).not.toContain('Business (sync-two)  [open]');
+    expect(text).toMatch(/^sync-one$/m);
+    expect(text).toMatch(/^sync-two$/m);
+    expect(getBudgets).not.toHaveBeenCalled();
   });
 
-  it('says so when a budget has never been downloaded here', async () => {
+  it('says a budget is open when a worker has it, and not otherwise', async () => {
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-three';
-    getBudgets.mockResolvedValue([{ id: 'local-1', name: 'Household', groupId: 'sync-one' }]);
+    usePool({ openBudgets: () => ['sync-three'] } as never);
 
     const text = (await handler()()).content[0].text;
 
-    // The name lives in the file and the file is not here. Inventing one
-    // would be worse than saying the id alone.
-    expect(text).toContain('(not downloaded here) (sync-three)');
+    expect(text).toContain('sync-three  [open]');
+    expect(text).toMatch(/^sync-one$/m);
   });
 
   it('lists none of the budgets on the server that nobody configured', async () => {

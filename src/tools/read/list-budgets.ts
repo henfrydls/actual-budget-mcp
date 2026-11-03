@@ -42,8 +42,12 @@ export function registerListBudgets(server: McpServer): void {
         // ids this server serves and which of them are open right now, and
         // the id is what a caller passes anyway (#229).
         const pool = poolInUse();
-        if (servesManyBudgets() && pool !== undefined) {
-          const open = new Set(pool.openBudgets());
+        if (servesManyBudgets()) {
+          // Whatever the pool is doing, including not existing yet: with
+          // more than one budget this process opens none of them, and
+          // asking the engine here is how the front end would end up
+          // holding one (#229).
+          const open = new Set(pool?.openBudgets() ?? []);
           const serving = configuredBudgetIds();
           const lines: string[] = [sectionHeader(`Budgets (${serving.length})`), ''];
           for (const id of serving) {

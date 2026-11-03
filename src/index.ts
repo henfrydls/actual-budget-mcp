@@ -22,6 +22,7 @@ import { WorkerPool } from './workers/pool.js';
 import { usePool } from './workers/current.js';
 import { servesManyBudgets } from './utils/budgets.js';
 import { encryptionPasswordsProblem } from './workers/worker-env.js';
+import { budgetsProblem } from './utils/budgets.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
 import { installExitPaths } from './utils/orderly-exit.js';
 import { startLeaving, whenIdle } from './utils/in-flight.js';
@@ -105,6 +106,15 @@ if (urlProblem !== undefined) {
 // The map of encryption passwords, checked where the rest of the
 // configuration is: a worker given no password for an encrypted budget
 // fails on its own, minutes later, with a message about decryption (#229).
+// The budget list, before anything is opened: with workers the front end
+// never connects, so the check inside `getConfig` would not run here until
+// a worker did it, one process too late to say it plainly (#229).
+const budgetListProblem = budgetsProblem();
+if (budgetListProblem !== undefined) {
+  console.error(`[actual-budget-mcp] ${budgetListProblem}`);
+  process.exit(1);
+}
+
 const passwordsProblem = encryptionPasswordsProblem();
 if (passwordsProblem !== undefined) {
   console.error(`[actual-budget-mcp] ${passwordsProblem}`);

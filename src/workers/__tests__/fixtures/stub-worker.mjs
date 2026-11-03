@@ -4,7 +4,7 @@
 // tests give it a command that answers MCP and nothing else: no engine, no
 // budget, no network. What varies is told through the environment, which is
 // also what lets one of the tests read back exactly what the pool passed.
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
@@ -25,6 +25,17 @@ const slowCall = Number(flag('slow-call-ms') ?? '0');
 // Where to write down that a call arrived, so that a test can count the
 // attempts a worker that dies mid-call would otherwise take with it.
 const countFile = flag('count-file');
+// Where to write down that this process exists, so a test can tell how many
+// were started and whether any outlived the pool.
+const pidFile = flag('pid-file');
+if (pidFile !== undefined) appendFileSync(pidFile, `${process.pid}\n`);
+// Die on the first read only: the file is the memory the dead process does
+// not have, so a replacement started by the pool answers normally.
+const dieOnce = flag('die-once');
+// A write that takes longer than the front end waits.
+const slowWrite = Number(flag('slow-write-ms') ?? '0');
+// Something on stderr with no newline behind it, for the flush on close.
+const lastWord = flag('last-word');
 
 // `registerTool` rather than `tool`: the latter guesses which overload it
 // was called with, and a tool that takes no arguments gives it nothing to
@@ -44,6 +55,10 @@ server.registerTool(
   async () => {
     if (countFile !== undefined) appendFileSync(countFile, `read in ${budget}\n`);
     if (dies === 'read') process.exit(1);
+    if (dieOnce !== undefined && !existsSync(dieOnce)) {
+      writeFileSync(dieOnce, 'died once');
+      process.exit(1);
+    }
     if (bigBytes > 0) {
       return { content: [{ type: 'text', text: 'x'.repeat(bigBytes) }] };
     }
@@ -53,8 +68,14 @@ server.registerTool(
 );
 
 server.registerTool('create_transaction', { description: 'a write' }, async () => {
+  if (dies === 'write') {
+    if (countFile !== undefined) appendFileSync(countFile, `write in ${budget}\n`);
+    process.exit(1);
+  }
+  if (slowWrite > 0) await new Promise((resolve) => setTimeout(resolve, slowWrite));
+  // After the wait, so that the file says when it was applied rather than
+  // when it was asked for.
   if (countFile !== undefined) appendFileSync(countFile, `write in ${budget}\n`);
-  if (dies === 'write') process.exit(1);
   return { content: [{ type: 'text', text: `written in ${budget}` }] };
 });
 
@@ -69,3 +90,7 @@ server.registerTool(
 console.error(`stub worker up for ${budget} at http://user:hunter2@actual.example:5006`);
 
 await server.connect(new StdioServerTransport());
+
+// Last, and with no newline after it: what a process says on its way out,
+// which is the half that used to be dropped.
+if (lastWord !== undefined) process.stderr.write(lastWord);

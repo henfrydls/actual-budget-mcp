@@ -37,9 +37,49 @@ const PLATFORM = [
   'PROGRAMFILES',
   'ProgramFiles(x86)',
   'PATHEXT',
-  'NODE_OPTIONS',
   'NODE_EXTRA_CA_CERTS',
+  // The clock. A worker in UTC while the front end is in its own zone gives
+  // two different answers to "today", and a date is what half of these
+  // tools are about: the Docker image sets TZ and nothing else would carry
+  // it across.
+  'TZ',
+  // How this machine reaches the Actual server, which the worker is the one
+  // doing now. Both cases of each, because the libraries that read them
+  // disagree about which case they read.
+  'HTTP_PROXY',
+  'http_proxy',
+  'HTTPS_PROXY',
+  'https_proxy',
+  'NO_PROXY',
+  'no_proxy',
+  // And who it is willing to believe once it gets there.
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
 ];
+
+/**
+ * `NODE_OPTIONS` passes, without the inspector.
+ *
+ * It carries things a deployment means for every process of this server,
+ * `--max-old-space-size` above all, and a worker is the process that holds
+ * the budget: leaving it behind would give the heap limit to the front end,
+ * which needs it least.
+ *
+ * The inspector is the exception, because it is a port and not a setting.
+ * Measured: a second process with `--inspect` prints `Starting inspector on
+ * 127.0.0.1:9229 failed: address already in use` and runs on, so three
+ * workers would each say it, prefixed with the budget they belong to, every
+ * time somebody debugged the front end. Debugging a worker is
+ * `ACTUAL_BUDGET_WORKERS=1` and a port of its own.
+ */
+const INSPECTOR = /(^|\s)--(inspect|debug)(-brk|-port|-publish-uid)?(=\S*)?(?=\s|$)/g;
+
+function nodeOptions(): string | undefined {
+  const raw = process.env.NODE_OPTIONS;
+  if (typeof raw !== 'string' || raw === '') return undefined;
+  const kept = raw.replace(INSPECTOR, ' ').replace(/\s+/g, ' ').trim();
+  return kept === '' ? undefined : kept;
+}
 
 /**
  * The Actual settings a worker needs, and only those.
@@ -78,6 +118,9 @@ export function workerEnvironment(options: WorkerEnvironment): Record<string, st
     const value = process.env[name];
     if (typeof value === 'string' && value !== '') env[name] = value;
   }
+
+  const nodeFlags = nodeOptions();
+  if (nodeFlags !== undefined) env.NODE_OPTIONS = nodeFlags;
 
   env.ACTUAL_BUDGET_ID = options.budgetId;
   env.ACTUAL_DATA_DIR = options.dataDir;

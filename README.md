@@ -721,7 +721,15 @@ call answers that the budget is still opening and asks you to try again, rather
 than hanging past the client's own one minute timeout. For a write, the answer
 says that nothing was sent to the budget, so repeating it cannot write twice.
 
-Each budget gets its own directory under `ACTUAL_DATA_DIR`, because two
+The resources (`actual://accounts` and the other two) are not offered when
+there is more than one budget. A resource is a URI and nothing else: it has
+nowhere to say which budget it is about, and answering from the default one
+would be a second, quieter answer that contradicts the tools. The tools take
+`budget_id`, so they are the one way to ask.
+
+Each budget gets its own directory under `ACTUAL_DATA_DIR`, named after its
+sync id, so the ids have to be ids: a list with a path in one of them is
+refused at startup rather than writing a budget cache somewhere else. Two
 processes cannot share one budget cache. If more than one of the budgets is
 encrypted, `ACTUAL_ENCRYPTION_PASSWORDS` maps sync id to password:
 

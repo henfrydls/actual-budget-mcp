@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -228,6 +228,156 @@ describe('the worker pool', () => {
 
     expect(reply.isError).toBeFalsy();
     expect(said(reply).length).toBeGreaterThan(11_000_000);
+  }, 30_000);
+
+  /** A temporary file path for the stub to write to. */
+  function scratch(name: string): string {
+    return path.join(mkdtempSync(path.join(os.tmpdir(), 'actual-mcp-pool-')), name);
+  }
+
+  /** Which processes the stub started, and which of them are still alive. */
+  function processes(pidFile: string): { started: number[]; alive: number[] } {
+    const started = readFileSync(pidFile, 'utf8')
+      .trim()
+      .split('\n')
+      .filter((line) => line !== '')
+      .map(Number);
+    const alive = started.filter((pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    return { started, alive };
+  }
+
+  it('starts one replacement for a dead worker, not one per call in flight', async () => {
+    // Two reads on a worker that dies. Each of them learns about it, and
+    // each of them goes looking for a worker: measured before the fix,
+    // three processes for one budget, two alive at once on the same data
+    // directory, one of them in no map at all and still running after
+    // `stop()`. What makes the difference is comparing identity rather
+    // than the budget id when forgetting one.
+    const pidFile = scratch('pids');
+    const workers = pool({}, ['--die=read', `--pid-file=${pidFile}`]);
+
+    await Promise.all([
+      workers.call('sync-one', { name: 'get_budget_month', readOnly: true }),
+      workers.call('sync-one', { name: 'get_budget_month', readOnly: true }),
+    ]);
+
+    // The one that died, and one replacement between them.
+    expect(processes(pidFile).started).toHaveLength(2);
+
+    await workers.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(processes(pidFile).alive).toEqual([]);
+  }, 30_000);
+
+  it('does not let a dead worker take its replacement out of the map', async () => {
+    // The dead one's idle timer is armed after the call it died in, and it
+    // used to fire `stopWorker` on a worker that had already been replaced,
+    // which deleted the budget from the map: the healthy worker was dropped
+    // with a call in flight and never closed again.
+    const pidFile = scratch('pids');
+    const dieOnce = scratch('died');
+    const workers = pool({ idleMs: 400 }, [
+      `--die-once=${dieOnce}`,
+      `--pid-file=${pidFile}`,
+      '--slow-call-ms=700',
+    ]);
+
+    // Dies, is replaced, and the replacement answers.
+    const first = await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    expect(said(first)).toContain('month of sync-one');
+
+    // In flight across the moment the dead one's timer comes due.
+    const second = workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(workers.openBudgets()).toEqual(['sync-one']);
+    expect(said(await second)).toContain('month of sync-one');
+
+    await workers.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(processes(pidFile).alive).toEqual([]);
+  }, 30_000);
+
+  it('says a slow write may have been applied, and leaves its worker alone', async () => {
+    // Sixty seconds of the SDK's default produced `Request timed out`, which
+    // reads like a refusal, while the worker logged the write three seconds
+    // later. The sentence is the fix; not touching the worker is the rest of
+    // it, because a budget closed underneath a write is how one gets half
+    // applied.
+    const counted = scratch('writes');
+    const workers = pool({ writeTimeoutMs: 300, maxWorkers: 1, readyMs: 400 }, [
+      '--slow-write-ms=1500',
+      `--count-file=${counted}`,
+    ]);
+
+    const reply = await workers.call('sync-one', { name: 'create_transaction', readOnly: false });
+
+    expect(reply.isError).toBe(true);
+    expect(said(reply)).toContain('may have been applied');
+    expect(said(reply)).toContain('duplicate');
+    // Still holding its budget, and still the only worker there is room for.
+    expect(workers.openBudgets()).toEqual(['sync-one']);
+    const other = await workers.call('sync-two', { name: 'get_budget_month', readOnly: true });
+    expect(said(other)).toMatch(/busy/i);
+    expect(workers.openBudgets()).toEqual(['sync-one']);
+
+    // And the write it was still running did land.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(readFileSync(counted, 'utf8')).toContain('write in sync-one');
+  }, 30_000);
+
+  it('starts a new worker for a write when the old one died while idle', async () => {
+    // Nothing was sent to the dead one, so there is nothing to be careful
+    // about: the write goes to a worker that is alive, once.
+    const pidFile = scratch('pids');
+    const counted = scratch('writes');
+    const workers = pool({}, [`--pid-file=${pidFile}`, `--count-file=${counted}`]);
+
+    await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    const [first] = processes(pidFile).started;
+    process.kill(first, 'SIGKILL');
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const reply = await workers.call('sync-one', { name: 'create_transaction', readOnly: false });
+
+    expect(said(reply)).toContain('written in sync-one');
+    expect(said(reply)).not.toContain('may have been applied');
+    const writes = readFileSync(counted, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('write'));
+    expect(writes).toEqual(['write in sync-one']);
+  }, 30_000);
+
+  it('refuses an id that would put a budget outside the data directory', async () => {
+    const pidFile = scratch('pids');
+    const workers = pool({}, [`--pid-file=${pidFile}`]);
+
+    const reply = await workers.call('../elsewhere', { name: 'get_budget_month', readOnly: true });
+
+    expect(reply.isError).toBe(true);
+    expect(said(reply)).toContain('not a budget id');
+    expect(existsSync(pidFile)).toBe(false);
+  }, 30_000);
+
+  it('says the last thing a worker wrote, newline or not', async () => {
+    const lines: string[] = [];
+    const workers = pool({ log: (line: string) => lines.push(line) }, [
+      '--last-word=the last thing it ever said',
+    ]);
+
+    await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    await workers.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    // A line of its own: nothing followed it, so without the flush on
+    // close it is never said at all.
+    expect(lines).toContain('[sync-one] the last thing it ever said');
   }, 30_000);
 
   it('lets go of a worker that has had nothing to do', async () => {
