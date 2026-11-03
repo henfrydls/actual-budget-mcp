@@ -4,6 +4,7 @@ import { ensureConnection, getConfig, getInternal } from '../../connection.js';
 import { probeServer } from '../../utils/server-probe.js';
 import { alreadyDescribed, describeError } from '../../utils/errors.js';
 import { syncNow } from '../../utils/sync-clock.js';
+import { withoutCredentials } from '../../utils/redact.js';
 
 /**
  * Rebuild the local sync state, then sync.
@@ -63,7 +64,7 @@ export async function repairSyncState(): Promise<string[]> {
     // not a URL as far as `new URL` is concerned, because the port is out of
     // range, and the repair used to run anyway.
     throw new Error(
-      `ACTUAL_SERVER_URL is not an address this can reach: ${serverURL}. ` +
+      `ACTUAL_SERVER_URL is not an address this can reach: ${withoutCredentials(serverURL)}. ` +
         `Nothing was repaired. Check the value where you configured this server; ` +
         `a port outside 1-65535 makes the whole URL invalid, which is easy to do ` +
         `by mistyping one.`,
@@ -73,7 +74,7 @@ export async function repairSyncState(): Promise<string[]> {
   if (probe === 'not-answering') {
     throw new Error(
       [
-        `Nothing is listening at ${serverURL}, so the sync state was not touched.`,
+        `Nothing is listening at ${withoutCredentials(serverURL)}, so the sync state was not touched.`,
         '',
         'A sync repair rebuilds local bookkeeping against the server, so it cannot run',
         'with the server absent, and it is not what fixes this. Two different problems',

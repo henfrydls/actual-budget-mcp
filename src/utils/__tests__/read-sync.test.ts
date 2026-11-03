@@ -18,6 +18,26 @@ vi.mock('../data-dir-lock.js', async (importOriginal) => ({
   readDataDirLock: vi.fn(),
 }));
 
+/**
+ * What `syncNow` throws, when a test wants it to.
+ *
+ * It does not throw on its own: it catches the sync and the currency read
+ * and answers either way (#162). The branch that catches it in
+ * `refreshBeforeRead` is there for anything that changes, and this is the
+ * only way to reach it.
+ */
+let syncThrows: Error | undefined;
+vi.mock('../sync-clock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sync-clock.js')>();
+  return {
+    ...actual,
+    syncNow: async (...args: never[]) => {
+      if (syncThrows !== undefined) throw syncThrows;
+      return actual.syncNow(...args);
+    },
+  };
+});
+
 import {
   refreshBeforeRead,
   stalenessNotice,
@@ -142,6 +162,47 @@ describe('refreshing before a read', () => {
 
     expect(report.current).toBe(false);
     expect(stderr.join('\n')).toMatch(/could not sync before reading/i);
+  });
+
+  it('survives a sync that throws past `syncNow`, and names no password', async () => {
+    // The defensive branch: `syncNow` answers rather than throwing, so
+    // nothing reaches this today, and a read that threw here would be a
+    // read that fails because the server is down, which is what #126
+    // exists to avoid.
+    syncThrows = new Error('request to http://user:hunter2@actual.example:5006/sync failed');
+    try {
+      const report = await refreshBeforeRead();
+
+      expect(report.current).toBe(false);
+      const said = stderr.join('\n');
+      expect(said).toContain('could not sync before reading');
+      expect(said).toContain('actual.example:5006');
+      expect(said).not.toContain('hunter2');
+
+      // And the failure is recorded, so the next read does not try again
+      // straight away: a server that is down would otherwise be asked once
+      // per read, each paying the HTTP deadline.
+      syncThrows = undefined;
+      sync.mockClear();
+      await refreshBeforeRead();
+      expect(sync).not.toHaveBeenCalled();
+    } finally {
+      syncThrows = undefined;
+    }
+  });
+
+  it('names the server in that line without its password (#275)', async () => {
+    // The engine quotes the address it was given, and this line is on
+    // stderr, which is where a bug report comes from.
+    sync.mockImplementation(async () => {
+      throw new Error('request to http://user:hunter2@actual.example:5006/sync failed');
+    });
+
+    await refreshBeforeRead();
+
+    const said = stderr.join('\n');
+    expect(said).toContain('actual.example:5006');
+    expect(said).not.toContain('hunter2');
   });
 
   /**
