@@ -110,6 +110,34 @@ describe('calling a tool with the wrong arguments', () => {
     expect(said).not.toContain('Input validation error');
   });
 
+  it('tells a client that no tool takes an argument it did not ask for', () => {
+    // Every object in every schema, the nested ones included: the rows of a
+    // batch are where a model is most tempted to invent a field. The line
+    // was there until zod 4 stopped emitting it by default, and losing it
+    // is losing the hint, not a rule the server ever enforced (#280).
+    const missing: string[] = [];
+    const walk = (node: unknown, where: string) => {
+      if (Array.isArray(node)) {
+        node.forEach((item, i) => walk(item, `${where}[${i}]`));
+        return;
+      }
+      if (typeof node !== 'object' || node === null) return;
+      const record = node as Record<string, unknown>;
+      if (record.type === 'object' && record.additionalProperties !== false) missing.push(where);
+      for (const [key, value] of Object.entries(record)) walk(value, `${where}.${key}`);
+    };
+
+    for (const [name, schema] of schemas) {
+      const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+      // A tool that takes no arguments never carried the line and does not
+      // need it: there is nothing to invent.
+      if (Object.keys(properties).length === 0) continue;
+      walk(schema, name);
+    }
+
+    expect(missing).toEqual([]);
+  });
+
   it('offers no schema a client has to resolve a reference to', () => {
     // Some clients do not resolve `$ref`, and one that does not would read
     // an empty constraint and send anything. Nothing needs them: the
