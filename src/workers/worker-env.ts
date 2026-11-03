@@ -106,22 +106,27 @@ const SHARED = [
 ];
 
 /**
- * The marker the pool puts in a worker's environment.
+ * How a process started by the pool knows that it is one.
  *
- * Not configuration: nobody sets this, it is how a process started by the
- * pool knows it is one. A worker uses it to report its budget's name back
- * up the stdio pipe, which needs the `logging` capability declared, and
- * declaring that capability changes what `initialize` answers. Measured:
- * capabilities go from {"tools":{"listChanged":true}} to
- * {"logging":{},"tools":{"listChanged":true}}. So it is declared only here,
- * in processes the pool starts, and a server anybody else runs answers
- * exactly what it answered before.
+ * An argument and not an environment variable, because an environment is
+ * inherited and an argument is not: a user who exports the variable, for
+ * whatever reason, would turn their own single-budget server into a
+ * "worker" that declares a capability nobody asked for and starts
+ * reporting its budget's name to its client. An argument only exists where
+ * somebody wrote it, and the pool is the only thing that writes it.
+ *
+ * It matters because a worker reports its budget's name up the stdio pipe,
+ * which needs the `logging` capability declared, and declaring that changes
+ * what `initialize` answers. Measured: capabilities go from
+ * {"tools":{"listChanged":true}} to {"logging":{},"tools":{...}}. So it is
+ * declared only in processes the pool starts, and a server anybody else
+ * runs answers exactly what it answered before.
  */
-const MARKER = 'ACTUAL_MCP_WORKER';
+export const WORKER_FLAG = '--worker';
 
 /** Whether this process was started by a pool. */
 export function startedByPool(): boolean {
-  return readEnv(MARKER) === '1';
+  return process.argv.includes(WORKER_FLAG);
 }
 
 export interface WorkerEnvironment {
@@ -141,7 +146,6 @@ export function workerEnvironment(options: WorkerEnvironment): Record<string, st
   const nodeFlags = nodeOptions();
   if (nodeFlags !== undefined) env.NODE_OPTIONS = nodeFlags;
 
-  env[MARKER] = '1';
   env.ACTUAL_BUDGET_ID = options.budgetId;
   env.ACTUAL_DATA_DIR = options.dataDir;
   if (options.encryptionPassword !== undefined) {

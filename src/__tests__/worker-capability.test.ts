@@ -15,6 +15,9 @@ import { createMcpServer } from '../mcp-server.js';
 
 const VARS = ['ACTUAL_MCP_WORKER', 'ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS', 'ACTUAL_TOOLSET'];
 
+/** What the pool puts on a worker's command line, and nobody else does. */
+const WORKER_FLAG = '--worker';
+
 /**
  * What a client is told at `initialize` (#229).
  *
@@ -27,6 +30,8 @@ const VARS = ['ACTUAL_MCP_WORKER', 'ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS', 'ACT
 describe('what a server says it can do', () => {
   afterEach(() => {
     for (const name of VARS) delete process.env[name];
+    const at = process.argv.indexOf(WORKER_FLAG);
+    if (at !== -1) process.argv.splice(at, 1);
   });
 
   async function connected(): Promise<{ capabilities: unknown; tools: string }> {
@@ -47,7 +52,7 @@ describe('what a server says it can do', () => {
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     const plain = await connected();
 
-    process.env.ACTUAL_MCP_WORKER = '1';
+    process.argv.push(WORKER_FLAG);
     const worker = await connected();
 
     expect(plain.capabilities).not.toHaveProperty('logging');
@@ -61,13 +66,32 @@ describe('what a server says it can do', () => {
   });
 
   it('is the same server in every other way it is configured', async () => {
-    // The marker is not configuration, so it changes nothing that
+    // Being a worker is not configuration, so it changes nothing that
     // configuration changes.
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_TOOLSET = 'chat';
     const plain = await connected();
 
-    process.env.ACTUAL_MCP_WORKER = '1';
+    process.argv.push(WORKER_FLAG);
     expect((await connected()).tools).toBe(plain.tools);
+  });
+
+  it('cannot be turned into a worker by anything in the environment', async () => {
+    // An environment is inherited and a command line is not. A user who
+    // exports this, for whatever reason, would otherwise have a server
+    // that declares a capability nobody asked for and reports its budget's
+    // name to its own client.
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    const plain = await connected();
+
+    for (const name of ['ACTUAL_MCP_WORKER', 'ACTUAL_WORKER', 'MCP_WORKER']) {
+      process.env[name] = '1';
+    }
+    const after = await connected();
+
+    expect(after.capabilities).toEqual(plain.capabilities);
+    expect(after.capabilities).not.toHaveProperty('logging');
+    expect(after.tools).toBe(plain.tools);
+    for (const name of ['ACTUAL_WORKER', 'MCP_WORKER']) delete process.env[name];
   });
 });

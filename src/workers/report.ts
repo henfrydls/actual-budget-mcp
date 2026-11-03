@@ -32,6 +32,31 @@ export interface BudgetReport {
 /** The longest name this will carry, so a reply cannot be filled from below. */
 export const MAX_NAME = 200;
 
+/**
+ * A budget name fit to print in a reply, or nothing.
+ *
+ * It arrives from another process and lands in a list where each line is a
+ * budget, so a name with a newline in it is two budgets, and one ending in
+ * `  [open]` is a lie about which of them is open. Measured with a name
+ * carrying `\n`, a false id line, two spaces and `  [open]`, and an ANSI
+ * sequence: all of it came through and the list read as something else.
+ *
+ * Control characters go, escape sequences with them, and the spaces that
+ * are left collapse to one. What survives is a name on one line.
+ */
+export function tidyName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const cleaned = raw
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001B\[[0-9;]*[A-Za-z]/g, ' ')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned === '' || cleaned.length > MAX_NAME) return undefined;
+  return cleaned;
+}
+
 interface BudgetRow {
   id?: string;
   name?: string;

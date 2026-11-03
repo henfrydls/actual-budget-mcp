@@ -458,6 +458,77 @@ describe('the worker pool', () => {
     expect(said(other)).toContain('month of sync-two');
   }, 30_000);
 
+  it('sends nothing else to a worker whose write outlasted its timeout', async () => {
+    // The first write is still being applied in there and this server has
+    // stopped waiting on it. A second write handed to the same worker
+    // would be sent to a process that is about to be closed, and closed
+    // halfway through is how one gets half applied.
+    const counted = scratch('writes');
+    const pidFile = scratch('pids');
+    const workers = pool(
+      { writeTimeoutMs: 300, reclaimMs: 4_000, maxWorkers: 1, readyMs: 600 },
+      ['--slow-write-ms=1200', `--count-file=${counted}`, `--pid-file=${pidFile}`],
+    );
+
+    const first = await workers.call('sync-one', { name: 'create_transaction', readOnly: false });
+    expect(said(first)).toContain('may have been applied');
+
+    const second = await workers.call('sync-one', { name: 'create_transaction', readOnly: false });
+
+    // No room for another, because the one on its way out still counts.
+    expect(said(second)).toMatch(/busy/i);
+    expect(processes(pidFile).started).toHaveLength(1);
+
+    // And the write that was already running is the only one that landed.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const writes = readFileSync(counted, 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('write'));
+    expect(writes).toEqual(['write in sync-one']);
+
+    // Leaving closes it too, even though it is no longer the worker for
+    // its budget: it is still a process holding one.
+    await workers.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(processes(pidFile).alive).toEqual([]);
+  }, 30_000);
+
+  it('starts another worker for that budget when there is room for one', async () => {
+    const pidFile = scratch('pids');
+    const workers = pool(
+      { writeTimeoutMs: 300, reclaimMs: 4_000, maxWorkers: 2, readyMs: 5_000 },
+      ['--slow-write-ms=1200', `--pid-file=${pidFile}`],
+    );
+
+    await workers.call('sync-one', { name: 'create_transaction', readOnly: false });
+    const second = await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+
+    expect(said(second)).toContain('month of sync-one');
+    // A second process for the same budget, not the one that is retiring.
+    expect(processes(pidFile).started).toHaveLength(2);
+  }, 30_000);
+
+  it('keeps a reported name to one line, whatever it is told', async () => {
+    // It lands in a list where every line is a budget, so a name with a
+    // newline in it is two budgets and one ending in `  [open]` is a lie
+    // about which of them is open.
+    // `NUL` is spelled out because a command line cannot carry that byte;
+    // the stub turns it back into one.
+    const nasty = 'Household\n' + 'sync-nine  [open]' + '\u001B[31m  more' + '\u0007NULend';
+    const workers = pool({}, [`--report-name=${nasty}`]);
+
+    await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const name = workers.knownBudgets().get('sync-one')?.name ?? '';
+    expect(name).not.toContain('\n');
+    expect(name).not.toContain('\u001B');
+    expect(name).not.toContain('\u0007');
+    expect(name).not.toContain('\u0000');
+    expect(name).not.toContain('  ');
+    expect(name).toBe('Household sync-nine [open] more end');
+  }, 30_000);
+
   it('names the time a read actually waited, not the time a write would', async () => {
     const workers = pool({ readTimeoutMs: 2_000 }, ['--slow-call-ms=5000']);
 

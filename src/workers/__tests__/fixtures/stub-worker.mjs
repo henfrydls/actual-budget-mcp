@@ -10,11 +10,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 const budget = process.env.ACTUAL_BUDGET_ID ?? '(none)';
 // The capability is declared the way the real worker declares it: only when
-// the pool put its marker in this process's environment. A test that sets
-// --report-name and sees nothing arrive is a test that the marker did not.
+// the pool put `--worker` on this process's command line. A test that sets
+// --report-name and sees nothing arrive is a test that the flag did not.
 const server = new McpServer(
   { name: 'stub-worker', version: '0' },
-  process.env.ACTUAL_MCP_WORKER === '1' ? { capabilities: { logging: {} } } : {},
+  process.argv.includes('--worker') ? { capabilities: { logging: {} } } : {},
 );
 
 // What it does is told through argv rather than the environment, because
@@ -114,7 +114,8 @@ if (reportName !== undefined) {
     logger: reportLogger ?? 'actual-budget-mcp/worker',
     data: {
       budgetId: reportId ?? budget,
-      name: reportName === 'TOO-LONG' ? 'x'.repeat(201) : reportName,
+      // `NUL` spelled out, because a command line cannot carry the byte.
+      name: reportName === 'TOO-LONG' ? 'x'.repeat(201) : reportName.replaceAll('NUL', '\u0000'),
     },
   });
 }

@@ -7,7 +7,8 @@ import { withoutCredentials } from '../utils/redact.js';
 import { effectiveDataDir } from '../utils/data-dir-lock.js';
 import { unsafeBudgetId } from '../utils/budgets.js';
 import { LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import { MAX_NAME, WORKER_LOGGER, type BudgetReport } from './report.js';
+import { WORKER_LOGGER, tidyName, type BudgetReport } from './report.js';
+import { WORKER_FLAG } from './worker-env.js';
 import { encryptionPasswordFor, workerEnvironment } from './worker-env.js';
 
 /**
@@ -185,6 +186,16 @@ export class WorkerPool {
    * this morning. So this is the last seen, and a new worker replaces it.
    */
   private readonly seen = new Map<string, BudgetReport>();
+  /**
+   * Workers that are on their way out and still hold a budget.
+   *
+   * A write that outlasted its timeout leaves one of these: the process is
+   * alive, the budget is open in it, and this server is not going to send
+   * it anything else. They are out of the map so that the next call for
+   * that budget does not land on one, and counted so that leaving one
+   * behind cannot quietly raise the number of budgets open at once.
+   */
+  private readonly retiring = new Set<Worker>();
   private readonly options: Required<Omit<PoolOptions, 'dataDirFor' | 'log'>> &
     Pick<PoolOptions, 'dataDirFor' | 'log'>;
   private stopped = false;
@@ -207,7 +218,7 @@ export class WorkerPool {
 
   /** Which budgets are open, for diagnostics and for the tests. */
   openBudgets(): string[] {
-    return [...this.workers.keys()];
+    return [...new Set([...this.workers.keys(), ...[...this.retiring].map((w) => w.budgetId)])];
   }
 
   /** What each budget's worker said about it, the last time one ran. */
@@ -231,13 +242,16 @@ export class WorkerPool {
 
     const { budgetId, name } = data as { budgetId?: unknown; name?: unknown };
     if (budgetId !== worker.budgetId) return;
-    if (name !== undefined && (typeof name !== 'string' || name === '' || name.length > MAX_NAME)) {
-      return;
-    }
+
+    // Not just the type and the length: this name is going into a list
+    // where every line is a budget, so what it must not contain is a line
+    // of its own.
+    const tidy = tidyName(name);
+    if (name !== undefined && tidy === undefined) return;
 
     this.seen.set(worker.budgetId, {
       budgetId: worker.budgetId,
-      ...(typeof name === 'string' ? { name } : {}),
+      ...(tidy === undefined ? {} : { name: tidy }),
     });
   }
 
@@ -317,7 +331,10 @@ export class WorkerPool {
    * same way.
    */
   private async makeRoom(budgetId: string, started: number): Promise<ToolReply | undefined> {
-    while (this.workers.size >= this.options.maxWorkers && !this.workers.has(budgetId)) {
+    while (
+      this.workers.size + this.retiring.size >= this.options.maxWorkers &&
+      !this.workers.has(budgetId)
+    ) {
       const idle = [...this.workers.values()]
         .filter(
           (worker) =>
@@ -358,7 +375,10 @@ export class WorkerPool {
 
     const transport = new StdioClientTransport({
       command: this.options.command,
-      args: this.options.args,
+      // The flag that tells the child it is a worker. On the command line
+      // rather than in the environment, so that nothing a user exports can
+      // make a server behave like one.
+      args: [...this.options.args, WORKER_FLAG],
       env: workerEnvironment({
         budgetId,
         dataDir,
@@ -523,11 +543,18 @@ export class WorkerPool {
    */
   private reclaimLater(worker: Worker): void {
     if (worker.reclaimTimer) return;
+    // Out of the map first. Another call for this budget would otherwise
+    // be handed a worker this server has stopped waiting on, and a second
+    // write would be sent to a process that is about to be closed.
+    this.retiring.add(worker);
+    if (this.workers.get(worker.budgetId) === worker) this.workers.delete(worker.budgetId);
     worker.reclaimTimer = setTimeout(() => {
       worker.reclaimTimer = undefined;
       worker.unfinishedWrites = 0;
       if (worker.inFlight > 0) {
-        // Busy with something else. The idle timer gets it when it is not.
+        // Busy with something else, so it goes when that ends. It stays
+        // counted until then, because it is still a process holding a
+        // budget.
         this.touch(worker);
         return;
       }
@@ -693,6 +720,7 @@ export class WorkerPool {
   private async stopWorker(worker: Worker, why: string): Promise<void> {
     if (worker.stopping === true) return;
     worker.stopping = true;
+    this.retiring.delete(worker);
     this.forget(worker);
     const said = `[actual-budget-mcp] closing the worker for ${worker.budgetId} (${why})`;
     if (this.options.log) this.options.log(said);
@@ -706,7 +734,8 @@ export class WorkerPool {
   /** Stop all of them, for the orderly exit. */
   async stop(): Promise<void> {
     this.stopped = true;
-    await Promise.all([...this.workers.values()].map((worker) => this.stopWorker(worker, 'leaving')));
+    const all = [...this.workers.values(), ...this.retiring];
+    await Promise.all(all.map((worker) => this.stopWorker(worker, 'leaving')));
   }
 
   /** `work`, or `'too slow'`, or the error it failed with. */
