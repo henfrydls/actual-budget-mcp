@@ -14,6 +14,7 @@ vi.mock('../../connection.js', () => ({
 }));
 
 import { registerListBudgets } from '../read/list-budgets.js';
+import { usePool } from '../../workers/current.js';
 
 const VARS = ['ACTUAL_BUDGET_ID', 'ACTUAL_BUDGET_IDS'];
 
@@ -41,6 +42,24 @@ describe('listing the budgets this server serves', () => {
   afterEach(() => {
     for (const name of VARS) delete process.env[name];
     getBudgets.mockReset();
+    usePool(undefined);
+  });
+
+  it('says which of them are open, and opens none of them to say it', async () => {
+    // With workers the front end holds no budget, so there is no
+    // `getBudgets` to ask and no name to show for one that is not open: the
+    // name lives inside the file (#229).
+    process.env.ACTUAL_BUDGET_ID = 'sync-one';
+    process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two,sync-three';
+    usePool({ openBudgets: () => ['sync-one', 'sync-three'] } as never);
+
+    const text = (await handler()()).content[0].text;
+
+    expect(text).toContain('=== Budgets (3) ===');
+    expect(text).toContain('sync-one  [open]');
+    expect(text).toContain('sync-three  [open]');
+    expect(text).toMatch(/^sync-two$/m);
+    expect(getBudgets).not.toHaveBeenCalled();
   });
 
   it('lists the configured ones by sync id, and marks the open one', async () => {

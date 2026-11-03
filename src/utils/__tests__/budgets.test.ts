@@ -54,17 +54,13 @@ describe('the budgets this server serves', () => {
     expect(budgetProblem('  ')).toBeUndefined();
   });
 
-  it('tells a caller asking for another served budget that it is one at a time', () => {
+  it('says nothing about another budget this server serves', () => {
+    // It used to refuse this one, because one process could only hold one
+    // budget. A worker per budget is what took that answer away (#229).
     process.env.ACTUAL_BUDGET_ID = 'sync-one';
     process.env.ACTUAL_BUDGET_IDS = 'sync-one,sync-two';
 
-    const said = budgetProblem('sync-two');
-
-    expect(said).toContain('one budget at a time');
-    expect(said).toContain('sync-two');
-    // Not "no such budget": it is configured, and sending someone to check
-    // an id that is right is the wrong place to send them.
-    expect(said).not.toContain('is configured on this server');
+    expect(budgetProblem('sync-two')).toBeUndefined();
   });
 
   it('tells a caller asking for an id it does not serve which ones it does', () => {

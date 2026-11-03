@@ -55,26 +55,20 @@ export function servesManyBudgets(): boolean {
 /**
  * What is wrong with the budget a call asked for, if anything.
  *
- * Three answers rather than two, because "we do not serve that" and "we
- * serve it and cannot open it yet" are different things to be told, and
- * telling someone their id is wrong when it is not sends them to look in
- * the wrong place.
+ * One question now, where there were two: is it one this server serves. The
+ * second answer, "we serve it and cannot open it yet", was true while one
+ * process could only hold one budget. A worker per budget is what took it
+ * away, so what is left is the configuration: a budget that is not on the
+ * operator's list cannot be reached by asking for its id.
  */
 export function budgetProblem(asked: string | undefined): string | undefined {
   if (asked === undefined) return undefined;
 
   const wanted = asked.trim();
-  const open = openBudgetId();
-  if (wanted === '' || wanted === open) return undefined;
+  if (wanted === '') return undefined;
 
   const configured = configuredBudgetIds();
-  if (configured.includes(wanted)) {
-    return (
-      `This server has ${open ?? 'no budget'} open, and opens one budget at a time, so ` +
-      `${wanted} cannot be read from here yet. Run a second server configured for it, ` +
-      'or ask this one for the budget it has open.'
-    );
-  }
+  if (configured.includes(wanted)) return undefined;
 
   return (
     `No budget with id ${wanted} is configured on this server. It serves: ` +

@@ -18,6 +18,10 @@ import {
   WRITE_PATH,
 } from './utils/http-config.js';
 import { startHttpServer } from './http.js';
+import { WorkerPool } from './workers/pool.js';
+import { usePool } from './workers/current.js';
+import { servesManyBudgets } from './utils/budgets.js';
+import { encryptionPasswordsProblem } from './workers/worker-env.js';
 import { connectionSettled, ensureConnection, shutdown } from './connection.js';
 import { installExitPaths } from './utils/orderly-exit.js';
 import { startLeaving, whenIdle } from './utils/in-flight.js';
@@ -95,6 +99,15 @@ console.error(
 const urlProblem = serverUrlProblem(readEnv('ACTUAL_SERVER_URL'));
 if (urlProblem !== undefined) {
   console.error(`[actual-budget-mcp] ${urlProblem}`);
+  process.exit(1);
+}
+
+// The map of encryption passwords, checked where the rest of the
+// configuration is: a worker given no password for an encrypted budget
+// fails on its own, minutes later, with a message about decryption (#229).
+const passwordsProblem = encryptionPasswordsProblem();
+if (passwordsProblem !== undefined) {
+  console.error(`[actual-budget-mcp] ${passwordsProblem}`);
   process.exit(1);
 }
 
@@ -183,8 +196,20 @@ if (chosenToolset() === 'chat') {
 // registered afterwards never hears the event that already happened.
 // Measured: ending stdin while the budget was still downloading left the
 // process running until it was killed.
+// One worker per budget, when there is more than one (#229). With one
+// budget there is no pool, no child process and nothing routed: this
+// process opens the budget itself, as it always has.
+const pool = servesManyBudgets() ? new WorkerPool() : undefined;
+usePool(pool);
+
 installExitPaths({
-  stop: shutdown,
+  stop: async () => {
+    // The workers first: each one signs out of the Actual server on its way
+    // down, which is what clears the session 26.11 keeps, and this process
+    // has nothing of its own to close when it is only routing.
+    await pool?.stop();
+    await shutdown();
+  },
   // Tool calls and the first connection both count as work in flight: one
   // must not be cut in half, and the other is what opened the session that
   // the shutdown is there to close.
@@ -217,12 +242,19 @@ if (http?.config !== undefined) {
 }
 
 // Validate connection eagerly on startup so config errors surface immediately
-// instead of silently failing on the first tool call
-try {
-  await ensureConnection();
-} catch (error) {
-  console.error(`Startup validation failed: ${describeError(error)}`);
-  // Don't exit — let the MCP server stay alive so the error reaches the client
-  // on the first tool call via ensureConnection's error propagation
+// instead of silently failing on the first tool call.
+//
+// Not when there is a pool: this process opens no budget then, and opening
+// one here would take a lock and a session for a budget a worker is about to
+// open properly (#229). The workers validate the same configuration, each on
+// its first call, and say so with the same words.
+if (pool === undefined) {
+  try {
+    await ensureConnection();
+  } catch (error) {
+    console.error(`Startup validation failed: ${describeError(error)}`);
+    // Don't exit — let the MCP server stay alive so the error reaches the client
+    // on the first tool call via ensureConnection's error propagation
+  }
 }
 
