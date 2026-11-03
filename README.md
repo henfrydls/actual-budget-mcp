@@ -436,9 +436,12 @@ who can see the traffic can read it and then read your budget. On a network
 you do not control, put a reverse proxy or a tunnel in front and let it do
 the encryption.
 
-`ACTUAL_HTTP_ALLOWED_HOSTS` is the list of `Host` headers the server
-answers. Set it whenever you bind wide: it is what keeps a page in a browser
-from reaching the server through a name that resolves to your machine.
+`ACTUAL_HTTP_ALLOWED_HOSTS` is the list of host names the server answers,
+without the port: `budget.local`, not `budget.local:3000`. The server takes
+the name out of the `Host` header and compares only that, so an entry with a
+port matches nothing and every request comes back 403. Set it whenever you
+bind wide: it is what keeps a page in a browser from reaching the server
+through a name that resolves to your machine.
 
 ### What it refuses
 
@@ -486,7 +489,7 @@ and is not in this release.
 | `ACTUAL_HTTP_WRITE_TOKEN` | No | A second credential, for the write path. Without it the server serves no write path at all |
 | `ACTUAL_HTTP_HOST` | No | What to bind to. Defaults to `127.0.0.1` |
 | `ACTUAL_HTTP_ALLOW_REMOTE` | No | Set to `1`/`true`/`yes` to bind somewhere other than loopback. Nothing here terminates TLS |
-| `ACTUAL_HTTP_ALLOWED_HOSTS` | No | Host headers to accept, comma separated, for a server that is not on loopback |
+| `ACTUAL_HTTP_ALLOWED_HOSTS` | No | Host names to accept, comma separated and without the port, for a server that is not on loopback |
 
 ### Using a session token (OIDC servers)
 
