@@ -557,6 +557,46 @@ describe('the worker pool', () => {
     expect(workers.knownBudgets().get('sync-one')?.name).toBe('Household');
   }, 30_000);
 
+  it('learns what the two versions said, from the process that could tell', async () => {
+    // The front end has no connection to the Actual server, so this is the
+    // only way it can say anything about versions at all.
+    const check = JSON.stringify({
+      kind: 'mismatch',
+      server: '26.12.0',
+      library: '26.11.0',
+      serverIs: 'ahead',
+    });
+    const workers = pool({}, ['--report-name=Household', `--report-version=${check}`]);
+
+    await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(workers.knownBudgets().get('sync-one')?.version).toEqual({
+      kind: 'mismatch',
+      server: '26.12.0',
+      library: '26.11.0',
+      serverIs: 'ahead',
+    });
+  }, 30_000);
+
+  it('drops a version it cannot make sense of, and the name with it', async () => {
+    const cases = [
+      '{"kind":"something-else","library":"26.11.0"}',
+      '{"kind":"mismatch","server":"26.12.0","library":"26.11.0","serverIs":"sideways"}',
+      '{"kind":"mismatch","server":"26.12.0"}',
+      `{"kind":"match","server":"${'9'.repeat(60)}","library":"26.11.0"}`,
+    ];
+
+    for (const version of cases) {
+      const workers = pool({}, ['--report-name=Household', `--report-version=${version}`]);
+      await workers.call('sync-one', { name: 'get_budget_month', readOnly: true });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect([...workers.knownBudgets().keys()], version).toEqual([]);
+      await workers.stop();
+    }
+  }, 30_000);
+
   it('believes a worker about its own budget and nothing else', async () => {
     // It arrives as a log notification, which anything on the other end of
     // a pipe can send.

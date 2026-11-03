@@ -105,6 +105,8 @@ console.error(`stub worker up for ${budget} at http://user:hunter2@actual.exampl
 const reportName = flag('report-name');
 const reportId = flag('report-id');
 const reportLogger = flag('report-logger');
+// What this worker claims the two versions said, as JSON.
+const reportVersion = flag('report-version');
 
 await server.connect(new StdioServerTransport());
 
@@ -116,6 +118,7 @@ if (reportName !== undefined) {
       budgetId: reportId ?? budget,
       // `NUL` spelled out, because a command line cannot carry the byte.
       name: reportName === 'TOO-LONG' ? 'x'.repeat(201) : reportName.replaceAll('NUL', '\u0000'),
+      ...(reportVersion === undefined ? {} : { version: JSON.parse(reportVersion) }),
     },
   });
 }
