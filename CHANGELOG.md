@@ -1,5 +1,148 @@
 # Changelog
 
+## 0.12.0
+
+One server for more than one budget, a way to run it over HTTP for more than
+one client, and a server address that can no longer carry a password into a
+log.
+
+### Over HTTP (#228, #274)
+
+Setting `ACTUAL_HTTP_PORT` serves MCP over HTTP instead of stdio, for a
+server you run yourself and point clients at rather than one each client
+starts.
+
+Two paths and two credentials, which is the whole design: `/mcp` reads and
+`/mcp-write` writes, each with its own token of at least 32 characters, and
+without a write token there is no write path at all. The read path does not
+register a write tool, so a call for one dies in the front end rather than
+being refused somewhere deeper.
+
+It binds to loopback unless told otherwise. Off loopback it wants
+`ACTUAL_HTTP_ALLOW_REMOTE` as well, so that is a decision somebody made, and
+`ACTUAL_HTTP_ALLOWED_HOSTS`, the host names it should answer to, without
+which a page in a browser can reach it through any name that resolves there.
+Nothing here terminates TLS: put something in front of it that does.
+
+Routing is case sensitive and strict about trailing slashes, so a path that
+differs from `/mcp` or `/mcp-write` by its case or a final slash is refused
+like any unknown one.
+
+ChatGPT's connectors are not reachable this way yet: they want OAuth, which
+this does not have (#273).
+
+### More than one budget (#229)
+
+`ACTUAL_BUDGET_IDS` lists every budget one server serves, comma separated.
+Every tool then takes an optional `budget_id`, and `list_budgets` says which
+budgets there are, with the name each one's own process read out of the
+file, `[open]` while it is open and `(closed)` once it has been let go. A
+budget nobody has opened yet is listed by its id alone, because the name is
+inside the file.
+
+The Actual library opens one budget per process, so each budget is opened in
+a child process and every call is routed to the one that holds it. Three
+stay open at once by default, a fourth closes the one that went longest
+without a call, and a budget with nothing to do for fifteen minutes closes
+on its own. The first call for a budget waits while it opens, and if that
+takes longer than forty-five seconds it is told so rather than left hanging
+past its own timeout; for a write, the answer says that nothing was sent, so
+asking again cannot write twice. A write whose process dies mid-call is
+never repeated by this server: the answer says what cannot be ruled out, in
+the words the engine's own failures use.
+
+Each budget gets its own directory under `ACTUAL_DATA_DIR`, and
+`ACTUAL_ENCRYPTION_PASSWORDS` maps sync id to password when more than one of
+them is encrypted. Each process is given its own password and never the map.
+
+The resources (`actual://accounts` and the other two) are not offered when
+there is more than one budget. A URI has nowhere to say which budget it is
+about, and answering from the default one would contradict the tools.
+
+With one budget none of this exists: no child process, no extra tool and no
+extra parameter. What a client is sent was compared with 0.11.1 in every
+toolset and mode: the capabilities and the instructions are identical, and
+the tool list is the same forty-four tools with the same schemas, apart from
+the two details below that zod 4 writes differently.
+
+### What the two versions say to each other (#229)
+
+Opening a budget runs any migration the library has and the file does not,
+and the next sync uploads the result. The server already said so when it
+found an Actual server older than its library. It now says it in both
+directions, since a server ahead of the library holds a budget that may
+carry migrations this one does not have, and it says it where somebody will
+read it: on stderr at startup, and in the answer `list_budgets` gives, which
+is the only place a deployment with workers can be told anything.
+
+It says it and opens the budget anyway. Actual's minor is the month, so a
+server that updates itself is a minor ahead of this one from the day Actual
+releases until the day this server follows, and refusing to open on that
+would leave every deployment without a budget for those days, by default,
+every month.
+
+### A password in the server address (#275, #276)
+
+`ACTUAL_SERVER_URL` written as `https://user:password@host` never worked:
+Node's own fetch rejects a URL with credentials in it. What it did was put
+the password in every log line and every error that quoted the address.
+
+The server now refuses to start with credentials in that address and says
+what to do instead, and what it prints or answers has them taken out of it
+wherever an address still reaches a message.
+
+### zod 4 (#280, #286)
+
+The schemas moved from zod 3 to zod 4. Every tool keeps its arguments, its
+types and its line saying it takes no others, and the two tool lists were
+compared field by field to be sure of it. Two things are written
+differently, and both are visible to a client that looks:
+
+- An integer with a lower bound now also carries `maximum: 9007199254740991`,
+  which is the largest whole number JavaScript counts to. `get_rules` is the
+  one tool with such arguments.
+- `create_rule`'s `condition_value` accepted a value or a list of the same
+  value, and zod 3 wrote the list's item type as a `$ref` pointing back into
+  the schema by position. zod 4 writes the type out, which is the same thing
+  said in a way a client does not have to resolve.
+
+The order of the keys inside each schema also changed, so a client that
+hashes the tool list sees a different hash even where nothing moved.
+
+What a client sends is checked the same way, and answered in different
+words: zod 4 says `Invalid input: expected string, received undefined` where
+zod 3 said `Required`, and `Too small: expected number to be >0` where it
+said `Number must be greater than 0`.
+
+The advisory the tree carried for zod 3 went with the migration, so nothing
+is excepted now: the allowlist is empty and the production audit in CI has
+no exception either.
+
+### A category group with nothing in it (#283, #284)
+
+A group with no categories was skipped in silence, by the tool and by the
+resource alike: a group created a moment earlier was not in the reply at
+all, so there was no way to read its id back.
+
+It is listed now, marked `[empty]`, and `[hidden]  [empty]` when it is both.
+Empty means no categories at all, not "none that this reply shows": a group
+whose categories are all hidden has categories, and calling it empty would
+send someone to delete it.
+
+### Documentation (#285, #290)
+
+The README has a section on running it over HTTP, and the one about serving
+several budgets now covers the deployment rather than only the idea: what a
+caller meets while a budget is opening, what `list_budgets` says, what a
+worker inherits from the machine it runs on, and a Docker Compose file and a
+Kubernetes Deployment.
+
+The variables in those two were started against a real server before they
+were written down, which is how the first version of them was caught: it
+listed the host names to answer to with their ports, the way a `Host` header
+arrives, and the check compares the name without the port, so every request
+came back `403` and the failure read like a broken token.
+
 ## 0.11.1
 
 What a bank sync brought in, what the schedules look like, and four replies
