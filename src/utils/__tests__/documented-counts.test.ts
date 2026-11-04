@@ -15,12 +15,73 @@ vi.mock('../../connection.js', () => ({
 
 import { registerAllTools } from '../../tools/index.js';
 
-function countTools(env: Record<string, string>): number {
-  for (const key of ['ACTUAL_TOOLSET', 'ACTUAL_READ_ONLY']) delete process.env[key];
+/**
+ * The file, with its line endings flattened.
+ *
+ * Windows checks these out with CRLF, and a regular expression looking for
+ * `)\n` finds `)\r\n` instead: measured on the Windows runner, every
+ * heading lost its count and the whole comparison went with it.
+ */
+function read(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+}
+
+function registeredTools(env: Record<string, string> = {}): string[] {
+  for (const key of ['ACTUAL_TOOLSET', 'ACTUAL_READ_ONLY', 'ACTUAL_BUDGET_IDS']) {
+    delete process.env[key];
+  }
   Object.assign(process.env, env);
-  let count = 0;
-  registerAllTools({ tool: () => { count += 1; } } as never);
-  return count;
+  const names: string[] = [];
+  registerAllTools({
+    tool: (...args: unknown[]) => {
+      if (typeof args[0] === 'string') names.push(args[0]);
+    },
+  } as never);
+  return names;
+}
+
+function countTools(env: Record<string, string>): number {
+  return registeredTools(env).length;
+}
+
+/**
+ * The tool tables in the README, read as tables.
+ *
+ * `## Tools (n)` is one number and was already checked. What was not is the
+ * subsections under it: `### Write: Transactions (11)` listed thirteen
+ * tools, so the headings added up to forty-two while the rows added up to
+ * forty-four, and nothing noticed because nothing read the rows.
+ */
+function readmeSections(): Array<{ name: string; stated: number | undefined; tools: string[] }> {
+  const readme = read('README.md');
+  const from = readme.indexOf('\n## Tools (');
+  const section = readme.slice(from + 1);
+  const to = section.indexOf('\n## ', 1);
+  const tools = section.slice(0, to);
+
+  // Split rather than one regex with a lookahead: `\\Z` is not an escape in
+  // JavaScript, it is the letter Z, and a body that happened to contain one
+  // ended there. That cost one section two of its rows.
+  // Split rather than one regex with a lookahead: `\\Z` is not an escape in
+  // JavaScript, it is the letter Z, and a body that happened to contain one
+  // ended there. That cost one section two of its rows.
+  //
+  // A subsection with no count in its heading is prose rather than a table
+  // of tools, and `### Environment` is the one there is. It is kept only
+  // if it holds tool rows, so a table that loses its count fails here
+  // rather than disappearing from the comparison.
+  return tools
+    .split(/^### /m)
+    .slice(1)
+    .map((chunk) => {
+      const header = /^(.+?)(?: \((\d+)\))?\n/.exec(chunk);
+      return {
+        name: header?.[1] ?? chunk.slice(0, 20),
+        stated: header?.[2] === undefined ? undefined : Number(header[2]),
+        tools: [...chunk.matchAll(/^\| `([a-z_]+)`/gm)].map((row) => row[1]),
+      };
+    })
+    .filter((section) => section.stated !== undefined || section.tools.length > 0);
 }
 
 /**
@@ -40,11 +101,37 @@ describe('the tool counts the documentation quotes', () => {
   });
 
   const files = {
-    README: readFileSync('README.md', 'utf8'),
-    manifest: readFileSync('manifest.json', 'utf8'),
-    registry: readFileSync('server.json', 'utf8'),
-    gemini: readFileSync('gemini-extension.json', 'utf8'),
+    README: read('README.md'),
+    manifest: read('manifest.json'),
+    registry: read('server.json'),
+    gemini: read('gemini-extension.json'),
   };
+
+  it('lists every tool once, in a section whose count is its rows', () => {
+    const registered = registeredTools();
+    const sections = readmeSections();
+    const listed = sections.flatMap((section) => section.tools);
+
+    for (const section of sections) {
+      expect(section.tools.length, `### ${section.name} says ${section.stated}`).toBe(
+        section.stated,
+      );
+    }
+    expect([...listed].sort()).toEqual([...registered].sort());
+    expect(new Set(listed).size, 'a tool listed twice').toBe(listed.length);
+  });
+
+  it('does not count the tool that only exists with several budgets', () => {
+    // `list_budgets` is registered when ACTUAL_BUDGET_IDS names more than
+    // one budget, so it belongs in the prose and not in the tables: a count
+    // that includes it is wrong for almost every reader.
+    const many = registeredTools({ ACTUAL_BUDGET_IDS: 'one,two' });
+    expect(many).toContain('list_budgets');
+
+    const listed = readmeSections().flatMap((section) => section.tools);
+    expect(listed).not.toContain('list_budgets');
+    expect(files.README, 'the README says where it comes from').toContain('`list_budgets`');
+  });
 
   it('matches what the server registers', () => {
     const full = countTools({});

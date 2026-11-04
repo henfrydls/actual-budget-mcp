@@ -1069,6 +1069,10 @@ tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
 
 ## Tools (44)
 
+One more, `list_budgets`, exists only when this server is configured for more
+than one budget, so it is not counted here: see
+[More than one budget](#more-than-one-budget).
+
 ### Read (11)
 
 | Tool | Description | Example prompt |
@@ -1127,7 +1131,7 @@ tools exist, `ACTUAL_TOOLSET` decides which of those are offered.
 
 </details>
 
-### Write: Transactions (11)
+### Write: Transactions (13)
 
 | Tool | Description | Example prompt |
 |------|-------------|----------------|
