@@ -24,9 +24,9 @@ It binds to loopback unless told otherwise. Off loopback it wants
 which a page in a browser can reach it through any name that resolves there.
 Nothing here terminates TLS: put something in front of it that does.
 
-Routing is case sensitive and strict about trailing slashes, because Express
-is not by default and the read token wrote a transaction through
-`/MCP-WRITE` before that was fixed.
+Routing is case sensitive and strict about trailing slashes, so a path that
+differs from `/mcp` or `/mcp-write` by its case or a final slash is refused
+like any unknown one.
 
 ChatGPT's connectors are not reachable this way yet: they want OAuth, which
 this does not have (#273).
