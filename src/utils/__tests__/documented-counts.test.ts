@@ -15,6 +15,17 @@ vi.mock('../../connection.js', () => ({
 
 import { registerAllTools } from '../../tools/index.js';
 
+/**
+ * The file, with its line endings flattened.
+ *
+ * Windows checks these out with CRLF, and a regular expression looking for
+ * `)\n` finds `)\r\n` instead: measured on the Windows runner, every
+ * heading lost its count and the whole comparison went with it.
+ */
+function read(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+}
+
 function registeredTools(env: Record<string, string> = {}): string[] {
   for (const key of ['ACTUAL_TOOLSET', 'ACTUAL_READ_ONLY', 'ACTUAL_BUDGET_IDS']) {
     delete process.env[key];
@@ -42,7 +53,7 @@ function countTools(env: Record<string, string>): number {
  * forty-four, and nothing noticed because nothing read the rows.
  */
 function readmeSections(): Array<{ name: string; stated: number | undefined; tools: string[] }> {
-  const readme = readFileSync('README.md', 'utf8');
+  const readme = read('README.md');
   const from = readme.indexOf('\n## Tools (');
   const section = readme.slice(from + 1);
   const to = section.indexOf('\n## ', 1);
@@ -90,10 +101,10 @@ describe('the tool counts the documentation quotes', () => {
   });
 
   const files = {
-    README: readFileSync('README.md', 'utf8'),
-    manifest: readFileSync('manifest.json', 'utf8'),
-    registry: readFileSync('server.json', 'utf8'),
-    gemini: readFileSync('gemini-extension.json', 'utf8'),
+    README: read('README.md'),
+    manifest: read('manifest.json'),
+    registry: read('server.json'),
+    gemini: read('gemini-extension.json'),
   };
 
   it('lists every tool once, in a section whose count is its rows', () => {
